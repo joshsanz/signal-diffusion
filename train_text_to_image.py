@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import random
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -826,7 +827,7 @@ def main():
                 )
                 pipeline = pipeline.to('cuda')
                 pipeline.set_progress_bar_config(disable=True)
-                # pipeline.enable_model_cpu_offload(0)
+                pipeline.enable_model_cpu_offload(0)
 
                 # run inference
                 generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
@@ -850,8 +851,8 @@ def main():
                             }
                         )
 
-            del pipeline
-            torch.cuda.empty_cache()
+                del pipeline
+                torch.cuda.empty_cache()
 
             if global_step >= args.max_train_steps:
                 break
