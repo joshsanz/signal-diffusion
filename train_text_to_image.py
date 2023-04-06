@@ -31,7 +31,7 @@ import torch.utils.checkpoint
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.utils import ProjectConfiguration, set_seed, GradScalerKwargs
 from datasets import load_dataset
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
@@ -352,15 +352,45 @@ dataset_name_mapping = {
 
 def get_grad_norm(model_params):
     norm = 0
+    do_print = False
+    norms = []
+    count = 0
     for p in model_params:
+        count += 1
         try:
-            norm += torch.linalg.norm(p.grad.detach().data.float()).item() ** 2
+            grad = p.grad.detach().data.float()
+            # if count == 254 or count == 280:
+            #     print("count", count)
+            #     print(grad)
+            #     torch.save(grad, f"grad_{count}.pt")
+            # if torch.any(torch.isnan(grad)):
+            #     print(f"nan found in params[{count}]")
+            #     continue
+            if do_print:
+                print(f"first grad {grad.shape} {grad}")
+                do_print = False
+            # norm += torch.linalg.norm(p.grad.detach().data.float()).item() ** 2
+            norms.append(torch.linalg.norm(p.grad.detach().data.float()).item() ** 2)
         except Exception as e:
             print(e)
             pass
-        break
-
+    # print(norms)
+    norm = torch.sum(torch.tensor(norms))
     return norm ** 0.5
+
+
+def get_model_size(model, verbose=False):
+    param_size = 0
+    for param in model.parameters():
+        param_size += param.nelement() * param.element_size()
+    buffer_size = 0
+    for buffer in model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+
+    size_all_mb = (param_size + buffer_size) / 1024**2
+    if verbose:
+        print('model size: {:.3f}MB'.format(size_all_mb))
+    return size_all_mb
 
 
 def main():
@@ -383,6 +413,7 @@ def main():
         import wandb
 
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
+    accelerator_grad_kwargs = GradScalerKwargs(init_scale=1)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -390,6 +421,7 @@ def main():
         log_with=args.report_to,
         logging_dir=logging_dir,
         project_config=accelerator_project_config,
+        kwargs_handlers=[accelerator_grad_kwargs],  # Set GradScaler initial scale to 1.0 to avoid overflow.
     )
 
     # Make one log on every process with the configuration for debugging.
@@ -660,7 +692,7 @@ def main():
     unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         unet, optimizer, train_dataloader, lr_scheduler
     )
-
+    logger.debug("unet size {:.3f} MB ({})".format(get_model_size(unet), next(unet.parameters()).dtype))
     if args.use_ema:
         ema_unet.to(accelerator.device)
 
@@ -668,13 +700,17 @@ def main():
     # as these models are only used for inference, keeping weights in full precision is not required.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
+        logger.info("Using torch.float16")
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
+        logger.info("Using torch.bfloat16")
         weight_dtype = torch.bfloat16
 
     # Move text_encode and vae to gpu and cast to weight_dtype
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
+    logger.debug("VAE size {:.3f} MB".format(get_model_size(vae)))
+    logger.debug("Text encoder size {:.3f} MB".format(get_model_size(text_encoder)))
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -765,7 +801,9 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
+                text_encoder.to(accelerator.device)
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                text_encoder.to('cpu')
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -786,13 +824,19 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_value_(unet.parameters(), args.max_grad_norm)
-                    # accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                    grad_norm = get_grad_norm(unet.parameters())
+                    # accelerator.clip_grad_value_(unet.parameters(), args.max_grad_norm)
+                    # print("grad scaling", accelerator.scaler.get_scale())
+                    # grad_norm = get_grad_norm(unet.parameters())
+                    # print("pre-clip grad norm", grad_norm)
+                    grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                     accelerator.log({"grad_norm": grad_norm}, step=global_step)
+                    # break  # DEBUG
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+
+            # if global_step > 0 and global_step % args.gradient_accumulation_steps == 0:
+            #     break  # DEBUG
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -811,6 +855,8 @@ def main():
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
+
+        # break  # DEBUG
 
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
