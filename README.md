@@ -75,8 +75,28 @@ infer_text_to_image_lora.py --path sd-stft-lora/pytorch_lora_weights.bin \
 
 Call the script with `--help` for more information.
 
+## Notes
+
+### Pricing
+| Hardware |   |   | \| Price / hr |   |
+| -------- | - | - | ---------- | - |
+| **GPU**  | **Relative Perf.** | **Memory GB** | **\| AWS Spot** | **Lambda** |
+| A10      | 2 (?) | 24 | \| - | $0.60 |
+| A100     | 3.57  | 40 | \| - | $1.10 |
+| 8x A100  |       |    | \| $15.22 | $8.80 |
+| V100     | 1     | 16 | \| $1.07 | - |
+| 8x V100  |       |    | \| $4.45 | $4.40 |
+| 8x K80   | < 1   | 12 | \| $2.39 | - |
+| A6000    | 2.15  | 48 | \| - | $0.80 |
+| RTX 3080 | 0.86  | 10 | \| - | - |
+
+### Bugs
+* bf16 mixed precision uses more memory than fp16, causing OutOfMemory errors on RTX3080
+* fp16 for `small-stable-diffusion-v0` causes NaN gradients in specific layers, breaking training
+
 ## TODOs
 
+* Run with SkyPilot
 * Automatically convert STFT images back to audio
 * Test learning rate values, batch size, num noise steps for training and inference quality
 * Make full fine-tune version of notebook/script and run on BRC or LambdaCloud
