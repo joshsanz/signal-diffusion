@@ -1,0 +1,50 @@
+resources:
+  # Optional; if left out, automatically pick the cheapest cloud.
+  cloud: lambda
+  accelerators: A10:1
+
+# Working directory (optional) containing the project codebase.
+# Its contents are synced to ~/sky_workdir/ on the cluster.
+workdir: .
+
+file_mounts:
+  /output-s3:
+    name: ssdv0-pokemon
+    mode: MOUNT
+    store: s3 # Could be either of [s3, gcs]
+
+# Typical use: pip install -r requirements.txt
+# Invoked under the workdir (i.e., can use its files).
+setup: |
+  echo "Running setup."
+  pip install --user -r requirements-lambda.txt
+
+# Disabled:
+#    --validation_prompt="a cute blue dragon" --validation_epochs=1
+
+# Typical use: make use of resources, such as running training.
+# Invoked under the workdir (i.e., can use its files).
+run: |
+  set -e
+  echo "Hello, SkyPilot!"
+  export MODEL_NAME='OFA-Sys/small-stable-diffusion-v0'
+  export dataset_name='lambdalabs/pokemon-blip-captions'
+  accelerate launch --mixed_precision=fp16 train_text_to_image.py \
+    --pretrained_model_name_or_path=$MODEL_NAME \
+    --dataset_name=$dataset_name \
+    --use_ema \
+    --resolution=512 --center_crop --random_flip \
+    --train_batch_size=4 \
+    --gradient_accumulation_steps=2 \
+    --gradient_checkpointing \
+    --max_train_steps=5000 \
+    --learning_rate=1e-5 \
+    --max_grad_norm=1 \
+    --lr_scheduler="constant" --lr_warmup_steps=0 \
+    --checkpointing_steps=500 --checkpoints_total_limit=3 \
+    --resume_from_checkpoint="latest" \
+    --output_dir="ssdv0-pokemon" \
+    --allow_tf32 \
+    --enable_xformers_memory_efficient_attention
+  mkdir /output-s3/ft-full.0
+  cp -r sddv0-pokemon/* /output-s3/ft-full.0/

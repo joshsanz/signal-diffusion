@@ -93,10 +93,12 @@ Call the script with `--help` for more information.
 ### Bugs
 * bf16 mixed precision uses more memory than fp16, causing OutOfMemory errors on RTX3080
 * fp16 for `small-stable-diffusion-v0` causes NaN gradients in specific layers, breaking training
+* PyTorch==2.0 breaks on A10/A6000 GPUs somewhere in attention layers
+
 
 ## TODOs
 
-* Run with SkyPilot
+* In SkyPilot setup need to cast latents to `half()` in `/home/ubuntu/.local/lib/python3.10/site-packages/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion.py:693`
 * Automatically convert STFT images back to audio
 * Test learning rate values, batch size, num noise steps for training and inference quality
 * Make full fine-tune version of notebook/script and run on BRC or LambdaCloud

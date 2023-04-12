@@ -92,7 +92,7 @@ def parse_args():
         default=None,
         help=(
             "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
+            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.json` file"
             " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
     )
@@ -148,7 +148,7 @@ def parse_args():
     parser.add_argument(
         "--random_flip",
         action="store_true",
-        help="whether to randomly flip images horizontally",
+        help="Whether to randomly flip images horizontally",
     )
     parser.add_argument(
         "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
