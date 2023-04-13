@@ -92,7 +92,7 @@ def parse_args():
         default=None,
         help=(
             "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.json` file"
+            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
             " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
     )
