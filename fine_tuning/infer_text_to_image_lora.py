@@ -1,7 +1,7 @@
 from diffusers import StableDiffusionPipeline
+from PIL import Image
 import torch
 import argparse
-import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -58,7 +58,5 @@ ncol = int(np.ceil(args.num_images / nrow))
 images.extend([np.zeros_like(images[0]) for _ in range(nrow * ncol - args.num_images)])
 
 grid = image_grid(np.array(images), ncol)
-fig = plt.figure(figsize=(nrow * 3, ncol * 3))
-plt.imshow(grid)
-plt.axis('off')
-plt.savefig(args.output, bbox_inches='tight')
+image = Image.fromarray(grid)
+image.save(args.output)
