@@ -13,6 +13,8 @@ file_mounts:
     mode: MOUNT
     store: s3 # Could be either of [s3, gcs]
 
+  /data: /data/shared/signal-diffusion/fma_preprocessed
+
 # Typical use: pip install -r requirements.txt
 # Invoked under the workdir (i.e., can use its files).
 setup: |
@@ -22,33 +24,36 @@ setup: |
   pip install --user -r requirements-lambda.txt
 
 # Disabled:
-#    --validation_prompt="a cute blue dragon" --validation_epochs=1
-
+#    --random_flip
+#    --enable_xformers_memory_efficient_attention \
 
 # Typical use: make use of resources, such as running training.
 # Invoked under the workdir (i.e., can use its files).
 run: |
   set -e
   echo "Hello, SkyPilot!"
+  export RUN_ID=4
   export MODEL_NAME='runwayml/stable-diffusion-v1-5'
-  export dataset_name='lambdalabs/pokemon-blip-captions'
-  export output_dir='sdv1-5-pokemon.0'
-  accelerate launch --mixed_precision=fp16 train_text_to_image.py \
+  export dataset_name='/data'
+  export output_dir="tmp/stft-full.$RUN_ID"
+  echo "Model $MODEL_NAME"
+  echo "Dataset $dataset_name"
+  echo "Output location $output_dir"
+  accelerate launch --mixed_precision=no train_text_to_image.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$dataset_name \
     --use_ema \
-    --resolution=512 --center_crop --random_flip \
-    --train_batch_size=8 \
-    --gradient_accumulation_steps=1 \
+    --resolution=512 --center_crop \
+    --train_batch_size=1 \
+    --gradient_accumulation_steps=8 \
     --gradient_checkpointing \
-    --max_train_steps=5000 \
+    --max_train_steps=10000 \
     --learning_rate=1e-4 \
     --max_grad_norm=1 \
     --allow_tf32 \
     --lr_scheduler="constant" --lr_warmup_steps=0 \
-    --checkpointing_steps=500 --checkpoints_total_limit=3 \
+    --checkpointing_steps=1000 --checkpoints_total_limit=3 \
     --resume_from_checkpoint="latest" \
     --output_dir="$output_dir" \
-    --enable_xformers_memory_efficient_attention
-  mkdir -p /output-s3/pokemon-full.0
-  cp -r $output_dir/* /output-s3/pokemon-full.0/
+    --validation_prompt="a international instrumental song" --validation_epochs=1
+  cp -r "$output_dir" /output-s3/

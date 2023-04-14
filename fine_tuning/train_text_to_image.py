@@ -40,7 +40,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import AutoencoderKL, DPMSolverMultistepScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 # from diffusers.utils import check_min_version, deprecate
@@ -244,7 +244,7 @@ def parse_args():
         default="logs",
         help=(
             "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
+            " *output_dir/logs/**CURRENT_DATETIME_HOSTNAME***."
         ),
     )
     parser.add_argument(
@@ -394,6 +394,7 @@ def get_model_size(model, verbose=False):
 
 
 def main():
+    t0 = time.time()
     args = parse_args()
 
     if args.non_ema_revision is not None:
@@ -466,7 +467,7 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     tokenizer = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
     )
@@ -712,6 +713,10 @@ def main():
     logger.debug("VAE size {:.3f} MB".format(get_model_size(vae)))
     logger.debug("Text encoder size {:.3f} MB".format(get_model_size(text_encoder)))
 
+    # Enable CPU offload when unused for vae & text_encoder
+    # vae = accelerate.cpu_offload(vae)
+    # text_encoder = accelerate.cpu_offload(text_encoder)
+
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if overrode_max_train_steps:
@@ -769,7 +774,9 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
+        grad_norm = 0.0
+        # Optionally skip first N batches to reach epoch/validation quickly
+        for step, batch in enumerate(accelerator.skip_first_batches(train_dataloader, num_batches=0)):
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
@@ -778,10 +785,8 @@ def main():
 
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                vae.to(accelerator.device)
                 latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
-                vae.to('cpu')
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
@@ -801,9 +806,7 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                text_encoder.to(accelerator.device)
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-                text_encoder.to('cpu')
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -829,7 +832,6 @@ def main():
                     # grad_norm = get_grad_norm(unet.parameters())
                     # print("pre-clip grad norm", grad_norm)
                     grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                    accelerator.log({"grad_norm": grad_norm}, step=global_step)
                     # break  # DEBUG
                 optimizer.step()
                 lr_scheduler.step()
@@ -844,8 +846,9 @@ def main():
                     ema_unet.step(unet.parameters())
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                accelerator.log({"train_loss": train_loss, "grad_norm": grad_norm.item()}, step=global_step)
                 train_loss = 0.0
+                grad_norm = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
@@ -861,27 +864,34 @@ def main():
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
                 logger.info(
-                    f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                    f" {args.validation_prompt}."
+                    f"Running validation... \n  Generating {args.num_validation_images} images with prompt:"
+                    f"  {args.validation_prompt}."
                 )
+
                 # create pipeline
                 pipeline = StableDiffusionPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
-                    unet=accelerator.unwrap_model(unet),
+                    unet=accelerator.unwrap_model(unet, keep_fp32_wrapper=True),
                     revision=args.revision,
                     torch_dtype=weight_dtype,
                 )
                 pipeline = pipeline.to('cuda')
                 pipeline.set_progress_bar_config(disable=True)
-                pipeline.enable_model_cpu_offload(0)
+                pipeline.enable_model_cpu_offload()
 
                 # run inference
                 generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
                 images = []
                 for _ in range(args.num_validation_images):
-                    images.append(
-                        pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
-                    )
+                    if weight_dtype != torch.float32:
+                        with torch.autocast('cuda'):
+                            images.append(
+                                pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
+                            )
+                    else:
+                        images.append(
+                            pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
+                        )
 
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
@@ -922,6 +932,8 @@ def main():
         if args.push_to_hub:
             repo.push_to_hub(commit_message="End of training", blocking=False, auto_lfs_prune=True)
 
+    dt = time.time() - t0
+    logger.info(f"Training finished in {dt // 3600:.0f}hr {dt % 3600 // 60:.0f}min {dt % 60:.0f}s")
     accelerator.end_training()
 
 

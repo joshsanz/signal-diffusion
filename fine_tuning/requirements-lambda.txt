@@ -19,7 +19,7 @@ pysoundfile
 scipy
 sox
 streamlit>=1.10.0
-tensorboard
+tensorboard==2.12.2
 torch==1.13.1
 torchaudio==0.13.1
 torchvision==0.14.1
