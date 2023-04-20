@@ -36,12 +36,7 @@ def filter_studies(all_raw_data):
         filtered_data.append(filt_data.T)
     
     
-    filtered_data = np.array(filtered_data)
+    #filtered_data = np.array(filtered_data)
 
-    print(all_raw_data.shape)
-    print(all_raw_data[0].shape)
-
-    print(filtered_data.shape)
-    print(filtered_data[0].shape)
 
     return filtered_data
