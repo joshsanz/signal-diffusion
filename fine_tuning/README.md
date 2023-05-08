@@ -158,9 +158,9 @@ Call either script with `--help` for more information.
 
 ## TODOs
 
+* Diagnose weird checkpoint load crash
 * Add support for interruptible training
   * tensorboard writer needs `s3://` location
   * `output_dir` should be the s3 bucket to detect previous checkpoints
 * WandB support
-* Automatically convert STFT images back to audio
 * Test learning rate values, batch size, num noise steps for training and inference quality

@@ -40,7 +40,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel, Mel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 # from diffusers.utils import check_min_version, deprecate
@@ -148,7 +148,18 @@ def parse_args():
     parser.add_argument(
         "--random_flip",
         action="store_true",
-        help="Whether to randomly flip images horizontally",
+        help="Whether to randomly flip images horizontally.",
+    )
+    parser.add_argument(
+        "--audio",
+        action="store_true",
+        help="Treat generated images as STFTs and generate audio from them.",
+    )
+    parser.add_argument(
+        "--audio_fs",
+        type=int,
+        default=22050,
+        help="The sampling rate (Hz) of the generated audio.",
     )
     parser.add_argument(
         "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
@@ -413,13 +424,15 @@ def main():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
         import wandb
 
-    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
+    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit,
+                                                      automatic_checkpoint_naming=True)
     accelerator_grad_kwargs = GradScalerKwargs(init_scale=1)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
+        project_dir=args.output_dir,
         logging_dir=logging_dir,
         project_config=accelerator_project_config,
         kwargs_handlers=[accelerator_grad_kwargs],  # Set GradScaler initial scale to 1.0 to avoid overflow.
@@ -518,12 +531,14 @@ def main():
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
+                logger.info("Loading ema weights...")
                 load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DConditionModel)
                 ema_unet.load_state_dict(load_model.state_dict())
                 ema_unet.to(accelerator.device)
                 del load_model
 
             for i in range(len(models)):
+                logger.info("Loading model {}/{}...".format(i + 1, len(models)))
                 # pop models so that they are not loaded again
                 model = models.pop()
 
@@ -727,7 +742,7 @@ def main():
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
-        accelerator.init_trackers("text2image-fine-tune", config=vars(args))
+        accelerator.init_trackers("signal-diffusion", config=vars(args))
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -748,19 +763,20 @@ def main():
             path = os.path.basename(args.resume_from_checkpoint)
         else:
             # Get the most recent checkpoint
-            dirs = os.listdir(args.output_dir)
+            dirs = os.listdir(os.path.join(args.output_dir, "checkpoints"))
             dirs = [d for d in dirs if d.startswith("checkpoint")]
-            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+            dirs = sorted(dirs, key=lambda x: int(x.split("_")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
-            accelerator.print(
+            logger.info(
                 f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
             )
             args.resume_from_checkpoint = None
         else:
-            accelerator.print(f"Resuming from checkpoint {path}")
+            logger.info(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
+            print("Finished load_state")
             global_step = int(path.split("-")[1])
 
             resume_global_step = global_step * args.gradient_accumulation_steps
@@ -775,6 +791,7 @@ def main():
         unet.train()
         train_loss = 0.0
         grad_norm = 0.0
+        torch.cuda.reset_peak_memory_stats()
         # Optionally skip first N batches to reach epoch/validation quickly
         for step, batch in enumerate(accelerator.skip_first_batches(train_dataloader, num_batches=0)):
             # Skip steps until we reach the resumed step
@@ -852,14 +869,18 @@ def main():
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
+                        save_path = accelerator.save_state()
                         logger.info(f"Saved state to {save_path}")
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
+            if global_step >= args.max_train_steps:
+                break
+
         # break  # DEBUG
+        train_peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        accelerator.log({"train_peak_mem": train_peak_mem}, step=epoch)
 
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
@@ -867,16 +888,18 @@ def main():
                     f"Running validation... \n  Generating {args.num_validation_images} images with prompt:"
                     f"  {args.validation_prompt}."
                 )
+                torch.cuda.reset_peak_memory_stats()
 
                 # create pipeline
                 pipeline = StableDiffusionPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
                     unet=accelerator.unwrap_model(unet, keep_fp32_wrapper=True),
-                    revision=args.revision,
+                    safety_checker=None, requires_safety_checker=False,
                     torch_dtype=weight_dtype,
                 )
-                pipeline = pipeline.to('cuda')
+                pipeline = pipeline.to(accelerator.device)
                 pipeline.set_progress_bar_config(disable=True)
+                # Need offload to prevent OOM on A10Gs
                 pipeline.enable_model_cpu_offload()
 
                 # run inference
@@ -893,10 +916,18 @@ def main():
                             pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
                         )
 
+                if args.audio:
+                    mel = Mel(x_res=args.resolution, y_res=args.resolution, sample_rate=args.audio_fs, n_fft=2048,
+                              hop_length=args.resolution, top_db=80, n_iter=32,)
+                    audios = [mel.image_to_audio(im.convert('L')) for im in images]
+
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
                         np_images = np.stack([np.asarray(img) for img in images])
                         tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
+                        if args.audio:
+                            tracker.writer.add_audio("validation_audio", torch.tensor(np.hstack(audios)),
+                                                     epoch, sample_rate=args.audio_fs)
                     if tracker.name == "wandb":
                         tracker.log(
                             {
@@ -906,12 +937,25 @@ def main():
                                 ]
                             }
                         )
+                        if args.audio:
+                            tracker.log(
+                                {
+                                    "validation_audio": [
+                                        wandb.Audio(audio, caption=f"{i}: {args.validation_prompt}",
+                                                    sample_rate=args.audio_fs)
+                                        for i, audio in enumerate(audios)
+                                    ]
+                                }
+                            )
+
+                # Need to remove offload hook on unet before further training/validation
+                accelerate.hooks.remove_hook_from_module(pipeline.unet)
+                pipeline.unet.to(accelerator.device)
 
                 del pipeline
                 torch.cuda.empty_cache()
-
-            if global_step >= args.max_train_steps:
-                break
+                val_peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                accelerator.log({"val_peak_mem": val_peak_mem}, step=epoch)
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()

@@ -2,6 +2,9 @@ resources:
   # Optional; if left out, automatically pick the cheapest cloud.
   cloud: aws
   accelerators: A10G:1
+  instance_type: g5.2xlarge
+  # region: us-east-1
+  use_spot: true
 
 # Working directory (optional) containing the project codebase.
 # Its contents are synced to ~/sky_workdir/ on the cluster.
@@ -9,51 +12,60 @@ workdir: .
 
 file_mounts:
   /output-s3:
-    name: sdv1-5-fine-tune
+    name: sdv1-5-finetune
     mode: MOUNT
     store: s3 # Could be either of [s3, gcs]
 
-  /data: /data/shared/signal-diffusion/fma_preprocessed
+  /data:
+    name: signal-diffusion-data
+    mode: MOUNT
+    store: s3
+
+  ~/.netrc: ~/.netrc
 
 # Typical use: pip install -r requirements.txt
 # Invoked under the workdir (i.e., can use its files).
 setup: |
   echo "Running setup."
   sudo apt update
-  sudo apt install -y libsndfile1 ffmpeg
+  sudo apt install -y libsndfile1 ffmpeg iotop
   pip install --user -r requirements-lambda.txt
+
 
 # Disabled:
 #    --random_flip
 #    --enable_xformers_memory_efficient_attention \
+#    --resume_from_checkpoint="latest" \
+# PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 # Typical use: make use of resources, such as running training.
 # Invoked under the workdir (i.e., can use its files).
 run: |
   set -e
   echo "Hello, SkyPilot!"
-  export RUN_ID=4
+  export RUN_ID=2
   export MODEL_NAME='runwayml/stable-diffusion-v1-5'
-  export dataset_name='/data'
-  export output_dir="tmp/stft-full.$RUN_ID"
+  export dataset_name='/data/fma_preprocessed'
+  export output_dir="/output-s3/stft-full.$RUN_ID"
   echo "Model $MODEL_NAME"
   echo "Dataset $dataset_name"
   echo "Output location $output_dir"
-  accelerate launch --mixed_precision=no train_text_to_image.py \
+  PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 accelerate launch --mixed_precision=no train_text_to_image.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$dataset_name \
     --use_ema \
     --resolution=512 --center_crop \
+    --audio --audio_fs=22050 \
     --train_batch_size=1 \
     --gradient_accumulation_steps=8 \
     --gradient_checkpointing \
-    --max_train_steps=10000 \
-    --learning_rate=1e-4 \
+    --max_train_steps=30000 \
+    --learning_rate=1e-5 \
     --max_grad_norm=1 \
     --allow_tf32 \
-    --lr_scheduler="constant" --lr_warmup_steps=0 \
-    --checkpointing_steps=1000 --checkpoints_total_limit=3 \
-    --resume_from_checkpoint="latest" \
+    --lr_scheduler="cosine" --lr_warmup_steps=500 \
+    --checkpointing_steps=500 --checkpoints_total_limit=3 \
+    --resume_from_checkpoint=latest \
     --output_dir="$output_dir" \
-    --validation_prompt="a international instrumental song" --validation_epochs=1
-  cp -r "$output_dir" /output-s3/
+    --report_to=wandb \
+    --validation_prompt="a energetic jazz song" --validation_epochs=1

@@ -26,4 +26,5 @@ torchaudio
 torchvision
 transformers>=4.25.1
 triton
+wandb
 xformers

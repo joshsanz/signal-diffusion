@@ -133,3 +133,5 @@ test/
 data/
 *.pt
 *.png
+wandb/
+
