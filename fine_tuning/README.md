@@ -158,9 +158,10 @@ Call either script with `--help` for more information.
 
 ## TODOs
 
-* Diagnose weird checkpoint load crash
-* Add support for interruptible training
-  * tensorboard writer needs `s3://` location
-  * `output_dir` should be the s3 bucket to detect previous checkpoints
-* WandB support
 * Test learning rate values, batch size, num noise steps for training and inference quality
+* Train STFT-specific VAE
+  * In progress
+* Figure out why spot jobs unable to get instances
+* Get more EEG datasets
+* Train male/female/age tags for EEG STFTs, try img2img on them
+* Do img2img for music genres

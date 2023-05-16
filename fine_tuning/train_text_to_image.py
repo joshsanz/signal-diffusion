@@ -863,7 +863,10 @@ def main():
                     ema_unet.step(unet.parameters())
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss, "grad_norm": grad_norm.item()}, step=global_step)
+                accelerator.log({
+                    "train_loss": train_loss,
+                    "grad_norm": grad_norm.item(),
+                    "lr": lr_scheduler.get_last_lr()[0]}, step=global_step)
                 train_loss = 0.0
                 grad_norm = 0.0
 
