@@ -10,6 +10,29 @@ from torch.optim import Optimizer
 logger = logging.getLogger(__name__)
 
 
+def format_pgroup_dog_state(dog_param_group_state):
+    """
+    A helper function to format the state of a DoG parameter group into a loggable string,
+    describing the distance from initial point, the sum of gradient squared norms, and the step size.
+
+    Note: for LDoG, those value are the mean across layers
+    @param dog_param_group_state: A state_dict of a single param group of a DoG optimizer
+    @return: A printable string
+    """
+    # among other things, the state dict contains the following keys:
+    #    'rbar' is a tensor holding the distance (maximum distance observed so far) from the initial point
+    #            For DoG this is a single value, while for LDoG this is a vector of size equal to the number of layers
+    #    'G' is a tensor holding the sum gradient squared norms
+    #            For DoG this is a single value, while for LDoG this is a vector of size equal to the number of layers
+    #    'eta' is a list of scalar tensors holding the step size for each layer (i.e., pytorch Parameter)
+
+    rbar = torch.mean(dog_param_group_state['rbar'].detach()).item()
+    G = torch.mean(dog_param_group_state['G'].detach()).item()
+    # in DoG, eta has the same value for all layers
+    eta = torch.mean(torch.stack(dog_param_group_state['eta'])).detach().item()
+    return f'rbar={rbar:E}, G={G:E}, eta={eta:E}'
+
+
 class DoG(Optimizer):
     """
         DoG (Distance over Gradients) is a parameter-free adaptive optimizer, proposed in
@@ -94,7 +117,7 @@ class DoG(Optimizer):
     def load_state_dict(self, state_dict: dict) -> None:
         super(DoG, self).load_state_dict(state_dict)
         self._first_step = state_dict['state']['_first_step']
-        logger.info(f'loaded DoG state dict')
+        logger.info('loaded DoG state dict')
         cuda = self.param_groups[0]['params'][0].device
         for group in self.param_groups:
             cuda_buffers = {'init_buffer'}
