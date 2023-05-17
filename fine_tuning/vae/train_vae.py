@@ -111,6 +111,71 @@ def get_model_size(model, verbose=False):
     return size_all_mb
 
 
+def prepare_checkpointing(accelerator, args, ema_vae):
+    ckpt_dir = os.path.join(args.output_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    # `accelerate` 0.16.0 will have better support for customized saving
+    if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
+        # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
+        def save_model_hook(models, weights, output_dir):
+            if args.use_ema:
+                ema_vae.save_pretrained(os.path.join(output_dir, "vae_ema"))
+
+            for i, model in enumerate(models):
+                if isinstance(model, AutoencoderKL):
+                    model.save_pretrained(os.path.join(output_dir, "vae"))
+
+                    # make sure to pop weight so that corresponding model is not saved again
+                    weights.pop()
+                elif isinstance(model, LPIPSWithDiscriminator):
+                    os.makedirs(os.path.join(output_dir, "discriminator"), exist_ok=True)
+                    torch.save(model.state_dict(), os.path.join(output_dir, "discriminator", "discriminator.pt"))
+                    weights.pop()
+
+        def load_model_hook(models, input_dir):
+            if args.use_ema:
+                logger.info("Loading ema weights...")
+                load_model = EMAModel.from_pretrained(
+                    os.path.join(input_dir, "vae_ema"), AutoencoderKL
+                )
+                ema_vae.load_state_dict(load_model.state_dict())
+                ema_vae.to(accelerator.device)
+                del load_model
+
+            for i in range(len(models)):
+                logger.info("Loading model {}/{}...".format(i + 1, len(models)))
+                # pop models so that they are not loaded again
+                model = models.pop()
+
+                if isinstance(model, AutoencoderKL):
+                    # load diffusers style into model
+                    load_model = AutoencoderKL.from_pretrained(input_dir, subfolder="vae")
+                    model.register_to_config(**load_model.config)
+
+                    model.load_state_dict(load_model.state_dict())
+                    del load_model
+                elif isinstance(model, LPIPSWithDiscriminator):
+                    model.load_state_dict(torch.load(os.path.join(input_dir, "discriminator", "discriminator.pt")))
+
+        accelerator.register_save_state_pre_hook(save_model_hook)
+        accelerator.register_load_state_pre_hook(load_model_hook)
+
+    existing_ckpts = os.listdir(ckpt_dir)
+    if not args.resume_from_checkpoint:
+        if existing_ckpts:
+            logger.error("Not resuming from checkpoint, but found existing checkpoints: {}. Remove or start from checkpoints to continue.".format(existing_ckpts))
+            raise RuntimeError("Bad checkpoint setup: attempted overwrite")
+    elif args.resume_from_checkpoint == "latest":
+        if not existing_ckpts:
+            logger.error("Requested training from 'latest' checkpoint, but no checkpoints found.")
+            raise RuntimeError("Bad checkpoint setup: none exist")
+    else:
+        if os.path.basename(args.resume_from_checkpoint) not in existing_ckpts:
+            logger.error("Requested training from checkpoint {}, but checkpoint not found.".format(args.resume_from_checkpoint))
+            raise RuntimeError("Bad checkpoint setup: requested checkpoint does not exist")
+
+
 def get_dataloader(accelerator, args):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
@@ -287,6 +352,8 @@ def train(args):
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
         )
         ema_vae = EMAModel(ema_vae.parameters(), model_cls=AutoencoderKL, model_config=ema_vae.config)
+    else:
+        ema_vae = None
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -303,51 +370,8 @@ def train(args):
                 "xformers is not available. Make sure it is installed correctly"
             )
 
-    # `accelerate` 0.16.0 will have better support for customized saving
-    if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
-        # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-        def save_model_hook(models, weights, output_dir):
-            if args.use_ema:
-                ema_vae.save_pretrained(os.path.join(output_dir, "vae_ema"))
-
-            for i, model in enumerate(models):
-                if isinstance(model, AutoencoderKL):
-                    model.save_pretrained(os.path.join(output_dir, "vae"))
-
-                    # make sure to pop weight so that corresponding model is not saved again
-                    weights.pop()
-                elif isinstance(model, LPIPSWithDiscriminator):
-                    os.makedirs(os.path.join(output_dir, "discriminator"), exist_ok=True)
-                    torch.save(model.state_dict(), os.path.join(output_dir, "discriminator", "discriminator.pt"))
-                    weights.pop()
-
-        def load_model_hook(models, input_dir):
-            if args.use_ema:
-                logger.info("Loading ema weights...")
-                load_model = EMAModel.from_pretrained(
-                    os.path.join(input_dir, "vae_ema"), AutoencoderKL
-                )
-                ema_vae.load_state_dict(load_model.state_dict())
-                ema_vae.to(accelerator.device)
-                del load_model
-
-            for i in range(len(models)):
-                logger.info("Loading model {}/{}...".format(i + 1, len(models)))
-                # pop models so that they are not loaded again
-                model = models.pop()
-
-                if isinstance(model, AutoencoderKL):
-                    # load diffusers style into model
-                    load_model = AutoencoderKL.from_pretrained(input_dir, subfolder="vae")
-                    model.register_to_config(**load_model.config)
-
-                    model.load_state_dict(load_model.state_dict())
-                    del load_model
-                elif isinstance(model, LPIPSWithDiscriminator):
-                    model.load_state_dict(torch.load(os.path.join(input_dir, "discriminator", "discriminator.pt")))
-
-        accelerator.register_save_state_pre_hook(save_model_hook)
-        accelerator.register_load_state_pre_hook(load_model_hook)
+    # Setup for training checkpoints
+    prepare_checkpointing(accelerator, args, ema_vae)
 
     if args.gradient_checkpointing:
         vae.enable_gradient_checkpointing()
@@ -359,10 +383,7 @@ def train(args):
 
     if args.scale_lr:
         args.learning_rate = (
-            args.learning_rate
-            * args.gradient_accumulation_steps
-            * args.train_batch_size
-            * accelerator.num_processes
+            args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
 
     # Initialize the optimizer
@@ -522,11 +543,7 @@ def train(args):
             accelerator.skip_first_batches(train_dataloader, num_batches=0)
         ):
             # Skip steps until we reach the resumed step
-            if (
-                args.resume_from_checkpoint
-                and epoch == first_epoch
-                and step < resume_step
-            ):
+            if (args.resume_from_checkpoint and epoch == first_epoch and step < resume_step):
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
