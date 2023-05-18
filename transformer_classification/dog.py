@@ -172,6 +172,18 @@ class DoG(Optimizer):
 
         return loss
 
+    def reset(self, keep_etas=False):
+        """
+        Resets the optimizer's internal state.
+
+        `keep_etas` will force the next step to use the current step size (eta)
+        instead of restarting the search from reps_rel.
+        """
+        for group in self.param_groups:
+            if keep_etas:
+                group['init_eta'] = [eta.clone() for eta in group['eta']]
+        self._first_step = True
+
     def _update_group_state(self, group, init):
         # treat all layers as one long vector
         if self._first_step:
@@ -190,7 +202,10 @@ class DoG(Optimizer):
         if self._first_step and group['init_eta'] is not None:
             init_eta = group['init_eta']
             logger.info(f'Explicitly setting init_eta value to {init_eta}')
-            group['eta'] = [eta * 0 + init_eta for eta in group['eta']]
+            if isinstance(init_eta, list):
+                group['eta'] = [eta * 0 + ie for eta, ie in zip(group['eta'], init_eta)]
+            else:
+                group['eta'] = [eta * 0 + init_eta for eta in group['eta']]
 
 
 class LDoG(DoG):

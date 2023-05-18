@@ -1,7 +1,9 @@
 # Datasets for EEG classification
 import csv
+import mne
 import numpy as np
 import os
+import pandas as pd
 import torch
 from collections import OrderedDict
 from scipy.signal import decimate
@@ -10,6 +12,9 @@ from scipy.signal import decimate
 import support_scripts.read_in_ear_eeg as read_in_ear_eeg
 import support_scripts.read_in_labels as read_in_labels
 import support_scripts.eeg_filter as eeg_filter
+
+
+mne.set_log_level("WARNING")
 
 
 class CacheDict(OrderedDict):
@@ -267,4 +272,308 @@ class EarDataset(torch.utils.data.Dataset):
         shape = y.shape
         y = y.reshape(-1, self.vector_samps)
         y = y.median(dim=1).values
+        return X, y
+
+
+class RawMathDataset(torch.utils.data.Dataset):
+    """Dataset loader for Math EEG dataset"""
+    def __init__(self, data_path, n_samples, n_context, fs=250, math_only=False, background_only=False):
+        """
+        Construct a parameterized dataloader for math eeg data
+
+        # Parameters
+        - data_path: path to directory containing math eeg data EDF files and subject-info.csv metadata
+        - n_samples: total number of time samples in one data point
+        - n_context: number of time samples in the context window per-channel for a single token
+        - math_only: if True, only load recordings when subjects were doing math
+        - background_only: if True, only load recordings when subjects were not doing math
+
+        # Returns
+        For index i, returns a tuple (X, y) where
+        - X is a tensor of shape (n_tokens x n_channels*n_context), for n_tokens = n_samples // n_context
+        - y is a tensor of size 1, where y = 2 * (doing_math) + 1 * (gender_is_male), i.e.
+        | y | math? | gender |
+        |---|-------|--------|
+        | 0 |   0   |   0    |
+        | 1 |   0   |   1    |
+        | 2 |   1   |   0    |
+        | 3 |   1   |   1    |
+        """
+        assert not (math_only and background_only), "Can't have both math_only and background_only"
+        assert n_samples >= n_context and n_samples % n_context == 0, "n_samples must be divisible by n_context"
+        self.data_path = data_path
+        self.n_samples = n_samples
+        self.n_context = n_context
+        self.fs = fs
+        # TODO: implement decimation or preprocessing
+        self.decimation = 500 // fs  # Raw samples are 500 Hz
+        self.math_only = math_only
+        self.background_only = background_only
+
+        # Get dataset descriptions
+        self.files = list(filter(lambda f: f.endswith(".edf"), os.listdir(self.data_path)))
+        assert len(self.files) == 72, "Expected 72 files, found {}".format(len(self.files))
+        self.math_files = list(filter(lambda f: f.endswith("_2.edf"), self.files))
+        self.bkgnd_files = list(filter(lambda f: f.endswith("_1.edf"), self.files))
+
+        self.subject_info = {}
+        with open(os.path.join(self.data_path, "subject-info.csv"), "r") as fcsv:
+            reader = csv.reader(fcsv)
+            _ = next(reader)  # skip header
+            for row in reader:
+                self.subject_info[row[0]] = int(row[1]), row[2], int(row[3]), float(row[4]), bool(row[5])
+
+        # Get file content info
+        self.math_file_lens = [mne.io.read_raw_edf(os.path.join(self.data_path, f), preload=False).n_times
+                               for f in self.math_files]
+        self.bkgnd_file_lens = [mne.io.read_raw_edf(os.path.join(self.data_path, f), preload=False).n_times
+                                for f in self.bkgnd_files]
+        chans = mne.io.read_raw_edf(os.path.join(self.data_path, self.files[0]), preload=False).ch_names
+        self.n_channels = len(chans) - 1  # exclude EKG channel
+        # Define index to file & offset mapping
+        self.ind_math_files = []
+        self.ind_math_offsets = []
+        for f, L in zip(self.math_files, self.math_file_lens):
+            nchunks = L // n_samples
+            self.ind_math_files.extend([f] * nchunks)
+            self.ind_math_offsets.extend([n_samples * i for i in range(nchunks)])
+        self.ind_bkgnd_files = []
+        self.ind_bkgnd_offsets = []
+        for f, L in zip(self.bkgnd_files, self.bkgnd_file_lens):
+            nchunks = L // n_samples
+            self.ind_bkgnd_files.extend([f] * nchunks)
+            self.ind_bkgnd_offsets.extend([n_samples * i for i in range(nchunks)])
+
+        # Caching
+        self.cache = CacheDict(cache_len=1000)
+
+    def __len__(self):
+        if self.math_only:
+            return len(self.ind_math_files)
+        elif self.background_only:
+            return len(self.ind_bkgnd_files)
+        else:
+            return len(self.ind_math_files) + len(self.ind_bkgnd_files)
+
+    def format_data(self, data):
+        # Data comes in as n_channels x n_samples
+        data = torch.tensor(data).float().reshape(self.n_channels, -1, self.n_context)
+        data = data.permute(1, 0, 2).reshape(-1, self.n_channels * self.n_context)
+        return data.contiguous()
+
+    def get_label(self, file):
+        info, _ = os.path.splitext(file)
+        subject, m_or_bk = info.split("_")
+        # age = self.subject_info[subject][0]
+        gender = self.subject_info[subject][1]
+        isfemale = gender == "F"
+        # subtractions = self.subject_info[subject][3]
+        doing_math = m_or_bk == "2"
+        return torch.tensor(2 * doing_math + 1 * isfemale).long()
+
+    def load_data(self, index):
+        if self.math_only:
+            file = self.ind_math_files[index]
+            offset = self.ind_math_offsets[index]
+        elif self.background_only:
+            file = self.ind_math_files[index]
+            offset = self.ind_math_offsets[index]
+        else:
+            if index < len(self.ind_math_files):
+                file = self.ind_math_files[index]
+                offset = self.ind_math_offsets[index]
+            else:
+                file = self.ind_bkgnd_files[index - len(self.ind_math_files)]
+                offset = self.ind_bkgnd_offsets[index - len(self.ind_math_files)]
+        edf = mne.io.read_raw_edf(os.path.join(self.data_path, file), preload=True)
+        # Ignore last channel, which is EKG data
+        data, _ = edf[:-1, offset:offset + self.n_samples]
+        X = self.format_data(data)
+        y = self.get_label(file)
+        return X, y
+
+    def __getitem__(self, index):
+        val = self.cache.get(index, None)
+        if val is None:
+            val = self.load_data(index)
+            self.cache[index] = val
+        X, y = val
+        return X, y
+
+
+class MathPreprocessor:
+    def __init__(self, data_path, nsamps, fs=250):
+        self.data_path = data_path
+        self.nsamps = nsamps
+        self.fs = fs
+        orig_fs = 500
+        self.decimation = orig_fs // fs
+        print("Decimation factor: {}".format(self.decimation))
+
+        # Get dataset descriptions
+        self.files = list(filter(lambda f: f.endswith(".edf"), os.listdir(self.data_path)))
+        assert len(self.files) == 72, "Expected 72 files, found {}".format(len(self.files))
+        self.math_files = list(filter(lambda f: f.endswith("_2.edf"), self.files))
+        self.bkgnd_files = list(filter(lambda f: f.endswith("_1.edf"), self.files))
+
+        self.subject_info = {}
+        with open(os.path.join(self.data_path, "subject-info.csv"), "r") as fcsv:
+            reader = csv.reader(fcsv)
+            _ = next(reader)  # skip header
+            for row in reader:
+                self.subject_info[row[0]] = int(row[1]), row[2], int(row[3]), float(row[4]), bool(row[5])
+
+        # Get file content info
+        self.math_file_lens = [mne.io.read_raw_edf(os.path.join(self.data_path, f), preload=False).n_times
+                               for f in self.math_files]
+        self.bkgnd_file_lens = [mne.io.read_raw_edf(os.path.join(self.data_path, f), preload=False).n_times
+                                for f in self.bkgnd_files]
+        chans = mne.io.read_raw_edf(os.path.join(self.data_path, self.files[0]), preload=False).ch_names
+        self.n_channels = len(chans) - 1  # exclude EKG channel
+        # Define index to file & offset mapping
+        self.ind_math_files = []
+        self.ind_math_offsets = []
+        for f, L in zip(self.math_files, self.math_file_lens):
+            nchunks = L // (self.decimation * self.nsamps)
+            assert nchunks > 1, (
+                "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
+                    f, L, self.nsamps, self.decimation
+                )
+            )
+            self.ind_math_files.extend([f] * nchunks)
+            self.ind_math_offsets.extend([self.nsamps * self.decimation * i for i in range(nchunks)])
+        self.ind_bkgnd_files = []
+        self.ind_bkgnd_offsets = []
+        for f, L in zip(self.bkgnd_files, self.bkgnd_file_lens):
+            nchunks = L // (self.decimation * self.nsamps)
+            assert nchunks > 1, (
+                "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
+                    f, L, self.nsamps, self.decimation
+                )
+            )
+            self.ind_bkgnd_files.extend([f] * nchunks)
+            self.ind_bkgnd_offsets.extend([self.nsamps * self.decimation * i for i in range(nchunks)])
+
+    def __len__(self):
+        return len(self.ind_math_files) + len(self.ind_bkgnd_files)
+
+    def get_label(self, file):
+        info, _ = os.path.splitext(file)
+        subject, m_or_bk = info.split("_")
+        # age = self.subject_info[subject][0]
+        gender = self.subject_info[subject][1]
+        isfemale = gender == "F"
+        # subtractions = self.subject_info[subject][3]
+        doing_math = m_or_bk == "2"
+        return torch.tensor(2 * doing_math + 1 * isfemale).long()
+
+    def load_data(self, index):
+        # if self.math_only:
+        #     file = self.ind_math_files[index]
+        #     offset = self.ind_math_offsets[index]
+        # elif self.background_only:
+        #     file = self.ind_math_files[index]
+        #     offset = self.ind_math_offsets[index]
+        # else:
+        if index < len(self.ind_math_files):
+            file = self.ind_math_files[index]
+            offset = self.ind_math_offsets[index]
+        else:
+            file = self.ind_bkgnd_files[index - len(self.ind_math_files)]
+            offset = self.ind_bkgnd_offsets[index - len(self.ind_math_files)]
+        edf = mne.io.read_raw_edf(os.path.join(self.data_path, file), preload=True)
+        # Ignore last channel, which is EKG data
+        data, _ = edf[:-1, offset:offset + self.nsamps * self.decimation]
+        if self.decimation > 1:
+            data = decimate(data, self.decimation, axis=1).copy()
+        X = torch.tensor(data).float()
+        y = self.get_label(file)
+        return X, y
+
+    def preprocess(self, inds_per_file=20, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=42):
+        output_dir = {'train': os.path.join(self.data_path, "train"),
+                      'val': os.path.join(self.data_path, "val"),
+                      'test': os.path.join(self.data_path, "test")}
+        for d in output_dir.values():
+            os.makedirs(d, exist_ok=True)
+        assert train_frac + val_frac + test_frac == 1, "train_frac + val_frac + test_frac must equal 1"
+        N = len(self)
+        n_train = int(np.ceil(train_frac * N))
+        n_val = int(np.floor(val_frac * N))
+        # n_test = int(np.floor(test_frac * N))
+        shuffled_inds = np.arange(N)
+        np.random.shuffle(shuffled_inds)
+        train_inds = shuffled_inds[:n_train]
+        val_inds = shuffled_inds[n_train:n_train + n_val]
+        test_inds = shuffled_inds[n_train + n_val:]
+
+        for split, inds in zip(['train', 'val', 'test'], [train_inds, val_inds, test_inds]):
+            subindex = 0
+            file_ind = 0
+            filenames, offsets, nsamples = [], [], []
+            while subindex < len(inds):
+                offsets.append(subindex)
+                X, y = [], []
+                for i in range(inds_per_file):
+                    iX, iy = self.load_data(inds[subindex])
+                    subindex += 1
+                    X.append(iX)
+                    y.append(iy)
+                    if subindex == len(inds):
+                        break
+                X = torch.stack(X)
+                y = torch.stack(y)
+                torch.save(X, os.path.join(output_dir[split], "X_{}.pt".format(file_ind)))
+                torch.save(y, os.path.join(output_dir[split], "y_{}.pt".format(file_ind)))
+                filenames.append("X_{}.pt,y_{}.pt".format(file_ind, file_ind))
+                nsamples.append(X.shape[0])
+                file_ind += 1
+            with open(os.path.join(self.data_path, split, "metadata.csv"), "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["X_filename", "y_filename", "start_sample_offset", "n_samples"])
+                for fn, off, ns in zip(filenames, offsets, nsamples):
+                    writer.writerow(fn.split(',') + [off, ns])
+
+        return output_dir
+
+
+class MathDataset(torch.utils.data.Dataset):
+    """Dataset for preprocessed math eeg dataset"""
+    def __init__(self, data_path, ncontext):
+        self.data_path = data_path
+        self.ncontext = ncontext
+        self.metadata = pd.read_csv(os.path.join(data_path, "metadata.csv"))
+        self.cache = CacheDict(cache_len=1000)
+        # Get shape info
+        X = self.get_file(self.metadata.iloc[0]["X_filename"])
+        self.n_channels = X.shape[1]
+        self.nsamps = X.shape[2]
+        assert self.nsamps >= self.ncontext and self.nsamps % self.ncontext == 0, (
+            f"Incompatible nsamps {self.nsamps} and ncontext {self.ncontext}"
+        )
+
+    def __len__(self):
+        return self.metadata.iloc[-1]["start_sample_offset"] + self.metadata.iloc[-1]["n_samples"]
+
+    def get_file(self, filename):
+        if filename in self.cache:
+            return self.cache[filename]
+        else:
+            X = torch.load(os.path.join(self.data_path, filename))
+            self.cache[filename] = X
+            return X
+
+    def __getitem__(self, index):
+        # Get X and y
+        metaind = self.metadata["start_sample_offset"].searchsorted(index, side="right") - 1
+        Xfile = self.metadata.iloc[metaind]["X_filename"]
+        yfile = self.metadata.iloc[metaind]["y_filename"]
+        multiX = self.get_file(Xfile)
+        multiy = self.get_file(yfile)
+        offset = index - self.metadata.iloc[metaind]["start_sample_offset"]
+        X = multiX[offset, :, :]
+        y = multiy[offset]
+        # Format X
+        X = X.reshape(-1, self.nsamps // self.ncontext, self.ncontext)
+        X = X.permute(1, 2, 0).reshape(self.nsamps // self.ncontext, -1).contiguous()
         return X, y
