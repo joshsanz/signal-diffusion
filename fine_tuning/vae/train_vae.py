@@ -63,17 +63,20 @@ def decode_latents(vae, latents):
 
 
 def encode_sample(vae, sample):
-    image = sample["image"]
     img_tensor = sample["pixel_values"]
-    img_tensor = img_tensor.reshape(1, *img_tensor.shape).to("cuda")
-    latents = vae.encode(img_tensor).latent_dist.mode()
-    return image, latents
+    if "image" in sample.keys():
+        images = sample["image"]
+    else:
+        images = ((img_tensor + 1.) / 2).permute(0, 3, 2, 1).numpy()
+        images = numpy_to_pil(images)
+    latents = vae.encode(img_tensor.to('cuda')).latent_dist.mode()
+    return images, latents
 
 
 def get_concat_h(images, padding=0):
     width = sum([im.width + padding for im in images]) - padding
     dx = images[0].width + padding
-    dst = Image.new("RGB", (width, images[0].height))
+    dst = Image.new("RGB", (width, images[0].height), (255, 255, 0))
     for i in range(len(images)):
         dst.paste(images[i], (dx * i, 0))
     return dst
@@ -82,7 +85,7 @@ def get_concat_h(images, padding=0):
 def get_concat_v(images, padding=0):
     height = sum([im.height + padding for im in images]) - padding
     dy = images[0].height + padding
-    dst = Image.new("RGB", (images[0].width, height))
+    dst = Image.new("RGB", (images[0].width, height), (255, 255, 0))
     for i in range(len(images)):
         dst.paste(images[i], (0, dy * i))
     return dst

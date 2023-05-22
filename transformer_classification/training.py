@@ -1,14 +1,26 @@
 # Training functions for EEG classification
 import torch
+from dataclasses import dataclass
 from tqdm.auto import tqdm
-from dog import DoG
+from dog import DoG, PDoG
+
+
+@dataclass
+class TrainingConfig:
+    epochs: int = 100
+    opt_restart_every: int = 200
+    opt_log_every: int = 100
+    val_every_epochs: int = 10
 
 
 def log_etas(tblogger, opt, step):
     state = opt.state_dict()
     scalars = {}
     for i, p in enumerate(state['param_groups']):
-        etas = torch.stack(p['eta']).detach().cpu()
+        if isinstance(opt, PDoG):
+            etas = torch.stack([eta.norm() for eta in p['eta']]).detach().cpu()
+        else:
+            etas = torch.stack(p['eta']).detach().cpu()
         tblogger.add_histogram(f"Eta.{i}", etas, global_step=step)
     return scalars
 
@@ -39,15 +51,14 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step):
 
 
 # True training and evaluation functions
-def _train(output_permuter, epochs, model, train_data, val_data, optimizer, criterion, device, tblogger,
-           validation_interval=10):
+def _train(output_permuter, args, model, train_data, val_data, optimizer, criterion, device, tblogger):
     global_step = 0
     losses = []
     accuracies = []
     val_accuracies = []
     best_valid_acc = 0
-    progress = tqdm(total=len(train_data) * epochs)
-    for epoch in range(epochs):
+    progress = tqdm(total=len(train_data) * args.epochs)
+    for epoch in range(args.epochs):
         model.train()
         for i, (src, trg) in enumerate(train_data):
             # Send to device
@@ -68,17 +79,17 @@ def _train(output_permuter, epochs, model, train_data, val_data, optimizer, crit
             tblogger.add_scalar("Loss/train", loss.item(), global_step=global_step)
             tblogger.add_scalar("Accuracy/train", accuracy.item(), global_step=global_step)
             tblogger.add_scalar("Grads/norm", grad_norm.item(), global_step=global_step)
-            if isinstance(optimizer, DoG) and global_step % 100 == 0:
+            if isinstance(optimizer, DoG) and global_step % args.opt_log_every == 0:
                 log_etas(tblogger, optimizer, global_step)
             # Update progress bar
             progress.set_postfix({"loss": round(loss.item(), 5), "acc": round(accuracy.item(), 3)})
             progress.update(1)
             global_step += 1
         # End of epoch, validate
-        if isinstance(optimizer, DoG) and (epoch + 1) % 200 == 0:
+        if args.opt_restart_every > 0 and isinstance(optimizer, DoG) and (epoch + 1) % args.opt_restart_every == 0:
             optimizer.reset(keep_etas=False)
 
-        if epoch % validation_interval == 0 or epoch == epochs - 1:
+        if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
             _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device, tblogger, global_step)
             val_accuracies.append(val_acc)
             if val_acc > best_valid_acc:
@@ -108,9 +119,6 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
             eval_accuracy += accuracy.item()
-            # TODO: remove once math dataset has train/val splits
-            if i > 20:
-                break
     tblogger.add_scalar("Loss/validate", eval_loss / N, global_step=step)
     tblogger.add_scalar("Accuracy/validate", eval_accuracy / N, global_step=step)
     return eval_loss / N, eval_accuracy / N

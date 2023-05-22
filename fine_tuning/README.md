@@ -160,7 +160,10 @@ Call either script with `--help` for more information.
 
 * Test learning rate values, batch size, num noise steps for training and inference quality
 * Train STFT-specific VAE
-  * In progress
+  * No impact??
+* For FMA fine-tuned UNet
+  * do LoRA tuning on EEG data
+  * do further full FT on EEG data
 * Figure out why spot jobs unable to get instances
 * Get more EEG datasets
 * Train male/female/age tags for EEG STFTs, try img2img on them

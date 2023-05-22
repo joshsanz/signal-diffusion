@@ -9,9 +9,9 @@ from collections import OrderedDict
 from scipy.signal import decimate
 
 # import support scripts: pull_data
-import support_scripts.read_in_ear_eeg as read_in_ear_eeg
-import support_scripts.read_in_labels as read_in_labels
-import support_scripts.eeg_filter as eeg_filter
+import ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
+import ear_eeg_support_scripts.read_in_labels as read_in_labels
+import ear_eeg_support_scripts.eeg_filter as eeg_filter
 
 
 mne.set_log_level("WARNING")
@@ -458,6 +458,14 @@ class MathPreprocessor:
         return len(self.ind_math_files) + len(self.ind_bkgnd_files)
 
     def get_label(self, file):
+        """
+        | y | math? | gender |
+        |---|-------|--------|
+        | 0 |   0   |   0    |
+        | 1 |   0   |   1    |
+        | 2 |   1   |   0    |
+        | 3 |   1   |   1    |
+        """
         info, _ = os.path.splitext(file)
         subject, m_or_bk = info.split("_")
         # age = self.subject_info[subject][0]
@@ -468,13 +476,6 @@ class MathPreprocessor:
         return torch.tensor(2 * doing_math + 1 * isfemale).long()
 
     def load_data(self, index):
-        # if self.math_only:
-        #     file = self.ind_math_files[index]
-        #     offset = self.ind_math_offsets[index]
-        # elif self.background_only:
-        #     file = self.ind_math_files[index]
-        #     offset = self.ind_math_offsets[index]
-        # else:
         if index < len(self.ind_math_files):
             file = self.ind_math_files[index]
             offset = self.ind_math_offsets[index]
@@ -489,6 +490,20 @@ class MathPreprocessor:
         X = torch.tensor(data).float()
         y = self.get_label(file)
         return X, y
+
+    def get_subject(self, index):
+        if index < len(self.ind_math_files):
+            file = self.ind_math_files[index]
+        else:
+            file = self.ind_bkgnd_files[index - len(self.ind_math_files)]
+        subject = file.split("_")[0]
+        return subject
+
+    def get_subject_info(self, subject):
+        age = self.subject_info[subject][0]
+        gender = self.subject_info[subject][1]
+        subtractions = self.subject_info[subject][3]
+        return {"age": age, "gender": gender, "subtractions": subtractions}
 
     def preprocess(self, inds_per_file=20, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=42):
         output_dir = {'train': os.path.join(self.data_path, "train"),
@@ -510,11 +525,12 @@ class MathPreprocessor:
         for split, inds in zip(['train', 'val', 'test'], [train_inds, val_inds, test_inds]):
             subindex = 0
             file_ind = 0
-            filenames, offsets, nsamples = [], [], []
+            filenames, offsets, nsamples, subjects = [], [], [], []
             while subindex < len(inds):
                 offsets.append(subindex)
                 X, y = [], []
                 for i in range(inds_per_file):
+                    subjects.append(self.get_subject(inds[subindex]))
                     iX, iy = self.load_data(inds[subindex])
                     subindex += 1
                     X.append(iX)
@@ -533,6 +549,11 @@ class MathPreprocessor:
                 writer.writerow(["X_filename", "y_filename", "start_sample_offset", "n_samples"])
                 for fn, off, ns in zip(filenames, offsets, nsamples):
                     writer.writerow(fn.split(',') + [off, ns])
+            with open(os.path.join(self.data_path, split, "subjects.csv"), "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["sample_index", "subject"])
+                for i, s in enumerate(subjects):
+                    writer.writerow([i, s])
 
         return output_dir
 
@@ -543,9 +564,10 @@ class MathDataset(torch.utils.data.Dataset):
         self.data_path = data_path
         self.ncontext = ncontext
         self.metadata = pd.read_csv(os.path.join(data_path, "metadata.csv"))
+        self.subjects = pd.read_csv(os.path.join(data_path, "subjects.csv"))
         self.cache = CacheDict(cache_len=1000)
         # Get shape info
-        X = self.get_file(self.metadata.iloc[0]["X_filename"])
+        X = self._get_file(self.metadata.iloc[0]["X_filename"])
         self.n_channels = X.shape[1]
         self.nsamps = X.shape[2]
         assert self.nsamps >= self.ncontext and self.nsamps % self.ncontext == 0, (
@@ -555,7 +577,7 @@ class MathDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.metadata.iloc[-1]["start_sample_offset"] + self.metadata.iloc[-1]["n_samples"]
 
-    def get_file(self, filename):
+    def _get_file(self, filename):
         if filename in self.cache:
             return self.cache[filename]
         else:
@@ -568,8 +590,8 @@ class MathDataset(torch.utils.data.Dataset):
         metaind = self.metadata["start_sample_offset"].searchsorted(index, side="right") - 1
         Xfile = self.metadata.iloc[metaind]["X_filename"]
         yfile = self.metadata.iloc[metaind]["y_filename"]
-        multiX = self.get_file(Xfile)
-        multiy = self.get_file(yfile)
+        multiX = self._get_file(Xfile)
+        multiy = self._get_file(yfile)
         offset = index - self.metadata.iloc[metaind]["start_sample_offset"]
         X = multiX[offset, :, :]
         y = multiy[offset]
@@ -577,3 +599,6 @@ class MathDataset(torch.utils.data.Dataset):
         X = X.reshape(-1, self.nsamps // self.ncontext, self.ncontext)
         X = X.permute(1, 2, 0).reshape(self.nsamps // self.ncontext, -1).contiguous()
         return X, y
+
+    def get_subject(self, index):
+        return self.subjects.iloc[index].subject

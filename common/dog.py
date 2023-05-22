@@ -42,7 +42,8 @@ class DoG(Optimizer):
     __version__ = '1.0.2'
 
     def __init__(self, params, reps_rel: float = 1e-6, lr: float = 1.0,
-                 weight_decay: float = 0.0, eps: float = 1e-8, init_eta: Optional[float] = None):
+                 weight_decay: float = 0.0, eps: float = 1e-8, init_eta: Optional[float] = None,
+                 max_eta: Optional[float] = None):
         r"""Distance over Gradients - an adaptive stochastic optimizer.
 
         DoG updates parameters x_t with stochastic gradients g_t according to:
@@ -71,8 +72,9 @@ class DoG(Optimizer):
             weight_decay (float, optional): weight decay (L2 penalty). weight_decay * x_t is added directly
                                             to the gradient (default: 0)
             eps (float, optional): epsilon used for numerical stability - added to the sum of gradients (default: 1e-8)
-            init_eta (floar, optional):  if specified, this value will be used the the initial eta (i.e.
+            init_eta (float, optional):  if specified, this value will be used the the initial eta (i.e.
                                         first step size), and will override the value of reps_rel (default: None)
+            max_eta (float, optional):  if specified, this value will be used as an upper bound for the step size.
 
         Example:
             >>> optimizer = DoG(model.parameters(), reps_rel=1e-6)
@@ -86,7 +88,7 @@ class DoG(Optimizer):
         if lr <= 0.0:
             raise ValueError(f'Invalid learning rate ({lr}). Suggested value is 1.')
         if lr != 1.0:
-            logger.warning(f'We do not recommend changing the lr parameter from its default value of 1')
+            logger.warning('We do not recommend changing the lr parameter from its default value of 1')
         if init_eta is not None:
             if init_eta <= 0:
                 raise ValueError(f'Invalid value for init_eta ({init_eta})')
@@ -102,7 +104,8 @@ class DoG(Optimizer):
 
         self._first_step = True
 
-        defaults = dict(reps_rel=reps_rel, lr=lr, weight_decay=weight_decay, eps=eps, init_eta=init_eta)
+        defaults = dict(reps_rel=reps_rel, lr=lr, weight_decay=weight_decay,
+                        eps=eps, init_eta=init_eta, max_eta=max_eta)
         super(DoG, self).__init__(params, defaults)
 
     def __setstate__(self, state):
@@ -196,6 +199,8 @@ class DoG(Optimizer):
         assert group['G'] > 0, \
             f'DoG cannot work when G is not strictly positive. got: {group["G"]}'
         group['eta'] = [group['lr'] * group['rbar'] / torch.sqrt(group['G'])] * len(group['params'])
+        if group['max_eta'] is not None:
+            group['eta'] = [torch.clamp(eta, max=group['max_eta']) for eta in group['eta']]
 
     def _override_init_eta_if_needed(self, group):
         # Override init_eta if needed
@@ -226,3 +231,65 @@ class LDoG(DoG):
         assert torch.all(group['G'] > 0).item(), \
             f'DoG cannot work when g2 is not strictly positive. got: {group["G"]}'
         group['eta'] = list(group['lr'] * group['rbar'] / torch.sqrt(group['G']))
+        if group['max_eta'] is not None:
+            group['eta'] = [torch.clamp(eta, max=group['max_eta']) for eta in group['eta']]
+
+
+class PDoG(DoG):
+    """
+    Parameter-wise DoG, extended beyond Ivgi et al.
+    Applies DoG formula to each parameter separately.
+    """
+    def _update_group_state(self, group, init):
+        # Treat each parameter in the group as a separate block
+        if self._first_step:
+            group['rbar'] = [group['reps_rel'] * (1 + torch.abs(p)) for p in group['params']]
+            group['G'] = [p.grad ** 2 + group['eps'] for p in group['params']]
+        else:
+            curr_d = [torch.abs(p - pi) for p, pi in zip(group['params'], init)]
+            group['rbar'] = [torch.maximum(rb, cd) for rb, cd in zip(group['rbar'], curr_d)]
+            group['G'] = [G + p.grad ** 2 for G, p in zip(group['G'], group['params'])]
+        group['eta'] = [group['lr'] * rb / torch.sqrt(G) for rb, G in zip(group['rbar'], group['G'])]
+        if group['max_eta'] is not None:
+            group['eta'] = [torch.clamp(eta, max=group['max_eta']) for eta in group['eta']]
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """
+        Performs a single optimization step.
+
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        first_step = self._first_step
+
+        for group in self.param_groups:
+            weight_decay = group['weight_decay']
+
+            if first_step:
+                init = group['init_buffer'] = [torch.clone(p).detach() for p in group['params']]
+            else:
+                init = group['init_buffer']
+
+            if weight_decay > 0:
+                for p in group['params']:
+                    p.grad.add_(p, alpha=weight_decay)
+
+            self._update_group_state(group, init)
+            self._override_init_eta_if_needed(group)
+
+            for p, eta in zip(group['params'], group['eta']):
+                if p.grad is None:
+                    continue
+                else:
+                    # Need to use addcmul_ for tensor eta values
+                    p.addcmul_(p.grad, -eta)
+
+        self._first_step = False
+
+        return loss
