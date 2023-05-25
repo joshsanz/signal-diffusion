@@ -9,9 +9,9 @@ from collections import OrderedDict
 from scipy.signal import decimate
 
 # import support scripts: pull_data
-import ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
-import ear_eeg_support_scripts.read_in_labels as read_in_labels
-import ear_eeg_support_scripts.eeg_filter as eeg_filter
+import common.ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
+import common.ear_eeg_support_scripts.read_in_labels as read_in_labels
+import common.ear_eeg_support_scripts.eeg_filter as eeg_filter
 
 
 mne.set_log_level("WARNING")

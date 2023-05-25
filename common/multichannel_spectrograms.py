@@ -64,10 +64,12 @@ def multichannel_spectrogram_griffinlim(image, n_channels, n_samples, hop_length
     if win_length is None:
         win_length = image.height
     # Reformat input image for librosa
-    X = image.asarray()
+    X = np.asarray(image)
     X = np.flip(X, axis=0)  # Convert from human-friendly order to librosa format
     if is_db:
         X = 10 ** (X / 20)
+    # Normalize values to something reasonable
+    X = scale_minmax(X, 0, 1)
     # Determine channel padding & locations
     chwidth = int(np.ceil(n_samples / hop_length))
     chpad = (X.shape[1] - n_channels * chwidth) // 2
@@ -75,5 +77,8 @@ def multichannel_spectrogram_griffinlim(image, n_channels, n_samples, hop_length
     x = np.zeros((n_channels, n_samples))
     for i in range(n_channels):
         Xch = X[:, chpad + i * chwidth:chpad + (i + 1) * chwidth]
-        x[i, :] = librosa.griffinlim(Xch, hop_length=hop_length, win_length=win_length, n_fft=win_length * 2 - 1)
-    return x
+        # Add noise?
+        Xch += np.random.randn(*Xch.shape) * 1e-3
+        gl = librosa.griffinlim(Xch, hop_length=hop_length, win_length=win_length, n_fft=win_length * 2 - 1)
+        x[i, :] = np.pad(gl, (0, n_samples - len(gl)), 'constant', constant_values=0)
+    return x / np.linalg.norm(x)  # Normalize, since scaling was lost in original spectrogram conversion

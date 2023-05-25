@@ -2,7 +2,7 @@
 import torch
 from dataclasses import dataclass
 from tqdm.auto import tqdm
-from dog import DoG, PDoG
+from common.dog import DoG, PDoG
 
 
 @dataclass

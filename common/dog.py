@@ -43,7 +43,7 @@ class DoG(Optimizer):
 
     def __init__(self, params, reps_rel: float = 1e-6, lr: float = 1.0,
                  weight_decay: float = 0.0, eps: float = 1e-8, init_eta: Optional[float] = None,
-                 max_eta: Optional[float] = None):
+                 max_eta: Optional[float] = None, decouple_weight_decay: bool = False):
         r"""Distance over Gradients - an adaptive stochastic optimizer.
 
         DoG updates parameters x_t with stochastic gradients g_t according to:
@@ -75,6 +75,8 @@ class DoG(Optimizer):
             init_eta (float, optional):  if specified, this value will be used the the initial eta (i.e.
                                         first step size), and will override the value of reps_rel (default: None)
             max_eta (float, optional):  if specified, this value will be used as an upper bound for the step size.
+            decouple_weight_decay (bool): apply weight decay after eta is updated, decoupling weights from lr
+                                          (default: false).
 
         Example:
             >>> optimizer = DoG(model.parameters(), reps_rel=1e-6)
@@ -103,6 +105,7 @@ class DoG(Optimizer):
             raise ValueError(f'Invalid weight_decay value: {weight_decay}')
 
         self._first_step = True
+        self.decouple_weight_decay = decouple_weight_decay
 
         defaults = dict(reps_rel=reps_rel, lr=lr, weight_decay=weight_decay,
                         eps=eps, init_eta=init_eta, max_eta=max_eta)
@@ -115,11 +118,13 @@ class DoG(Optimizer):
         state_dict = super(DoG, self).state_dict()
         logger.info('retrieving DoG state dict')
         state_dict['state']['_first_step'] = self._first_step
+        state_dict['state']['decouple_weight_decay'] = self.decouple_weight_decay
         return state_dict
 
     def load_state_dict(self, state_dict: dict) -> None:
         super(DoG, self).load_state_dict(state_dict)
         self._first_step = state_dict['state']['_first_step']
+        self.decouple_weight_decay = state_dict['state']['decouple_weight_decay']
         logger.info('loaded DoG state dict')
         cuda = self.param_groups[0]['params'][0].device
         for group in self.param_groups:
@@ -158,12 +163,17 @@ class DoG(Optimizer):
             else:
                 init = group['init_buffer']
 
-            if weight_decay > 0:
+            if not self.decouple_weight_decay and weight_decay > 0:
                 for p in group['params']:
                     p.grad.add_(p, alpha=weight_decay)
 
             self._update_group_state(group, init)
             self._override_init_eta_if_needed(group)
+
+            # Decouple weight decay?
+            if self.decouple_weight_decay and weight_decay > 0:
+                for p in group['params']:
+                    p.grad.add_(p, alpha=weight_decay)
 
             for p, eta in zip(group['params'], group['eta']):
                 if p.grad is None:
@@ -276,12 +286,17 @@ class PDoG(DoG):
             else:
                 init = group['init_buffer']
 
-            if weight_decay > 0:
+            if not self.decouple_weight_decay and weight_decay > 0:
                 for p in group['params']:
                     p.grad.add_(p, alpha=weight_decay)
 
             self._update_group_state(group, init)
             self._override_init_eta_if_needed(group)
+
+            # Decouple weight decay?
+            if self.decouple_weight_decay and weight_decay > 0:
+                for p in group['params']:
+                    p.grad.add_(p, alpha=weight_decay)
 
             for p, eta in zip(group['params'], group['eta']):
                 if p.grad is None:
