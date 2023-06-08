@@ -38,7 +38,11 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 
 # Run the pipeline
-pipe = StableDiffusionPipeline.from_pretrained(os.path.expanduser(args.path), torch_dtype=torch.float16)
+pipe = StableDiffusionPipeline.from_pretrained(
+    os.path.expanduser(args.path),
+    safety_checker=lambda images, **kwargs: (images, False),  # Disable safety checker - spectrograms won't be NSFW
+    torch_dtype=torch.float16
+)
 pipe.to("cuda")
 
 prompts = [args.prompt] * args.num_images
