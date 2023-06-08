@@ -41,6 +41,7 @@ def multichannel_spectrogram(x, resolution, hop_length, win_length, noise_floor_
     specs = [spectrogram(x[i, :], hop_length, win_length, noise_floor_db) for i in range(x.shape[0])]
     swidth = specs[0].shape[1]
     Width = swidth * len(specs)
+    assert Width <= resolution, f"Image width {Width}={len(specs)}*{swidth} is greater than resolution {resolution}"
     width_pad = (resolution - Width) // 2
     merged = Image.new("L", (resolution, resolution))
     for i, spec in enumerate(specs):

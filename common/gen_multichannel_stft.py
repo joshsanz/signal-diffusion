@@ -1,9 +1,12 @@
+import numpy as np
 import os
 from os.path import join as pjoin
+import sys
 import torch
 
-from eeg_datasets import MathPreprocessor, MathDataset
-from multichannel_spectrograms import multichannel_spectrogram
+sys.path.append(os.getcwd())
+from common.eeg_datasets import MathPreprocessor, MathDataset
+from common.multichannel_spectrograms import multichannel_spectrogram
 
 
 def label_to_cats(y):
@@ -19,17 +22,30 @@ def label_to_cats(y):
 # 16 * 20 = 320 time bins total
 fs = 250  # Original is 500, but we decimate by 2
 n_timesteps = 2000
-hop_length = 128  # number of samples per time-step in spectrogram
+n_channels = 20
 time_steps = 512  # number of time-steps. Width of image
 win_length = 512  # number of bins in spectrogram. Height of image
+max_bins = win_length / n_channels
+hop_length = 8  # number of samples per time-step in spectrogram
+while n_timesteps / hop_length > max_bins:
+    hop_length += 8
+print(f"Best hop length {hop_length}, {np.floor(n_timesteps / hop_length)} bins per channel")
 
+##########
+# EEG Math
 # data_dir = "/mnt/d/data/signal-diffusion/eeg_math/raw_eeg"
+# output_dir = "/mnt/d/data/signal-diffusion/eeg_math/raw_stft"
 data_dir = "/data/shared/signal-diffusion/eeg_math/raw_eeg"
 output_dir = "/data/shared/signal-diffusion/eeg_math/raw_stft"
 
+#########
+# EEG AEP
+# data_dir = "/data/shared/signal-diffusion/eeg_aep/raw_eeg"
+# output_dir = "/data/shared/signal-diffusion/eeg_aep/raw_stft"
+
 # Preprocess data -- only need to do this once
 preprocessor = MathPreprocessor(data_dir, n_timesteps, fs=fs)
-# preprocessor.preprocess(100)  # train samples per stored file
+# preprocessor.preprocess(20, 1.0, 0.0, 0.0)  # train samples per stored file, train/val/test split
 
 stfts = []
 for split in ["train", "val", "test"]:
@@ -42,7 +58,7 @@ for split in ["train", "val", "test"]:
         X = torch.transpose(X, 1, 0).contiguous().numpy()
         spec = multichannel_spectrogram(X, resolution=win_length, hop_length=hop_length, win_length=win_length,)
         # Organize into folders of 100 images each
-        filename = "{:03d}/{:04d}.png".format(i % 100, i)
+        filename = "{:03d}/{:05d}.png".format(i % 100, i)
         savename = pjoin(odir, filename)
         os.makedirs(os.path.dirname(savename), exist_ok=True)
         spec.save(savename)

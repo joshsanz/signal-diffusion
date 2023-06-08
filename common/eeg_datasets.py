@@ -7,11 +7,13 @@ import pandas as pd
 import torch
 from collections import OrderedDict
 from scipy.signal import decimate
+from torchvision import transforms
 
 # import support scripts: pull_data
 import common.ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
 import common.ear_eeg_support_scripts.read_in_labels as read_in_labels
 import common.ear_eeg_support_scripts.eeg_filter as eeg_filter
+import common.multichannel_spectrograms as mcs
 
 
 mne.set_log_level("WARNING")
@@ -567,6 +569,7 @@ class MathDataset(torch.utils.data.Dataset):
         self.subjects = pd.read_csv(os.path.join(data_path, "subjects.csv"))
         self.cache = CacheDict(cache_len=1000)
         # Get shape info
+        assert len(self.metadata) > 0, "No data found in {}".format(data_path)
         X = self._get_file(self.metadata.iloc[0]["X_filename"])
         self.n_channels = X.shape[1]
         self.nsamps = X.shape[2]
@@ -602,3 +605,31 @@ class MathDataset(torch.utils.data.Dataset):
 
     def get_subject(self, index):
         return self.subjects.iloc[index].subject
+
+
+class MathSpectrumDataset(MathDataset):
+    def __init__(self, data_path, resolution=256, hop_length=192, transform=None):
+        super().__init__(data_path, 1)
+        self.resolution = resolution
+        self.hop_length = hop_length
+        if transform is None:
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5])
+            ])
+        self.transform = transform
+
+    def __getitem__(self, index):
+        # Get X and y
+        metaind = self.metadata["start_sample_offset"].searchsorted(index, side="right") - 1
+        Xfile = self.metadata.iloc[metaind]["X_filename"]
+        yfile = self.metadata.iloc[metaind]["y_filename"]
+        multiX = self._get_file(Xfile)
+        multiy = self._get_file(yfile)
+        offset = index - self.metadata.iloc[metaind]["start_sample_offset"]
+        X = multiX[offset, :, :]
+        y = multiy[offset]
+        # Make spectrogram
+        S = mcs.multichannel_spectrogram(X.numpy(), self.resolution, self.hop_length, self.resolution)
+        S = self.transform(S)
+        return S, y

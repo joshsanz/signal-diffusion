@@ -3,8 +3,7 @@ resources:
   cloud: aws
   accelerators: A10G:1
   instance_type: g5.2xlarge
-  # region: us-east-1
-  use_spot: true
+  region: us-west-2
 
 # Working directory (optional) containing the project codebase.
 # Its contents are synced to ~/sky_workdir/ on the cluster.
@@ -36,17 +35,19 @@ setup: |
 #    --random_flip
 #    --enable_xformers_memory_efficient_attention \
 #    --resume_from_checkpoint="latest" \
-# PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+#    --audio --audio_fs=22050 \
+#  export MODEL_NAME='runwayml/stable-diffusion-v1-5'
+#  export MODEL_NAME='/output-s3/stft-full.0'
 
 # Typical use: make use of resources, such as running training.
 # Invoked under the workdir (i.e., can use its files).
 run: |
   set -e
   echo "Hello, SkyPilot!"
-  export RUN_ID=2
-  export MODEL_NAME='runwayml/stable-diffusion-v1-5'
-  export dataset_name='/data/fma_preprocessed'
-  export output_dir="/output-s3/stft-full.$RUN_ID"
+  export RUN_ID=eeg_math.1
+  export MODEL_NAME='/output-s3/stft-post-ft.eeg_math.0/'
+  export dataset_name='/data/eeg_math/raw_stft/train'
+  export output_dir="/output-s3/stft-post-ft.$RUN_ID"
   echo "Model $MODEL_NAME"
   echo "Dataset $dataset_name"
   echo "Output location $output_dir"
@@ -55,17 +56,16 @@ run: |
     --dataset_name=$dataset_name \
     --use_ema \
     --resolution=512 --center_crop \
-    --audio --audio_fs=22050 \
     --train_batch_size=1 \
-    --gradient_accumulation_steps=8 \
+    --gradient_accumulation_steps=12 \
     --gradient_checkpointing \
-    --max_train_steps=30000 \
-    --learning_rate=1e-5 \
+    --max_train_steps=15000 \
+    --learning_rate=2e-5 \
     --max_grad_norm=1 \
     --allow_tf32 \
-    --lr_scheduler="cosine" --lr_warmup_steps=500 \
-    --checkpointing_steps=500 --checkpoints_total_limit=3 \
-    --resume_from_checkpoint=latest \
+    --lr_scheduler="cosine" --lr_warmup_steps=100 \
+    --checkpointing_steps=500 --checkpoints_total_limit=1 \
     --output_dir="$output_dir" \
     --report_to=wandb \
-    --validation_prompt="a energetic jazz song" --validation_epochs=1
+    --validation_prompt="an EEG spectrogram for a female 18 year old subject doing math" \
+    --validation_epochs=1

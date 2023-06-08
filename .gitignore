@@ -135,4 +135,7 @@ data/
 *.png
 wandb/
 tensorboard_logs/
+*.pkl
+*.npy
+*.npz
 
