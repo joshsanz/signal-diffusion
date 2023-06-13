@@ -73,7 +73,7 @@ class CNNClassifier(nn.Module):
     def __init__(self, in_channels, out_dim,
                  conv_ks=[12, 8, 4], conv_cs=[16, 64, 128], conv_ss=[1, 1, 1],
                  pool_ks=[4, 2, 2], pool_ss=[4, 2, 2],
-                 ff_dims=[1000, 500, 250], dropout=0.25,
+                 ff_dims=[500, 250, 100], dropout=0.5,
                  pooling="max", activation="relu"):
         super().__init__()
         # Store architecture sizes & strides
@@ -101,6 +101,7 @@ class CNNClassifier(nn.Module):
         self.convs.append(self.pooling(self.pool_ks[-1], self.pool_ss[-1]))
         # Build linear layers
         self.fc = nn.ModuleList()
+        self.fc.append(nn.Dropout(dropout))
         self.fc.append(nn.LazyLinear(self.hidden_layers[0]))
         for i in range(len(ff_dims) - 1):
             self.fc.append(self.activation_fn())

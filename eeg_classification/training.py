@@ -10,7 +10,7 @@ class TrainingConfig:
     epochs: int = 100
     opt_restart_every: int = 200
     opt_log_every: int = 100
-    val_every_epochs: int = 10
+    val_every_epochs: int = 1
 
 
 def log_etas(tblogger, opt, step):

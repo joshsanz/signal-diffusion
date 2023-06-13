@@ -36,6 +36,7 @@ setup: |
 #    --enable_xformers_memory_efficient_attention \
 #    --resume_from_checkpoint="latest" \
 #    --audio --audio_fs=22050 \
+#    --optimizer="adamw" \
 #  export MODEL_NAME='runwayml/stable-diffusion-v1-5'
 #  export MODEL_NAME='/output-s3/stft-full.0'
 
@@ -44,10 +45,10 @@ setup: |
 run: |
   set -e
   echo "Hello, SkyPilot!"
-  export RUN_ID=eeg_math.1
-  export MODEL_NAME='/output-s3/stft-post-ft.eeg_math.0/'
-  export dataset_name='/data/eeg_math/raw_stft/train'
-  export output_dir="/output-s3/stft-post-ft.$RUN_ID"
+  export RUN_ID=parkinsons.1
+  export MODEL_NAME='runwayml/stable-diffusion-v1-5'
+  export dataset_name='/data/parkinsons/stfts'
+  export output_dir="/output-s3/stft-full.$RUN_ID"
   echo "Model $MODEL_NAME"
   echo "Dataset $dataset_name"
   echo "Output location $output_dir"
@@ -57,15 +58,17 @@ run: |
     --use_ema \
     --resolution=512 --center_crop \
     --train_batch_size=1 \
-    --gradient_accumulation_steps=12 \
+    --gradient_accumulation_steps=32 \
     --gradient_checkpointing \
-    --max_train_steps=15000 \
-    --learning_rate=2e-5 \
+    --max_train_steps=2000 \
+    --learning_rate=1e-5 \
+    --optimizer=adamw \
+    --adam_weight_decay=1e-5 \
     --max_grad_norm=1 \
     --allow_tf32 \
-    --lr_scheduler="cosine" --lr_warmup_steps=100 \
-    --checkpointing_steps=500 --checkpoints_total_limit=1 \
+    --lr_scheduler="constant" --lr_warmup_steps=100 \
+    --checkpointing_steps=501 --checkpoints_total_limit=2 \
     --output_dir="$output_dir" \
     --report_to=wandb \
-    --validation_prompt="an EEG spectrogram for a female 18 year old subject doing math" \
+    --validation_prompt="an EEG spectrogram for a 70 year old, healthy, female subject" \
     --validation_epochs=1
