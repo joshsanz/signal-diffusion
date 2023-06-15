@@ -71,17 +71,20 @@ class TransformerClassifier(nn.Module):
 
 class CNNClassifier(nn.Module):
     def __init__(self, in_channels, out_dim,
-                 conv_ks=[12, 8, 4], conv_cs=[16, 64, 128], conv_ss=[1, 1, 1],
-                 pool_ks=[4, 2, 2], pool_ss=[4, 2, 2],
-                 ff_dims=[500, 250, 100], dropout=0.5,
-                 pooling="max", activation="relu"):
+                 conv_ks=[(12, 3), (8, 3), (4, 3)], conv_cs=[16, 64, 128],
+                 conv_ss=[1, 1, 1], conv_ps=[(2, 1), (1, 1), (1, 1)],
+                 pool_ks=[(4, 2), (2, 2), (2, 5)], pool_ss=[(4, 2), (2, 2), (2, 5)],
+                 ff_dims=[1000, 500, 250], dropout=0.5,
+                 pooling="max", activation="gelu"):
         super().__init__()
         # Store architecture sizes & strides
-        self.kernel_sizes = conv_ks
+        self.conv_kernels = conv_ks
         self.conv_channels = conv_cs
-        self.hidden_layers = ff_dims
+        self.conv_strides = conv_ss
+        self.conv_pads = conv_ps
         self.pool_ks = pool_ks
         self.pool_ss = pool_ss
+        self.hidden_layers = ff_dims
         # Pooling type
         if pooling == "max":
             self.pooling = nn.MaxPool2d
@@ -90,15 +93,15 @@ class CNNClassifier(nn.Module):
 
         self.activation_fn = activation_map[activation]
         # Build conv layers
+        conv_chan_list = [in_channels] + self.conv_channels
+
         self.convs = nn.ModuleList()
-        self.convs.append(nn.Conv2d(in_channels, self.conv_channels[0], self.kernel_sizes[0], ))
-        self.convs.append(self.activation_fn())
-        for i in range(1, len(conv_ks)):
-            self.convs.append(self.pooling(self.pool_ks[i - 1], self.pool_ss[i - 1]))
-            self.convs.append(nn.Conv2d(
-                self.conv_channels[i - 1], self.conv_channels[i], self.kernel_sizes[i]))
+        for i in range(len(conv_ks)):
+            self.convs.append(nn.Conv2d(conv_chan_list[i], conv_chan_list[i + 1],
+                                        self.conv_kernels[i], stride=self.conv_strides[i],
+                                        padding=self.conv_pads[i]))
             self.convs.append(self.activation_fn())
-        self.convs.append(self.pooling(self.pool_ks[-1], self.pool_ss[-1]))
+            self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
         # Build linear layers
         self.fc = nn.ModuleList()
         self.fc.append(nn.Dropout(dropout))

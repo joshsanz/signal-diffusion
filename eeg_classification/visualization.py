@@ -22,7 +22,7 @@ def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
     if fig is None:
         fig, _ = plt.subplots()
         make_labels = True
-    sns.heatmap(confusion / np.sum(confusion, axis=0, keepdims=True), annot=True, fmt=".2%", cmap="Blues",
+    sns.heatmap(confusion / np.sum(confusion, axis=1, keepdims=True), annot=True, fmt=".2%", cmap="Blues",
                 xticklabels=class_map.values(), yticklabels=class_map.values())
     if make_labels:
         plt.yticks(rotation=60)
@@ -54,7 +54,7 @@ def raw_class_confusion(ys, yhats, class_map=math_class_labels):
         confusion[true, pred] += 1
 
     fig, _ = plt.subplots()
-    sns.heatmap(confusion / np.sum(confusion, axis=0, keepdims=True), annot=True, fmt=".2%", cmap="Blues",
+    sns.heatmap(confusion / np.sum(confusion, axis=1, keepdims=True), annot=True, fmt=".2%", cmap="Blues",
                 xticklabels=class_map.values(), yticklabels=class_map.values())
     plt.yticks(rotation=60)
     plt.xlabel("Predicted Class\nAccuracy: {:.2%}".format(np.trace(confusion) / np.sum(confusion)))
