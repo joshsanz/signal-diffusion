@@ -685,7 +685,8 @@ class GeneratedSpectrumDataset(torch.utils.data.Dataset):
 
 
 class ParkinsonsPreprocessor():
-    def __init__(self, datadir, nsamps, fs=250):
+    // Originally 250, changed to 125
+    def __init__(self, datadir, nsamps, fs=125):
         self.datadir = datadir
         self.nsamps = nsamps
         orig_fs = 500
