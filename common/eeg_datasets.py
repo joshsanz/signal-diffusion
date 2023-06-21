@@ -19,7 +19,7 @@ import common.ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
 import common.ear_eeg_support_scripts.read_in_labels as read_in_labels
 import common.ear_eeg_support_scripts.eeg_filter as eeg_filter
 import common.multichannel_spectrograms as mcs
-from common.channel_map import parkinsons_channels
+from common.channel_map import parkinsons_channels, seed_channels
 
 mne.set_log_level("WARNING")
 
@@ -37,6 +37,26 @@ parkinsons_class_labels = bidict({
     1: "healthy_female",
     2: "parkinsons_male",
     3: "parkinsons_female",
+})
+
+emotion_map = bidict({
+    "disgust": 0,
+    "fear": 1,
+    "sad": 2,
+    "neutral": 3,
+    "happy": 4
+})
+seed_class_labels = bidict({
+    0: f"{emotion_map.inverse[0]}_male",
+    1: f"{emotion_map.inverse[0]}_female",
+    2: f"{emotion_map.inverse[1]}_male",
+    3: f"{emotion_map.inverse[1]}_female",
+    4: f"{emotion_map.inverse[2]}_male",
+    5: f"{emotion_map.inverse[2]}_female",
+    6: f"{emotion_map.inverse[3]}_male",
+    7: f"{emotion_map.inverse[3]}_female",
+    8: f"{emotion_map.inverse[4]}_male",
+    9: f"{emotion_map.inverse[4]}_female",
 })
 
 
@@ -714,6 +734,11 @@ class ParkinsonsPreprocessor():
         health = "parkinsons disease diagnosed" if health == "PD" else "healthy"
         return f"an EEG spectrogram of a {age} year old, {health}, {gender} subject"
 
+    def decimate(self, data):
+        if self.decimation > 1:
+            data = decimate(data, self.decimation, axis=1, zero_phase=True)
+        return data
+
     def _generate_spectrograms(self, subject_dirs, outdir, resolution, hop_length):
         # Containers for sample metadata
         files = []
@@ -728,6 +753,7 @@ class ParkinsonsPreprocessor():
             # Get subset of channels we want
             chan_inds = [ch[1] for ch in parkinsons_channels]
             data = data[chan_inds, :]
+            data = self.decimate(data)
             N = data.shape[1]
             nblocks = N // self.nsamps
             # Break data into chunks and save
@@ -831,6 +857,195 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         health = self.metadata.iloc[index]["health"]
         gender = self.metadata.iloc[index]["gender"]
         y = (health == "PD") * 2 + (gender == "F")
+        return im, y
+
+    def caption(self, index):
+        return self.metadata.iloc[index]["text"]
+
+
+class SEEDPreprocessor():
+    start_second = {
+        0: [30, 132, 287, 555, 773, 982, 1271, 1628, 1730, 2025, 2227, 2435, 2667, 2932, 3204],
+        1: [30, 299, 548, 646, 836, 1000, 1091, 1392, 1657, 1809, 1966, 2186, 2333, 2490, 2741],
+        2: [30, 353, 478, 674, 825, 908, 1200, 1346, 1451, 1711, 2055, 2307, 2457, 2726, 2888]
+    }
+    end_second = {
+        0: [102, 228, 524, 742, 920, 1240, 1568, 1697, 1994, 2166, 2401, 2607, 2901, 3172, 3359],
+        1: [267, 488, 614, 773, 967, 1059, 1331, 1622, 1777, 1908, 2153, 2302, 2428, 2709, 2817],
+        2: [321, 418, 643, 764, 877, 1147, 1284, 1418, 1679, 1996, 2275, 2425, 2664, 2857, 3066]
+    }
+    emotion_map = bidict({
+        "disgust": 0,
+        "fear": 1,
+        "sad": 2,
+        "neutral": 3,
+        "happy": 4
+    })
+    trial_emotion = {
+        0: [4, 1, 3, 2, 0, 4, 1, 3, 2, 0, 4, 1, 3, 2, 0],
+        1: [2, 1, 3, 0, 4, 4, 0, 3, 2, 1, 3, 4, 1, 2, 0],
+        2: [2, 1, 3, 0, 4, 4, 0, 3, 2, 1, 3, 4, 1, 2, 0],
+    }
+
+    def __init__(self, datadir, nsamps, fs=250):
+        self.datadir = datadir
+        self.nsamps = nsamps
+        self.orig_fs = 1000
+        self.decimation = self.orig_fs // fs
+        self.fs = self.orig_fs // self.decimation
+        print("Decimation factor {} new fs {}".format(self.decimation, self.orig_fs / self.decimation))
+        self.subjects = pd.read_csv(os.path.join(datadir, "participants_info.csv"))
+        self.n_channels = len(seed_channels)
+        self.n_sessions = 3
+        self.n_trials = len(self.start_second[0])
+
+    def get_gender(self, subject):
+        return self.subjects.iloc[subject].Sex
+
+    def get_age(self, subject):
+        return self.subjects.iloc[subject].Age
+
+    def get_emotion(self, session, trial, text=False):
+        emotion = self.trial_emotion[session][trial]
+        if text:
+            return self.emotion_map.inverse[emotion]
+        else:
+            return emotion
+
+    def get_caption(self, subject, session, trial):
+        caption = "an EEG spectrogram of a {} year old, {} subject feeling {}".format(
+            self.get_age(subject), self.get_gender(subject),
+            self.get_emotion(session, trial, text=True)
+        )
+        return caption
+
+    def decimate(self, data):
+        if self.decimation > 1:
+            data = decimate(data, self.decimation, axis=1, zero_phase=True)
+        return data
+
+    def _generate_spectrograms(self, outdir, data_file, subject, session, resolution, hop_length):
+        # Containers for sample metadata
+        files = []
+        genders = []
+        ages = []
+        emotions = []
+        captions = []
+        # Load data file for each subject
+        raw = mne.io.read_raw_cnt(pjoin(self.datadir, "EEG_raw", data_file), preload=True)
+        raw_np = raw.get_data()
+        for trial in range(self.n_trials):
+            start_samp = self.start_second[session][trial] * self.orig_fs
+            end_samp = self.end_second[session][trial] * self.orig_fs
+            chan_inds = [ch[1] for ch in seed_channels]
+            data = raw_np[chan_inds, start_samp:end_samp]
+            data = self.decimate(data)
+            N = data.shape[1]
+            nblocks = N // self.nsamps
+            # Break data into chunks and save
+            os.makedirs(pjoin(outdir, f"sub-{subject}"), exist_ok=True)
+            for i in range(nblocks):
+                blk = data[:, i * self.nsamps: (i + 1) * self.nsamps]
+                S = mcs.multichannel_spectrogram(
+                    blk,
+                    hop_length=hop_length,
+                    resolution=resolution, win_length=resolution,
+                )
+                fname = pjoin(f"sub-{subject}", f"spectrogram-s{session}-t{trial}-{i}.png")
+                files.append(fname)
+                genders.append(self.get_gender(subject))
+                ages.append(self.get_age(subject))
+                emotions.append(self.get_emotion(session, trial))
+                captions.append(self.get_caption(subject, session, trial))
+                S.save(pjoin(outdir, fname))
+        return files, genders, ages, emotions, captions
+
+    def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+        # Get shuffled metadata
+        metadata = pd.read_csv(pjoin(self.datadir, "stfts", "metadata.csv"))
+        # Empty per-split metadata dfs
+        trainmeta = metadata.iloc[0:0]
+        valmeta = metadata.iloc[0:0]
+        testmeta = metadata.iloc[0:0]
+        # Group by class
+        gmeta = metadata.groupby(["gender", "emotion"])
+        for group, gdf in gmeta:
+            subjects = gdf["file_name"].apply(lambda s: s.split("/")[0])
+            subjects = subjects.unique()
+            np.random.shuffle(subjects)
+            # Create train/val/test splits by subject to avoid data leakage
+            ntrain = int(np.ceil(train_frac * len(subjects)))
+            nval = int(np.floor(val_frac * len(subjects)))
+            trainsubs = subjects[:ntrain]
+            valsubs = subjects[ntrain:ntrain + nval]
+            testsubs = subjects[ntrain + nval:]
+            # Add splits to metadata
+            trainmeta = pd.concat([trainmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(trainsubs)]])
+            valmeta = pd.concat([valmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(valsubs)]])
+            testmeta = pd.concat([testmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(testsubs)]])
+        trainmeta.to_csv(pjoin(self.datadir, "stfts", "train-metadata.csv"), index=False)
+        valmeta.to_csv(pjoin(self.datadir, "stfts", "val-metadata.csv"), index=False)
+        testmeta.to_csv(pjoin(self.datadir, "stfts", "test-metadata.csv"), index=False)
+
+    def preprocess(self, resolution=512, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
+        # Make output dir
+        outdir = pjoin(self.datadir, "stfts")
+        os.makedirs(outdir, exist_ok=True)
+        # Spectrogram parameters
+        max_bins = resolution / self.n_channels
+        hop_length = 8  # number of samples per time-step in spectrogram
+        while self.nsamps / hop_length > max_bins:
+            hop_length += 8
+        # Get list of data directories
+        data_files = os.listdir(os.path.join(self.datadir, "EEG_raw"))
+        data_files = sorted(list(filter(lambda f: f.endswith(".cnt"), data_files)))
+        subjects_and_sessions = [(f.split('_')[0], f.split('_')[1]) for f in data_files]
+        # Extract trials and generate spectrograms
+        files, genders, ages, emotions, captions = [], [], [], [], []
+        for (i, (sub, sess)) in enumerate(subjects_and_sessions):
+            sub = int(sub) - 1
+            sess = int(sess) - 1
+            metadata = self._generate_spectrograms(outdir, data_files[i], sub, sess, resolution, hop_length)
+            files.extend(metadata[0])
+            genders.extend(metadata[1])
+            ages.extend(metadata[2])
+            emotions.extend(metadata[3])
+            captions.extend(metadata[4])
+        # Write metadata to file
+        with open(pjoin(outdir, "metadata.csv"), "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(["file_name", "text", "gender", "age", "emotion"])
+            for fn, g, a, e, c in zip(files, genders, ages, emotions, captions):
+                writer.writerow([fn, c, g, a, e])
+        # Make splits
+        self.make_tvt_splits(train_frac, val_frac, test_frac, seed)
+
+
+class SEEDDataset(torch.utils.data.Dataset):
+    def __init__(self, datadir, split="train", transform=None):
+        self.datadir = datadir
+        self.split = split
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        if transform is None:
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5])
+            ])
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, index):
+        fn = self.metadata.iloc[index]["file_name"]
+        im = Image.open(pjoin(self.datadir, fn))
+        im = self.transform(im)
+        emotion = self.metadata.iloc[index]["emotion"]
+        gender = self.metadata.iloc[index]["gender"]
+        y = (emotion) * 2 + (gender == "F")
         return im, y
 
     def caption(self, index):
