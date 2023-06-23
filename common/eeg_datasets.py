@@ -12,7 +12,9 @@ from collections import OrderedDict
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
+from torch.utils.data import WeightedRandomSampler
 from os.path import join as pjoin
+import math
 
 # import support scripts: pull_data
 import common.ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
@@ -706,9 +708,12 @@ class GeneratedSpectrumDataset(torch.utils.data.Dataset):
 
 class ParkinsonsPreprocessor():
     # Originally 250, changed to 125
-    def __init__(self, datadir, nsamps, fs=125):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
         self.datadir = datadir
         self.nsamps = nsamps
+        self.ovr_perc = ovr_perc
+        self.noverlaps = nsamps * ovr_perc
+
         orig_fs = 500
         self.decimation = orig_fs // fs
         self.fs = orig_fs // self.decimation
@@ -734,10 +739,17 @@ class ParkinsonsPreprocessor():
         health = "parkinsons disease diagnosed" if health == "PD" else "healthy"
         return f"an EEG spectrogram of a {age} year old, {health}, {gender} subject"
 
+<<<<<<< HEAD
     def decimate(self, data):
         if self.decimation > 1:
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
         return data
+=======
+    # def mydecimate(data, decimation_factor):
+    #     if decimation_factor > 1:
+    #         data = 
+    #     return data
+>>>>>>> 149d4d7 (added sampler, not working)
 
     def _generate_spectrograms(self, subject_dirs, outdir, resolution, hop_length):
         # Containers for sample metadata
@@ -753,13 +765,31 @@ class ParkinsonsPreprocessor():
             # Get subset of channels we want
             chan_inds = [ch[1] for ch in parkinsons_channels]
             data = data[chan_inds, :]
+<<<<<<< HEAD
             data = self.decimate(data)
+=======
+
+            # decimate data
+            data = decimate(data, int(self.decimation), axis=1, zero_phase=True)
+>>>>>>> 149d4d7 (added sampler, not working)
             N = data.shape[1]
             nblocks = N // self.nsamps
+            nblocks = 2
+            shift_size = self.nsamps - self.noverlaps
+        
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
-            for i in range(nblocks):
-                blk = data[:, i * self.nsamps: (i + 1) * self.nsamps]
+
+            start_ind = 0
+            end_ind = self.nsamps
+            i = 0
+            while end_ind < N:
+                start_ind = int(math.floor(start_ind))
+                end_ind = int(math.floor(end_ind))
+                blk = data[:, start_ind: end_ind]
+                start_ind += shift_size
+                end_ind += shift_size
+
                 S = mcs.multichannel_spectrogram(
                     blk,
                     hop_length=hop_length,
@@ -771,6 +801,7 @@ class ParkinsonsPreprocessor():
                 ages.append(self.get_age(sd))
                 pds.append(self.get_health(sd))
                 S.save(pjoin(outdir, fname))
+                i += 1
         return files, genders, ages, pds
 
     def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
@@ -813,7 +844,7 @@ class ParkinsonsPreprocessor():
         outdir = pjoin(self.datadir, "stfts")
         os.makedirs(outdir, exist_ok=True)
         # Spectrogram parameters
-        max_bins = resolution / self.n_channels
+        max_bins = math.floor(resolution / self.n_channels)
         hop_length = 8  # number of samples per time-step in spectrogram
         while self.nsamps / hop_length > max_bins:
             hop_length += 8
@@ -851,6 +882,8 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         return len(self.metadata)
 
     def __getitem__(self, index):
+        print("index: ", index, "metdata len: ", len(self.metadata), "split: ", self.split)
+        print('\n')
         fn = self.metadata.iloc[index]["file_name"]
         im = Image.open(pjoin(self.datadir, fn))
         im = self.transform(im)
@@ -863,6 +896,7 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         return self.metadata.iloc[index]["text"]
 
 
+<<<<<<< HEAD
 class SEEDPreprocessor():
     start_second = {
         0: [30, 132, 287, 555, 773, 982, 1271, 1628, 1730, 2025, 2227, 2435, 2667, 2932, 3204],
@@ -1035,10 +1069,32 @@ class SEEDDataset(torch.utils.data.Dataset):
                 transforms.Normalize([0.5], [0.5])
             ])
         self.transform = transform
+=======
+# class WeightedRandomSampler(Sampler):
+
+#     def __iter__(self) -> Iterator[int]:
+#         rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
+#         yield from iter(rand_tensor.tolist())
+
+#     def __len__(self) -> int:
+#         return 
+
+
+class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
+    def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples# Number of samples to draw not total
+        self.split = split
+        self.replacement = replacement
+        self.generator = generator
+>>>>>>> 149d4d7 (added sampler, not working)
 
     def __len__(self):
         return len(self.metadata)
 
+<<<<<<< HEAD
     def __getitem__(self, index):
         fn = self.metadata.iloc[index]["file_name"]
         im = Image.open(pjoin(self.datadir, fn))
@@ -1050,3 +1106,45 @@ class SEEDDataset(torch.utils.data.Dataset):
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
+=======
+    def __iter__(self):
+        rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
+        print("iter length: ", rand_tensor.size())
+        yield from iter(rand_tensor.tolist())
+
+    def generate_weights(self, metadata):
+        Y = []
+        for i in range(len(metadata)):
+            health = self.metadata.iloc[i]["health"]
+            gender = self.metadata.iloc[i]["gender"]
+            Y.append((health == "PD") * 2 + (gender == "F"))
+        # Get the current weights of each class
+        label_weights = [Y.count(i)/len(metadata) for i in range(4)]
+        # Class rankings
+        rankings = {}
+        for label in range(4):
+            label_weight = label_weights[label]
+            rank = 0
+            for weight in label_weights:
+                if label_weight > weight:
+                    rank += 1
+            rankings[label] = rank
+
+        # Flip weights so smaller classes are more prominent
+        label_weights.sort(reverse=True)
+        new_label_weights = [label_weights[rankings[i]] for i in range(4)]
+        output_weights = [new_label_weights[i] for i in Y]
+        print("metadata len: ", len(self.metadata))
+        print(" weights len; ", len(output_weights))
+
+        return output_weights
+
+
+
+
+
+
+
+
+        
+>>>>>>> 149d4d7 (added sampler, not working)
