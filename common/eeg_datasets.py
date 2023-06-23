@@ -739,17 +739,14 @@ class ParkinsonsPreprocessor():
         health = "parkinsons disease diagnosed" if health == "PD" else "healthy"
         return f"an EEG spectrogram of a {age} year old, {health}, {gender} subject"
 
-<<<<<<< HEAD
     def decimate(self, data):
         if self.decimation > 1:
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
         return data
-=======
     # def mydecimate(data, decimation_factor):
     #     if decimation_factor > 1:
     #         data = 
     #     return data
->>>>>>> 149d4d7 (added sampler, not working)
 
     def _generate_spectrograms(self, subject_dirs, outdir, resolution, hop_length):
         # Containers for sample metadata
@@ -765,13 +762,10 @@ class ParkinsonsPreprocessor():
             # Get subset of channels we want
             chan_inds = [ch[1] for ch in parkinsons_channels]
             data = data[chan_inds, :]
-<<<<<<< HEAD
             data = self.decimate(data)
-=======
 
             # decimate data
             data = decimate(data, int(self.decimation), axis=1, zero_phase=True)
->>>>>>> 149d4d7 (added sampler, not working)
             N = data.shape[1]
             nblocks = N // self.nsamps
             nblocks = 2
@@ -895,8 +889,73 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
 
+# class WeightedRandomSampler(Sampler):
 
-<<<<<<< HEAD
+#     def __iter__(self) -> Iterator[int]:
+#         rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
+#         yield from iter(rand_tensor.tolist())
+
+#     def __len__(self) -> int:
+#         return 
+
+class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
+    def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples# Number of samples to draw not total
+        self.split = split
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, index):
+        fn = self.metadata.iloc[index]["file_name"]
+        im = Image.open(pjoin(self.datadir, fn))
+        im = self.transform(im)
+        emotion = self.metadata.iloc[index]["emotion"]
+        gender = self.metadata.iloc[index]["gender"]
+        y = (emotion) * 2 + (gender == "F")
+        return im, y
+
+    def caption(self, index):
+        return self.metadata.iloc[index]["text"]
+
+    def __iter__(self):
+        rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
+        print("iter length: ", rand_tensor.size())
+        yield from iter(rand_tensor.tolist())
+
+    def generate_weights(self, metadata):
+        Y = []
+        for i in range(len(metadata)):
+            health = self.metadata.iloc[i]["health"]
+            gender = self.metadata.iloc[i]["gender"]
+            Y.append((health == "PD") * 2 + (gender == "F"))
+        # Get the current weights of each class
+        label_weights = [Y.count(i)/len(metadata) for i in range(4)]
+        # Class rankings
+        rankings = {}
+        for label in range(4):
+            label_weight = label_weights[label]
+            rank = 0
+            for weight in label_weights:
+                if label_weight > weight:
+                    rank += 1
+            rankings[label] = rank
+
+        # Flip weights so smaller classes are more prominent
+        label_weights.sort(reverse=True)
+        new_label_weights = [label_weights[rankings[i]] for i in range(4)]
+        output_weights = [new_label_weights[i] for i in Y]
+        print("metadata len: ", len(self.metadata))
+        print(" weights len; ", len(output_weights))
+
+        return output_weights
+
+
 class SEEDPreprocessor():
     start_second = {
         0: [30, 132, 287, 555, 773, 982, 1271, 1628, 1730, 2025, 2227, 2435, 2667, 2932, 3204],
@@ -1069,82 +1128,3 @@ class SEEDDataset(torch.utils.data.Dataset):
                 transforms.Normalize([0.5], [0.5])
             ])
         self.transform = transform
-=======
-# class WeightedRandomSampler(Sampler):
-
-#     def __iter__(self) -> Iterator[int]:
-#         rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
-#         yield from iter(rand_tensor.tolist())
-
-#     def __len__(self) -> int:
-#         return 
-
-
-class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
-    def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
-        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
-        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
-        self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
-        self.num_samples = num_samples# Number of samples to draw not total
-        self.split = split
-        self.replacement = replacement
-        self.generator = generator
->>>>>>> 149d4d7 (added sampler, not working)
-
-    def __len__(self):
-        return len(self.metadata)
-
-<<<<<<< HEAD
-    def __getitem__(self, index):
-        fn = self.metadata.iloc[index]["file_name"]
-        im = Image.open(pjoin(self.datadir, fn))
-        im = self.transform(im)
-        emotion = self.metadata.iloc[index]["emotion"]
-        gender = self.metadata.iloc[index]["gender"]
-        y = (emotion) * 2 + (gender == "F")
-        return im, y
-
-    def caption(self, index):
-        return self.metadata.iloc[index]["text"]
-=======
-    def __iter__(self):
-        rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
-        print("iter length: ", rand_tensor.size())
-        yield from iter(rand_tensor.tolist())
-
-    def generate_weights(self, metadata):
-        Y = []
-        for i in range(len(metadata)):
-            health = self.metadata.iloc[i]["health"]
-            gender = self.metadata.iloc[i]["gender"]
-            Y.append((health == "PD") * 2 + (gender == "F"))
-        # Get the current weights of each class
-        label_weights = [Y.count(i)/len(metadata) for i in range(4)]
-        # Class rankings
-        rankings = {}
-        for label in range(4):
-            label_weight = label_weights[label]
-            rank = 0
-            for weight in label_weights:
-                if label_weight > weight:
-                    rank += 1
-            rankings[label] = rank
-
-        # Flip weights so smaller classes are more prominent
-        label_weights.sort(reverse=True)
-        new_label_weights = [label_weights[rankings[i]] for i in range(4)]
-        output_weights = [new_label_weights[i] for i in Y]
-        print("metadata len: ", len(self.metadata))
-        print(" weights len; ", len(output_weights))
-
-        return output_weights
-
-
-
-
-
-
-
-
-        
->>>>>>> 149d4d7 (added sampler, not working)
