@@ -35,7 +35,10 @@ def class_prevalence(data_loader, class_map):
 
     nclass = len(class_map)
     counts = np.zeros(nclass, dtype=np.int32)
+
+    i = 0
     for _, y in data_loader:
+        i +=1
         for c in y:
             counts[c] += 1
     p = plt.figure()

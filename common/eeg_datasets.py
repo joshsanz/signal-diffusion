@@ -865,6 +865,7 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         self.split = split
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        print(self.split, " metadata len: ", len(self.metadata))
         if transform is None:
             transform = transforms.Compose([
                 transforms.ToTensor(),
@@ -876,8 +877,6 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         return len(self.metadata)
 
     def __getitem__(self, index):
-        print("index: ", index, "metdata len: ", len(self.metadata), "split: ", self.split)
-        print('\n')
         fn = self.metadata.iloc[index]["file_name"]
         im = Image.open(pjoin(self.datadir, fn))
         im = self.transform(im)
@@ -889,21 +888,12 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
 
-# class WeightedRandomSampler(Sampler):
-
-#     def __iter__(self) -> Iterator[int]:
-#         rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
-#         yield from iter(rand_tensor.tolist())
-
-#     def __len__(self) -> int:
-#         return 
-
-class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
+class ParkinsonsSampler(torch.utils.data.Sampler):
     def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
-        self.num_samples = num_samples# Number of samples to draw not total
+        self.num_samples = num_samples # Number of samples to draw not total
         self.split = split
         self.replacement = replacement
         self.generator = generator
@@ -911,21 +901,9 @@ class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
     def __len__(self):
         return len(self.metadata)
 
-    def __getitem__(self, index):
-        fn = self.metadata.iloc[index]["file_name"]
-        im = Image.open(pjoin(self.datadir, fn))
-        im = self.transform(im)
-        emotion = self.metadata.iloc[index]["emotion"]
-        gender = self.metadata.iloc[index]["gender"]
-        y = (emotion) * 2 + (gender == "F")
-        return im, y
-
-    def caption(self, index):
-        return self.metadata.iloc[index]["text"]
-
     def __iter__(self):
-        rand_tensor = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=self.generator)
-        print("iter length: ", rand_tensor.size())
+        rand_tensor = torch.multinomial(self.weights, len(self.metadata), self.replacement, generator=self.generator)
+        #print("Sampler tensor length: ", len(rand_tensor.tolist()))
         yield from iter(rand_tensor.tolist())
 
     def generate_weights(self, metadata):
@@ -936,6 +914,19 @@ class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
             Y.append((health == "PD") * 2 + (gender == "F"))
         # Get the current weights of each class
         label_weights = [Y.count(i)/len(metadata) for i in range(4)]
+
+        # parkinsons_class_labels = bidict({
+        #     0: "healthy_male",
+        #     1: "healthy_female",
+        #     2: "parkinsons_male",
+        #     3: "parkinsons_female",
+        # })
+
+        print("HM OG Weight:", label_weights[0])
+        print("HFM OG Weight:", label_weights[1])
+        print("PM OG Weight:", label_weights[2])
+        print("PFM OG Weight:", label_weights[3])
+
         # Class rankings
         rankings = {}
         for label in range(4):
@@ -949,9 +940,17 @@ class ParkinsonsSampler(torch.utils.data.WeightedRandomSampler):
         # Flip weights so smaller classes are more prominent
         label_weights.sort(reverse=True)
         new_label_weights = [label_weights[rankings[i]] for i in range(4)]
+        
+        print("HM New Weight:", new_label_weights[0])
+        print("HFM New Weight:", new_label_weights[1])
+        print("PM New Weight:", new_label_weights[2])
+        print("PFM New Weight:", new_label_weights[3])
+
         output_weights = [new_label_weights[i] for i in Y]
-        print("metadata len: ", len(self.metadata))
-        print(" weights len; ", len(output_weights))
+
+        # Normalize output weights
+        norm_fact = sum(output_weights)
+        output_weights = [weights / norm_fact for weights in output_weights]
 
         return output_weights
 
@@ -1128,3 +1127,18 @@ class SEEDDataset(torch.utils.data.Dataset):
                 transforms.Normalize([0.5], [0.5])
             ])
         self.transform = transform
+
+    def __len__(self):
+        return len(self.metadata)
+    
+    def __getitem__(self, index):
+        fn = self.metadata.iloc[index]["file_name"]
+        im = Image.open(pjoin(self.datadir, fn))
+        im = self.transform(im)
+        emotion = self.metadata.iloc[index]["emotion"]
+        gender = self.metadata.iloc[index]["gender"]
+        y = (emotion) * 2 + (gender == "F")
+        return im, y
+
+    def caption(self, index):
+        return self.metadata.iloc[index]["text"]
