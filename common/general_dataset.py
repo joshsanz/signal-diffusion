@@ -14,6 +14,7 @@ from scipy.signal import decimate
 from torchvision import transforms
 from torch.utils.data import WeightedRandomSampler
 from os.path import join as pjoin
+import bisect
 import math
 
 # import support scripts: pull_data
@@ -61,6 +62,11 @@ seed_class_labels = bidict({
     9: f"{emotion_map.inverse[4]}_female",
 })
 
+general_class_labels = bidict({
+    0: "male",
+    1: "femal",
+})
+
 
 class CacheDict(OrderedDict):
     """Dict with a limited length, ejecting LRUs as needed."""
@@ -83,242 +89,6 @@ class CacheDict(OrderedDict):
         super().move_to_end(key)
 
         return val
-
-
-class EarEEGPreprocessor:
-    def __init__(self, base_path, raw_fs=1000, fs_out=250, input_users='all'):
-        self.base_path = base_path
-        ##################
-        # READ-IN EAR EEG
-        ##################
-        # NOTE, this takes a long time to run.
-        # (It could be parallelized to reduce runtime)
-
-        # name of spreadsheet with experiment details
-        # details_spreadsheet = 'gdrive/My Drive/Muller Group Drive/Ear EEG/Drowsiness_Detection/classifier_TBME/classification_scripts/trial_details_spreadsheet_basic.csv'
-        self.details_spreadsheet = base_path + 'eeg_classification_data/ear_eeg_data/trial_details_spreadsheet_good.csv'
-
-        # file path to ear eeg data (must be formated r'filepath\\')
-        # data_filepath = r'C:\Users\Carolyn\OneDrive\Documents\school\berkeley\research\ear_eeg_classification_framework\experimental_recordings\drowsiness_studies\ear_eeg\\'
-        self.data_filepath = base_path + 'eeg_classification_data/ear_eeg_data/ear_eeg_clean/'
-
-        # user number or all users('all', 'ryan', 'justin', 'carolyn', 'ashwin', 'connor')
-        self.input_users = input_users
-
-        # channels of eeg to read in for each trial (must include 5 and 11 if re-refernecing is enabled in the next block)
-        self.data_chs = [1, 2, 3, 4, 5, 7, 8, 9, 10, 11]
-
-        # sampling frequency of system (fs=1000 for wandmini)
-        self.raw_fs = raw_fs
-        self.fs_out = fs_out
-
-        #################
-        # READ-IN LABELS
-        #################
-
-        # Note: label read in will match Ear EEG read in
-        # (same trials will be read in, and the experiment lengths will be the same)
-
-        # file path to labels(must be formated r'filepath\\')
-        # label_filepath = r'C:\Users\Carolyn\OneDrive\Documents\school\berkeley\research\ear_eeg_classification_framework\experimental_recordings\drowsiness_studies\labels\\'
-        self.label_filepath = base_path + 'eeg_classification_data/ear_eeg_data/labels/'
-
-        # call read in labels
-        # all}|_labels
-
-    def format_data(self, data_set, seq_len):
-        # Data needs to be input as (samples, channels), for ex: (2,400,000, 10)
-        formatted_datasets = []
-        for i in range(len(data_set)):
-            data = data_set[i]
-            data = decimate(data, int(self.raw_fs / self.fs_out), zero_phase=True, axis=0)
-            data_length = data.shape[0]
-
-            # 0-mean, unit variance per channel
-            data = (data - np.mean(data, axis=0)) / np.std(data, axis=0)
-
-            num_seqs = int(np.floor(data_length / seq_len))
-            formatted_data = np.array(np.split(data[:num_seqs * seq_len], num_seqs))
-            formatted_datasets.append(formatted_data)
-        return formatted_datasets
-
-    @staticmethod
-    def one_hot_encode(input):
-        b = np.zeros((int(input.size), int(input.max() + 1)))
-        b[np.arange(input.size), input] = 1
-        one_hot_labels = np.array(b)
-
-        return one_hot_labels
-
-    def format_labels(self, labels_set, seq_len):
-        formatted_labels = []
-        decimation = int(self.raw_fs / self.fs_out)
-        for i in range(len(labels_set)):
-            labels = labels_set[i][::decimation]
-            labels_length = labels.shape[0]
-            # No need to one-hot encode for nn.CrossEntropyLoss
-
-            num_seqs = int(np.floor(labels_length / seq_len))
-            new_labels = np.array(np.split(labels[:num_seqs * seq_len], num_seqs)).astype('int')
-            formatted_labels.append(new_labels)
-        return formatted_labels
-
-    def write_proc_data_to_disk(self, proc_train_X, proc_train_y, proc_val_X, proc_val_y,
-                                proc_test_X, proc_test_y):
-        for X, y, split in [(proc_train_X, proc_train_y, "train"),
-                            (proc_val_X, proc_val_y, "val"),
-                            (proc_test_X, proc_test_y, "test")]:
-            print(f"Writing {split} samples...")
-            preproc_path = os.path.join(self.base_path, f"ear_eeg_{split}")
-            os.makedirs(preproc_path, exist_ok=True)
-            counter = 0
-            sample_map = []
-            for index in range(len(X)):
-                print(f"Splitting and saving recording {index}...")
-                dir_name = preproc_path + '/recording_' + str(index)
-                os.makedirs(dir_name, exist_ok=True)
-                N_sample_per_file = 100
-                cur_samples = X[index]
-                cur_labels = y[index]
-                cur_num_samples = cur_samples.shape[0]
-                cnt = 0
-                while cnt < cur_num_samples:
-                    file_samples = cur_samples[cnt:cnt + N_sample_per_file, :, :]
-                    file_labels = cur_labels[cnt:cnt + N_sample_per_file, :]
-                    nsamps = file_samples.shape[0]  # May not be N_sample_per_file for final split
-                    filename = f"{counter}-{counter + nsamps - 1}.npz"
-                    np.savez(f"{dir_name}/{filename}", X=file_samples, y=file_labels)
-                    sample_map.append((f"recording_{index}/{filename}", counter, counter + nsamps - 1))
-                    cnt += nsamps
-                    counter += nsamps
-
-            print(f"Writing metadata to {preproc_path + '/metadata.csv'}...")
-            with open(preproc_path + "/metadata.csv", "w") as fcsv:
-                writer = csv.writer(fcsv)
-                writer.writerow(["filename", "start_sample", "final_sample"])
-                writer.writerows(sample_map)
-
-    def preprocess(self, seq_len=256):
-        # call read in ear eeg
-        print("Reading in raw data...")
-        all_raw_data, filenames, data_lengths, file_users, refs = read_in_ear_eeg.read_in_clean_data(
-            self.details_spreadsheet, self.data_filepath,
-            self.input_users, self.data_chs, self.raw_fs, False
-        )
-        all_labels = read_in_labels.read_in_labels(
-            filenames, data_lengths, self.label_filepath, False
-        )
-        filtered_data = eeg_filter.filter_studies(all_raw_data)
-        # print(len(all_raw_data))
-        # print(all_raw_data[0].shape)
-        # print(len(filtered_data))
-        # print(filtered_data[0].shape)
-        del all_raw_data
-
-        # Data constants
-        # carolyn_indices = [0, 1, 2, 3, 4]
-        # ryan_indices = [5, 6, 7, 8, 9]
-        # justin_indices = [10, 11, 12, 13, 14]
-        # conor_indices = [15, 16, 17, 18, 19]
-        # avi_indices = [20, 21]
-        # train_perc, val_perc, test_perc = 0.55, 0.30, .15
-        train_ind = [2, 3, 4, 8, 9, 12, 13, 14, 15, 17, 18, 19, 21]
-        val_ind = [1, 6, 11, 16, 20, 7]
-        # test_ind = [0, 5, 10]
-
-        # Split up into train, val, and test datasets
-        train_data, val_data, test_data = [], [], []
-        train_labels, val_labels, test_labels = [], [], []
-        for i in range(len(filtered_data)):
-            if i in train_ind:
-                train_data.append(filtered_data[i])
-                train_labels.append(all_labels[i])
-            elif i in val_ind:
-                val_data.append(filtered_data[i])
-                val_labels.append(all_labels[i])
-            else:
-                test_data.append(filtered_data[i])
-                test_labels.append(all_labels[i])
-
-        # Format data
-        print("Downsampling signals...")
-        proc_train_X = self.format_data(train_data, seq_len)
-        proc_val_X = self.format_data(val_data, seq_len)
-        proc_test_X = self.format_data(test_data, seq_len)
-        filtered_data, train_data, val_data, test_data = [], [], [], []
-
-        # Format labels
-        proc_train_y = self.format_labels(train_labels, seq_len)
-        proc_val_y = self.format_labels(val_labels, seq_len)
-        proc_test_y = self.format_labels(test_labels, seq_len)
-        train_labels, val_labels, test_labels = [], [], []
-
-        # Save to disk
-        self.write_proc_data_to_disk(
-            proc_train_X, proc_train_y,
-            proc_val_X, proc_val_y,
-            proc_test_X, proc_test_y)
-
-        return (os.path.join(self.base_path, "ear_eeg_train"),
-                os.path.join(self.base_path, "ear_eeg_val"),
-                os.path.join(self.base_path, "ear_eeg_test"))
-
-
-class EarDataset(torch.utils.data.Dataset):
-    'Dataset loader for preprocessed ear EEG data'
-    def __init__(self, data_path, vector_samps=10, cache_mb=500):
-        'Initialization'
-        self.data_path = data_path
-        self.vector_samps = vector_samps
-        files, starts, stops = [], [], []
-        with open(data_path + "/metadata.csv", "r") as fcsv:
-            reader = csv.reader(fcsv)
-            _ = next(reader)  # skip header
-            for (f, s0, s1) in reader:
-                files.append(f)
-                starts.append(int(s0))
-                stops.append(int(s1))
-        self.start_inds = np.array(starts)
-        self.stop_inds = np.array(stops)
-        self.files = np.array(files)
-        # LRU cache for loaded data to try to reduce disk access
-        # Be careful, the memory foot print will grow per dataloader worker
-        cache_len = int(np.ceil(cache_mb / 1.2))  # 1.2 MB per loaded file
-        self.cache = CacheDict(cache_len=cache_len)
-
-    def __len__(self):
-        'Denotes the total number of samples'
-        return self.stop_inds[-1]
-
-    def __getitem__(self, index):
-        'Generates one sample of data'
-        # Load data and get label
-        file_idx = np.searchsorted(self.start_inds, index, side='right') - 1
-        filename = self.files[file_idx]
-        val = self.cache.get(filename, None)
-        if val is None:
-            data = np.load(os.path.join(self.data_path, filename))
-            X = torch.tensor(data['X']).float()
-            y = torch.tensor(data['y']).long()
-            self.cache[filename] = (X, y)
-        else:
-            X, y = val
-        offset = index - self.start_inds[file_idx]
-        X, y = X[offset, :, :], y[offset, :]
-
-        # Group vector_samps x nchannel chunks into input vectors
-        shape = X.shape
-        # samples x channels --> channels x samples --> channels x sample chunks x samples
-        nchunks = shape[0] // self.vector_samps
-        X = X.permute(1, 0).reshape(shape[1], nchunks, self.vector_samps)
-        # channels x sample chunks x samples --> chunks x channels x samples --> chunks x channels+samples
-        X = X.permute(1, 0, 2).reshape(nchunks, -1).contiguous()
-        # Use plurality voting to determine new y values
-        shape = y.shape
-        y = y.reshape(-1, self.vector_samps)
-        y = y.median(dim=1).values
-        return X, y
-
 
 class RawMathDataset(torch.utils.data.Dataset):
     """Dataset loader for Math EEG dataset"""
@@ -445,9 +215,8 @@ class RawMathDataset(torch.utils.data.Dataset):
         X, y = val
         return X, y
 
-
 class MathPreprocessor:
-    def __init__(self, data_path, nsamps, fs=250):
+    def __init__(self, data_path, nsamps, ovr_perc=0, fs=250):
         self.data_path = data_path
         self.nsamps = nsamps
         self.fs = fs
@@ -649,7 +418,6 @@ class MathDataset(torch.utils.data.Dataset):
     def get_subject(self, index):
         return self.subjects.iloc[index].subject
 
-
 class MathSpectrumDataset(MathDataset):
     def __init__(self, data_path, resolution=256, hop_length=192, transform=None):
         super().__init__(data_path, 1)
@@ -675,9 +443,7 @@ class MathSpectrumDataset(MathDataset):
         # Make spectrogram
         S = mcs.multichannel_spectrogram(X.numpy(), self.resolution, self.hop_length, self.resolution)
         S = self.transform(S)
-        
-        return S, y
-
+        return S, int(y) % 2 # Turn this to an int so it matches Parkinsons dataset
 
 class GeneratedSpectrumDataset(torch.utils.data.Dataset):
     """Dataset class for Diffusion generated spectrograms"""
@@ -704,7 +470,7 @@ class GeneratedSpectrumDataset(torch.utils.data.Dataset):
             im = Image.open(os.path.join(self.data_path, file))
             S = self.transform(im)
             self.cache[file] = S
-        return S, y
+        return S, y 
 
 
 class ParkinsonsPreprocessor():
@@ -722,6 +488,8 @@ class ParkinsonsPreprocessor():
         self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
         self.n_channels = len(parkinsons_channels)
 
+    def get_num_channels():
+        return self.n_channels
 
     def get_gender(self, sd):
         sub_id = int(sd.split('-')[1]) - 1
@@ -882,11 +650,7 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         gender = self.metadata.iloc[index]["gender"]
         y = (health == "PD") * 2 + (gender == "F")
 
-        print("park im type: ", type(im))
-        print("park y type: ", type(y))
-        print("park y % 2type: ", type(y % 2))
-
-        return im, y
+        return im, y % 2
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
@@ -906,7 +670,6 @@ class ParkinsonsSampler(torch.utils.data.Sampler):
 
     def __iter__(self):
         rand_tensor = torch.multinomial(self.weights, len(self.metadata), self.replacement, generator=self.generator)
-        #print("Sampler tensor length: ", len(rand_tensor.tolist()))
         yield from iter(rand_tensor.tolist())
 
     def generate_weights(self, metadata):
@@ -1127,3 +890,151 @@ class SEEDDataset(torch.utils.data.Dataset):
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
+
+##### General Dataset #####
+
+class GeneralPreprocessor():
+
+    ####  0 = Male, 1 = Female
+
+    # Originally 250, changed to 125
+    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=250):
+        self.datadirs = datadirs
+        self.nsamps = nsamps
+        self.ovr_perc = ovr_perc
+
+        # Init each processor individually
+        # Math Init
+        self.math_datadir = datadirs["math"]
+        self.math_pre = MathPreprocessor(self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+
+        # Parkinsons init
+        self.park_datadir = datadirs["parkinsons"]
+        self.park_pre = ParkinsonsPreprocessor(self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+
+        # self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
+        # self.n_channels = len(parkinsons_channels)
+
+    def preprocess(self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+
+        # Preprocess Math data
+        samps_per_file = 100
+        self.math_pre.preprocess(samps_per_file)
+
+        # Preprocess Parkinsons data
+        self.park_pre.preprocess(resolution=resolution)
+        self.park_pre.make_tvt_splits()
+
+class GeneralDataset(torch.utils.data.ConcatDataset):
+    def __init__(self, datasets, resolution=256, hop_length=192, split="train"):
+        super().__init__(datasets)
+
+        self.split = split
+        self.datasets = datasets
+        assert len(self.datasets) > 0, 'datasets should not be an empty iterable'  # type: ignore[arg-type]
+        for d in self.datasets:
+            assert not isinstance(d, torch.utils.data.IterableDataset), "ConcatDataset does not support IterableDataset"
+        self.cumulative_sizes = self.cumsum(self.datasets)
+
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+
+    def __getitem__(self, idx):
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError("absolute value of index should not exceed dataset length")
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        return self.datasets[dataset_idx][sample_idx]
+
+    @property
+    def cummulative_sizes(self):
+        warnings.warn("cummulative_sizes attribute is renamed to "
+                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
+        return self.cumulative_sizes
+
+    @staticmethod
+    def cumsum(sequence):
+        r, s = [], 0
+        for e in sequence:
+            l = len(e)
+            r.append(l + s)
+            s += l
+        return r
+
+    def caption(self, index):
+        return self.metadata.iloc[index]["text"]
+
+
+# class GeneralDataset(torch.utils.data.ConcatDataset):
+#     def __init__(self, datadirs, datasets, resolution=256, hop_length=192, split="train", transform=None):
+#         super().__init__()
+
+#         self.datadir = datadir
+#         self.split = split
+#         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+#         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+#         print(self.split, " metadata len: ", len(self.metadata))
+#         if transform is None:
+#             transform = transforms.Compose([
+#                 transforms.ToTensor(),
+#                 transforms.Normalize([0.5], [0.5])
+#             ])
+#         self.transform = transform
+
+#         # Data directories
+#         self.park_stft_datadir = datadirs["parkinsons-stft"]
+#         self.math_datadir = datadirs["math"]
+#         self.math_datadir = self.math_datadir + "/" + split
+
+#         # Init individual datasets
+#         self.math_dataset = MathSpectrumDataset(self.math_datadir, resolution, hop_length)
+#         self.park_dataset = ParkinsonsDataset(self.park_stft_datadir, split=test)
+        
+#         # Create cumulative dataset
+#         self.datasets = [self.math_dataset, self.park_dataset]
+
+#         assert len(self.datasets) > 0, 'datasets should not be an empty iterable'  # type: ignore[arg-type]
+#         for d in self.datasets:
+#             assert not isinstance(d, IterableDataset), "ConcatDataset does not support IterableDataset"
+#         self.cumulative_sizes = self.cumsum(self.datasets)
+
+
+#     def __len__(self):
+#         return self.cumulative_sizes[-1]
+
+#     def __getitem__(self, idx):
+#         if idx < 0:
+#             if -idx > len(self):
+#                 raise ValueError("absolute value of index should not exceed dataset length")
+#             idx = len(self) + idx
+#         dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+#         if dataset_idx == 0:
+#             sample_idx = idx
+#         else:
+#             sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+#         return self.datasets[dataset_idx][sample_idx]
+
+#     @property
+#     def cummulative_sizes(self):
+#         warnings.warn("cummulative_sizes attribute is renamed to "
+#                       "cumulative_sizes", DeprecationWarning, stacklevel=2)
+#         return self.cumulative_sizes
+
+#     @staticmethod
+#     def cumsum(sequence):
+#         r, s = [], 0
+#         for e in sequence:
+#             l = len(e)
+#             r.append(l + s)
+#             s += l
+#         return r
+
+#     def caption(self, index):
+#         return self.metadata.iloc[index]["text"]
