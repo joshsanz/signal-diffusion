@@ -590,6 +590,7 @@ class MathPreprocessor:
                 nsamples.append(X.shape[0])
                 file_ind += 1
             with open(os.path.join(self.data_path, split, "metadata.csv"), "w") as f:
+                #print()
                 writer = csv.writer(f)
                 writer.writerow(["X_filename", "y_filename", "start_sample_offset", "n_samples"])
                 for fn, off, ns in zip(filenames, offsets, nsamples):

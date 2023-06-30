@@ -64,7 +64,7 @@ seed_class_labels = bidict({
 
 general_class_labels = bidict({
     0: "male",
-    1: "femal",
+    1: "female",
 })
 
 
@@ -226,6 +226,7 @@ class MathPreprocessor:
 
         # Get dataset descriptions
         self.files = list(filter(lambda f: f.endswith(".edf"), os.listdir(self.data_path)))
+        self.files.sort()
         assert len(self.files) == 72, "Expected 72 files, found {}".format(len(self.files))
         self.math_files = list(filter(lambda f: f.endswith("_2.edf"), self.files))
         self.bkgnd_files = list(filter(lambda f: f.endswith("_1.edf"), self.files))
@@ -319,6 +320,31 @@ class MathPreprocessor:
         subtractions = self.subject_info[subject][3]
         return {"age": age, "gender": gender, "subtractions": subtractions}
 
+    def create_sub_based_splits(self, train_frac, val_frac, test_frac):
+        N = len(self)
+        n_train = int(np.ceil(train_frac * N))
+        n_val = int(np.floor(val_frac * N))
+        n_test = N - (n_train + n_val)
+        subjects = list(self.subject_info.keys())
+        np.random.shuffle(subjects)
+        train_inds, val_inds, test_inds = [], [], []
+
+        for sub in subjects:
+            math_inds = np.where(np.array(self.ind_math_files)==sub+'_2.edf')[0]
+            bkgnd_inds = np.where(np.array(self.ind_bkgnd_files)==sub+'_1.edf')[0] + len(self.ind_math_files)
+            
+            if len(train_inds) < n_train:
+                train_inds.extend(math_inds)
+                train_inds.extend(bkgnd_inds)
+            elif len(val_inds) < n_val:
+                val_inds.extend(math_inds)
+                val_inds.extend(bkgnd_inds)
+            else:
+                test_inds.extend(math_inds)
+                test_inds.extend(bkgnd_inds)
+        
+        return train_inds, val_inds, test_inds
+
     def preprocess(self, inds_per_file=20, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=42):
         output_dir = {'train': os.path.join(self.data_path, "train"),
                       'val': os.path.join(self.data_path, "val"),
@@ -330,12 +356,10 @@ class MathPreprocessor:
         n_train = int(np.ceil(train_frac * N))
         n_val = int(np.floor(val_frac * N))
         # n_test = int(np.floor(test_frac * N))
-        shuffled_inds = np.arange(N)
-        np.random.shuffle(shuffled_inds)
-        train_inds = shuffled_inds[:n_train]
-        val_inds = shuffled_inds[n_train:n_train + n_val]
-        test_inds = shuffled_inds[n_train + n_val:]
+        self.create_sub_based_splits(train_frac, val_frac, test_frac)
 
+        # This ind's are not split up by subjects
+        train_inds, val_inds, test_inds = self.create_sub_based_splits(train_frac, val_frac, test_frac)
         for split, inds in zip(['train', 'val', 'test'], [train_inds, val_inds, test_inds]):
             subindex = 0
             file_ind = 0
@@ -631,7 +655,6 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         self.split = split
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
-        print(self.split, " metadata len: ", len(self.metadata))
         if transform is None:
             transform = transforms.Compose([
                 transforms.ToTensor(),
@@ -937,6 +960,8 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
         for d in self.datasets:
             assert not isinstance(d, torch.utils.data.IterableDataset), "ConcatDataset does not support IterableDataset"
         self.cumulative_sizes = self.cumsum(self.datasets)
+
+        print(self.split, " len: ", self.cumulative_sizes[-1])
 
     def __len__(self):
         return self.cumulative_sizes[-1]
