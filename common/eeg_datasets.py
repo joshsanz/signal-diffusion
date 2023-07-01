@@ -767,7 +767,6 @@ class ParkinsonsPreprocessor():
             data = decimate(data, int(self.decimation), axis=1, zero_phase=True)
             N = data.shape[1]
             nblocks = N // self.nsamps
-            nblocks = 2
             shift_size = self.nsamps - self.noverlaps
         
             # Break data into chunks and save

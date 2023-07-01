@@ -16,6 +16,8 @@ def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
             logits = model(X.to(device))
         y_hat = torch.argmax(logits, dim=-1)
         for true, pred in zip(y, y_hat):
+            if pred == 2:
+                pred = 1
             confusion[true, pred] += 1
 
     make_labels = False
@@ -30,18 +32,30 @@ def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
         plt.ylabel("True Class")
     return confusion, fig
 
+def dataset_prevalence(datasets, dataset_map):
+    ndataset = len(dataset_map)
+    counts = np.zeros(ndataset, dtype=np.int32)
+
+    for i in range(ndataset):
+        dataset = datasets[i]
+        counts[i] = len(dataset)
+
+    print(counts)
+    p = plt.figure()
+    plt.title("Dataset Prevalence")
+    plt.xlabel("Dataset")
+    plt.ylabel("Percent of Samples")
+    plt.bar(dataset_map.values(), counts / np.sum(counts))
+    plt.gca().yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=1))
 
 def class_prevalence(data_loader, class_map):
-
     nclass = len(class_map)
     counts = np.zeros(nclass, dtype=np.int32)
-
-    i = 0
     for _, y in data_loader:
-        i +=1
         for c in y:
             counts[c] += 1
     p = plt.figure()
+    plt.title("Class Prevalence")
     plt.xlabel("Class")
     plt.ylabel("Percent of Samples")
     plt.bar(class_map.values(), counts / np.sum(counts))

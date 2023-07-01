@@ -67,6 +67,12 @@ general_class_labels = bidict({
     1: "female",
 })
 
+general_dataset_map = bidict({
+    0: "math",
+    1: "parkinsons",
+    2: "SEED"
+})
+
 
 class CacheDict(OrderedDict):
     """Dict with a limited length, ejecting LRUs as needed."""
@@ -219,6 +225,10 @@ class MathPreprocessor:
     def __init__(self, data_path, nsamps, ovr_perc=0, fs=250):
         self.data_path = data_path
         self.nsamps = nsamps
+        self.ovr_perc = ovr_perc
+        self.noverlaps = nsamps * ovr_perc
+
+
         self.fs = fs
         orig_fs = 500
         self.decimation = orig_fs // fs
@@ -249,25 +259,46 @@ class MathPreprocessor:
         self.ind_math_files = []
         self.ind_math_offsets = []
         for f, L in zip(self.math_files, self.math_file_lens):
-            nchunks = L // (self.decimation * self.nsamps)
+            shift_size = (self.nsamps - self.noverlaps) * self.decimation
+            start_ind = 0   
+            end_ind = self.nsamps * self.decimation
+            nchunks = 0
+            while end_ind < (L - (self.nsamps * self.decimation)):
+                start_ind = int(math.floor(start_ind))
+                end_ind = int(math.floor(end_ind))
+                self.ind_math_files.extend([f])
+                self.ind_math_offsets.extend([end_ind])
+                start_ind += shift_size
+                end_ind += shift_size
+                nchunks += 1
+
             assert nchunks > 1, (
                 "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
                     f, L, self.nsamps, self.decimation
                 )
             )
-            self.ind_math_files.extend([f] * nchunks)
-            self.ind_math_offsets.extend([self.nsamps * self.decimation * i for i in range(nchunks)])
+
         self.ind_bkgnd_files = []
         self.ind_bkgnd_offsets = []
         for f, L in zip(self.bkgnd_files, self.bkgnd_file_lens):
-            nchunks = L // (self.decimation * self.nsamps)
+            shift_size = (self.nsamps - self.noverlaps) * self.decimation #FIX ON PARK DATASET
+            start_ind = 0   
+            end_ind = self.nsamps * self.decimation
+            nchunks = 0
+            while end_ind < (L - (self.nsamps * self.decimation)):
+                start_ind = int(math.floor(start_ind))
+                end_ind = int(math.floor(end_ind))
+                self.ind_bkgnd_files.extend([f])
+                self.ind_bkgnd_offsets.extend([end_ind])
+                start_ind += shift_size
+                end_ind += shift_size
+                nchunks += 1
+
             assert nchunks > 1, (
                 "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
                     f, L, self.nsamps, self.decimation
                 )
             )
-            self.ind_bkgnd_files.extend([f] * nchunks)
-            self.ind_bkgnd_offsets.extend([self.nsamps * self.decimation * i for i in range(nchunks)])
 
     def __len__(self):
         return len(self.ind_math_files) + len(self.ind_bkgnd_files)
@@ -358,7 +389,6 @@ class MathPreprocessor:
         # n_test = int(np.floor(test_frac * N))
         self.create_sub_based_splits(train_frac, val_frac, test_frac)
 
-        # This ind's are not split up by subjects
         train_inds, val_inds, test_inds = self.create_sub_based_splits(train_frac, val_frac, test_frac)
         for split, inds in zip(['train', 'val', 'test'], [train_inds, val_inds, test_inds]):
             subindex = 0
@@ -559,7 +589,7 @@ class ParkinsonsPreprocessor():
             N = data.shape[1]
             nblocks = N // self.nsamps
             nblocks = 2
-            shift_size = self.nsamps - self.noverlaps
+            shift_size = (self.nsamps - self.noverlaps) * self.decimation
         
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
@@ -750,11 +780,14 @@ class SEEDPreprocessor():
         2: [2, 1, 3, 0, 4, 4, 0, 3, 2, 1, 3, 4, 1, 2, 0],
     }
 
-    def __init__(self, datadir, nsamps, fs=250):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
         self.datadir = datadir
         self.nsamps = nsamps
         self.orig_fs = 1000
         self.decimation = self.orig_fs // fs
+        self.ovr_perc = ovr_perc
+        self.noverlaps = nsamps * ovr_perc
+
         self.fs = self.orig_fs // self.decimation
         print("Decimation factor {} new fs {}".format(self.decimation, self.orig_fs / self.decimation))
         self.subjects = pd.read_csv(os.path.join(datadir, "participants_info.csv"))
@@ -802,13 +835,25 @@ class SEEDPreprocessor():
             end_samp = self.end_second[session][trial] * self.orig_fs
             chan_inds = [ch[1] for ch in seed_channels]
             data = raw_np[chan_inds, start_samp:end_samp]
+            #decimate data
             data = self.decimate(data)
             N = data.shape[1]
             nblocks = N // self.nsamps
+            shift_size = self.nsamps - self.noverlaps
+
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, f"sub-{subject}"), exist_ok=True)
-            for i in range(nblocks):
-                blk = data[:, i * self.nsamps: (i + 1) * self.nsamps]
+
+            start_ind = 0
+            end_ind = self.nsamps
+            i = 0
+            while end_ind < N:
+                start_ind = int(math.floor(start_ind))
+                end_ind = int(math.floor(end_ind))
+                blk = data[:, start_ind: end_ind]
+                start_ind += shift_size
+                end_ind += shift_size
+
                 S = mcs.multichannel_spectrogram(
                     blk,
                     hop_length=hop_length,
@@ -833,31 +878,62 @@ class SEEDPreprocessor():
         valmeta = metadata.iloc[0:0]
         testmeta = metadata.iloc[0:0]
         # Group by class
-        gmeta = metadata.groupby(["gender", "emotion"])
-        for group, gdf in gmeta:
-            subjects = gdf["file_name"].apply(lambda s: s.split("/")[0])
-            subjects = subjects.unique()
-            np.random.shuffle(subjects)
-            # Create train/val/test splits by subject to avoid data leakage
-            ntrain = int(np.ceil(train_frac * len(subjects)))
-            nval = int(np.floor(val_frac * len(subjects)))
-            trainsubs = subjects[:ntrain]
-            valsubs = subjects[ntrain:ntrain + nval]
-            testsubs = subjects[ntrain + nval:]
-            # Add splits to metadata
-            trainmeta = pd.concat([trainmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(trainsubs)]])
-            valmeta = pd.concat([valmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(valsubs)]])
-            testmeta = pd.concat([testmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(testsubs)]])
+        print("LEN META: ", len(metadata))
+
+        N = len(metadata)
+        n_train = int(np.ceil(train_frac * N))
+        n_val = int(np.floor(val_frac * N))
+        n_test = N - (n_train + n_val)
+        subjects = metadata.loc[:,"file_name"].apply(lambda s: s.split("/")[0])
+        subjects = subjects.unique()
+        np.random.shuffle(subjects)
+
+        for sub in subjects:
+            addition = metadata.loc[metadata["file_name"].apply(lambda s: s.split("/")[0] == sub)]
+
+            # print("SUBS: ", sub)
+            # print(addition_ind)
+            # print('TRUTH: ', True in addition_ind)
+            # print(metadata.loc[addition_ind])
+            # print(len(metadata.loc[addition_ind]))
+
+            if len(trainmeta) < n_train:
+                trainmeta = pd.concat([trainmeta, addition])
+            elif len(valmeta) < n_val:
+                valmeta = pd.concat([valmeta, addition])
+            else:
+                testmeta = pd.concat([testmeta, addition])
+
+        # gmeta = metadata.groupby(["gender", "emotion"])
+        # for group, gdf in gmeta:
+        #     subjects = gdf["file_name"].apply(lambda s: s.split("/")[0])
+        #     subjects = subjects.unique()
+        #     np.random.shuffle(subjects)
+        #     # Create train/val/test splits by subject to avoid data leakage
+        #     ntrain = int(np.ceil(train_frac * len(subjects)))
+        #     nval = int(np.floor(val_frac * len(subjects)))
+        #     trainsubs = subjects[:ntrain]
+        #     valsubs = subjects[ntrain:ntrain + nval]
+        #     testsubs = subjects[ntrain + nval:]
+        #     # Add splits to metadata
+        #     trainmeta = pd.concat([trainmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(trainsubs)]])
+        #     valmeta = pd.concat([valmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(valsubs)]])
+        #     testmeta = pd.concat([testmeta, gdf.loc[gdf["file_name"].apply(lambda s: s.split("/")[0]).isin(testsubs)]])
+
+        # print("trainmeta: ", trainmeta)
+        print("trainmeta: ", len(trainmeta.loc[:,'file_name'].apply(lambda s: s.split("/")[0]).unique()))
+        
         trainmeta.to_csv(pjoin(self.datadir, "stfts", "train-metadata.csv"), index=False)
         valmeta.to_csv(pjoin(self.datadir, "stfts", "val-metadata.csv"), index=False)
         testmeta.to_csv(pjoin(self.datadir, "stfts", "test-metadata.csv"), index=False)
+
 
     def preprocess(self, resolution=512, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         # Make output dir
         outdir = pjoin(self.datadir, "stfts")
         os.makedirs(outdir, exist_ok=True)
         # Spectrogram parameters
-        max_bins = resolution / self.n_channels
+        max_bins = math.floor(resolution / self.n_channels)
         hop_length = 8  # number of samples per time-step in spectrogram
         while self.nsamps / hop_length > max_bins:
             hop_length += 8
@@ -909,10 +985,11 @@ class SEEDDataset(torch.utils.data.Dataset):
         emotion = self.metadata.iloc[index]["emotion"]
         gender = self.metadata.iloc[index]["gender"]
         y = (emotion) * 2 + (gender == "F")
-        return im, y
+        return im, (y % 2)
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
+
 
 ##### General Dataset #####
 
@@ -927,13 +1004,17 @@ class GeneralPreprocessor():
         self.ovr_perc = ovr_perc
 
         # Init each processor individually
-        # Math Init
+        # Math init
         self.math_datadir = datadirs["math"]
         self.math_pre = MathPreprocessor(self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
 
         # Parkinsons init
         self.park_datadir = datadirs["parkinsons"]
         self.park_pre = ParkinsonsPreprocessor(self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+
+        # SEED init
+        self.seed_datadir = datadirs["seed"]
+        self.seed_pre = SEEDPreprocessor(self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
 
         # self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
         # self.n_channels = len(parkinsons_channels)
@@ -942,6 +1023,10 @@ class GeneralPreprocessor():
         if seed is not None:
             np.random.seed(seed)
 
+        # Preprocess SEED data
+        #self.seed_pre.preprocess(resolution=resolution)
+        self.seed_pre.make_tvt_splits()
+
         # Preprocess Math data
         samps_per_file = 100
         self.math_pre.preprocess(samps_per_file)
@@ -949,6 +1034,9 @@ class GeneralPreprocessor():
         # Preprocess Parkinsons data
         self.park_pre.preprocess(resolution=resolution)
         self.park_pre.make_tvt_splits()
+
+
+        
 
 class GeneralDataset(torch.utils.data.ConcatDataset):
     def __init__(self, datasets, resolution=256, hop_length=192, split="train"):
@@ -960,8 +1048,7 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
         for d in self.datasets:
             assert not isinstance(d, torch.utils.data.IterableDataset), "ConcatDataset does not support IterableDataset"
         self.cumulative_sizes = self.cumsum(self.datasets)
-
-        print(self.split, " len: ", self.cumulative_sizes[-1])
+        self.dataset_calls = []        
 
     def __len__(self):
         return self.cumulative_sizes[-1]
@@ -976,6 +1063,8 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
             sample_idx = idx
         else:
             sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+
+        self.dataset_calls.append(dataset_idx)
         return self.datasets[dataset_idx][sample_idx]
 
     @property
