@@ -21,7 +21,7 @@ import common.ear_eeg_support_scripts.read_in_ear_eeg as read_in_ear_eeg
 import common.ear_eeg_support_scripts.read_in_labels as read_in_labels
 import common.ear_eeg_support_scripts.eeg_filter as eeg_filter
 import common.multichannel_spectrograms as mcs
-from common.channel_map import parkinsons_channels, seed_channels
+from data_processing.channel_map import parkinsons_channels, seed_channels
 
 mne.set_log_level("WARNING")
 
@@ -748,6 +748,7 @@ class ParkinsonsPreprocessor():
         return data
 
     def _generate_spectrograms(self, subject_dirs, outdir, resolution, hop_length):
+        print("subject_dirs: ", subject_dirs)
         # Containers for sample metadata
         files = []
         genders = []
@@ -761,13 +762,12 @@ class ParkinsonsPreprocessor():
             # Get subset of channels we want
             chan_inds = [ch[1] for ch in parkinsons_channels]
             data = data[chan_inds, :]
-            data = self.decimate(data)
 
-            # decimate data
-            data = decimate(data, int(self.decimation), axis=1, zero_phase=True)
+            # Decimate data
+            data = self.decimate(data)
             N = data.shape[1]
             nblocks = N // self.nsamps
-            shift_size = self.nsamps - self.noverlaps
+            shift_size = (self.nsamps - self.noverlaps) * self.decimation
         
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
