@@ -1,3 +1,5 @@
+# MATH dataset link: https://physionet.org/content/eegmat/1.0.0/
+
 # Datasets for EEG classification
 import csv
 import glob
@@ -41,13 +43,13 @@ class MathPreprocessor():
 
         # Establish sampling constants
         orig_fs = 500
-        self.fs = fs
         self.decimation = orig_fs // fs
         print("Decimation factor {} new fs {}".format(self.decimation, orig_fs / self.decimation))
-        self.nsamps = int(nsamps * (1/self.decimation))
+        self.fs = orig_fs / self.decimation # To compensate for decimation fact being an int
+        self.nsamps = nsamps 
         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
         self.ovr_perc = ovr_perc
-        self.noverlaps = int(nsamps * ovr_perc * (1/self.decimation))
+        self.noverlap = int(np.floor(nsamps * ovr_perc))
 
         self.subjects = pd.read_csv(os.path.join(datadir, "subject-info.csv"))
         # Get dataset descriptions
@@ -131,10 +133,10 @@ class MathPreprocessor():
                 sub_sd = "sub" + sd[len(sd)-2:]
                 os.makedirs(pjoin(outdir, sub_sd), exist_ok=True)
                 N = data.shape[1]                
-                shift_size = self.nsamps - self.noverlaps
+                shift_size = self.nsamps - self.noverlap
                 # Conirm the spectrogram is long enough to split up
-                if self.noverlaps != 0:
-                    nblocks = math.floor((N - self.nsamps) / self.noverlaps) + 1
+                if self.noverlap != 0:
+                    nblocks = math.floor((N - self.nsamps) / shift_size) + 1
                 else:
                     nblocks = math.floor(N / self.nsamps)
                 assert nblocks > 1, (
@@ -170,7 +172,7 @@ class MathPreprocessor():
 
         assert total_specs == len(files), (
                     "{} spectrograms where generated, {} should've been made".format(
-                        len(files), N
+                        len(files), total_specs
                     )
                 )
 
@@ -235,11 +237,11 @@ class MathPreprocessor():
 
 
 class MathDataset(torch.utils.data.Dataset):
-    def __init__(self, stftdir, split="train", transform=None):
-        self.stftdir = stftdir
+    def __init__(self, datadir, split="train", transform=None):
+        self.datadir = datadir
         self.split = split
-        assert os.path.isfile(pjoin(stftdir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
-        self.metadata = pd.read_csv(pjoin(stftdir, f"{split}-metadata.csv"))
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         if transform is None:
             transform = transforms.Compose([
                 transforms.ToTensor(),
@@ -254,7 +256,7 @@ class MathDataset(torch.utils.data.Dataset):
         fn = self.metadata.iloc[index]["file_name"]
         im = Image.open(pjoin(self.datadir, fn))
         im = self.transform(im)
-        math = self.metadata.iloc[index]["doingmath"]
+        doing_math = self.metadata.iloc[index]["doingmath"]
         gender = self.metadata.iloc[index]["gender"]
         isfemale = gender == "F"
         y = int(2 * doing_math + 1 * isfemale)

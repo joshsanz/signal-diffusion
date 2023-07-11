@@ -68,13 +68,13 @@ class TransformerClassifier(nn.Module):
         logits = self.fc(pooled)
         return logits
 
-
+# old ff dims: f_dims=[1000, 500, 250], dropout=0.5,
 class CNNClassifier(nn.Module):
     def __init__(self, in_channels, out_dim,
                  conv_ks=[(12, 3), (8, 3), (4, 3)], conv_cs=[16, 64, 128],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 1), (1, 1), (1, 1)],
                  pool_ks=[(4, 2), (2, 2), (2, 5)], pool_ss=[(4, 2), (2, 2), (2, 5)],
-                 ff_dims=[1000, 500, 250], dropout=0.5,
+                 ff_dims=[250, 125, 62], dropout=0.5,
                  pooling="max", activation="gelu"):
         super().__init__()
         # Store architecture sizes & strides

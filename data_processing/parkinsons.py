@@ -1,3 +1,5 @@
+# Dataset link: https://openneuro.org/datasets/ds004584/versions/1.0.0
+
 # Datasets for EEG classification
 import csv
 import glob
@@ -39,13 +41,13 @@ class ParkinsonsPreprocessor():
 
         # Establish sampling constants
         orig_fs = 500
-        self.fs = fs
         self.decimation = orig_fs // fs
         print("Decimation factor {} new fs {}".format(self.decimation, orig_fs / self.decimation))
-        self.nsamps = int(nsamps * (1/self.decimation))
+        self.fs = orig_fs / self.decimation
+        self.nsamps = nsamps
         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
         self.ovr_perc = ovr_perc
-        self.noverlaps = int(nsamps * ovr_perc * (1/self.decimation))
+        self.noverlap = int(np.floor(nsamps * ovr_perc))
         
 
         # Get subject info
@@ -99,10 +101,10 @@ class ParkinsonsPreprocessor():
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
             N = data.shape[1]                
-            shift_size = self.nsamps - self.noverlaps
+            shift_size = self.nsamps - self.noverlap
 
-            if self.noverlaps != 0:
-                nblocks = math.floor((N - self.nsamps) / self.noverlaps) + 1
+            if self.noverlap != 0:
+                nblocks = math.floor((N - self.nsamps) / shift_size) + 1
             else:
                 nblocks = math.floor(N / self.nsamps)
             assert nblocks > 1, (
@@ -115,9 +117,7 @@ class ParkinsonsPreprocessor():
             start_ind = 0
             end_ind = self.nsamps
             i = 0
-            while end_ind < N:
-                start_ind = int(math.floor(start_ind))
-                end_ind = int(math.floor(end_ind))
+            while end_ind <= N:
                 blk = data[:, start_ind: end_ind]
                 start_ind += shift_size
                 end_ind += shift_size
@@ -136,8 +136,8 @@ class ParkinsonsPreprocessor():
                 i += 1
 
         assert total_specs == len(files), (
-                    "{} spectrograms where generated, {} should've been made".format(
-                        len(files), N
+                    "{} spectrograms were generated, {} should've been made".format(
+                        len(files), total_specs
                     )
                 )
         return files, genders, ages, pds

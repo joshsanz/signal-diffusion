@@ -139,7 +139,7 @@ class GeneralPreprocessor():
         self.math_pre.preprocess(resolution=resolution)
 
         # Preprocess Parkinsons data
-        self.park_pre.preprocess(resolution=resolution)
+        #self.park_pre.preprocess(resolution=resolution)
 
         # Preprocess SEED data
         self.seed_pre.preprocess(resolution=resolution)

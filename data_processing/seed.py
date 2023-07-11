@@ -76,13 +76,13 @@ class SEEDPreprocessor():
 
         # Establish sampling constants
         self.orig_fs = 1000
-        self.fs = fs
         self.decimation = self.orig_fs // fs
         print("Decimation factor {} new fs {}".format(self.decimation, self.orig_fs / self.decimation))
-        self.nsamps = int(nsamps * (1/self.decimation))
+        self.fs = self.orig_fs / self.decimation
+        self.nsamps = nsamps
         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
         self.ovr_perc = ovr_perc
-        self.noverlaps = int(nsamps * ovr_perc * (1/self.decimation))
+        self.noverlap = int(np.floor(nsamps * ovr_perc))
 
         # Get subject info
         self.subjects = pd.read_csv(os.path.join(datadir, "participants_info.csv"))
@@ -136,9 +136,9 @@ class SEEDPreprocessor():
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, f"sub-{subject}"), exist_ok=True)
             N = data.shape[1]                
-            shift_size = self.nsamps - self.noverlaps
-            if self.noverlaps != 0:
-                nblocks = math.floor((N - self.nsamps) / self.noverlaps) + 1
+            shift_size = self.nsamps - self.noverlap
+            if self.noverlap != 0:
+                nblocks = math.floor((N - self.nsamps) / shift_size) + 1
             else:
                 nblocks = math.floor(N / self.nsamps)
             assert nblocks > 1, (
@@ -147,14 +147,11 @@ class SEEDPreprocessor():
                 )
             )
 
-            print("subject: ", subject)
-            print("subject: ", nblocks)
-
 
             start_ind = 0
             end_ind = self.nsamps
             i = 0
-            while end_ind < N:
+            while end_ind <= N:
                 start_ind = int(math.floor(start_ind))
                 end_ind = int(math.floor(end_ind))
                 blk = data[:, start_ind: end_ind]
