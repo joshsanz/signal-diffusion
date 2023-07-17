@@ -5,7 +5,12 @@ from PIL import Image
 
 
 def scale_minmax(X, minval=0.0, maxval=1.0):
-    X_std = (X - X.min()) / (X.max() - X.min())
+    xmax = X.max()
+    xmin = X.min()
+    if xmax == xmin:
+        X_std = np.zeros_like(X)
+    else:
+        X_std = (X - X.min()) / (X.max() - X.min())
     X_scaled = X_std * (maxval - minval) + minval
     return X_scaled
 
