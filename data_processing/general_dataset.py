@@ -1,21 +1,14 @@
 # Datasets for EEG classification
-import csv
-import glob
 import mne
 import numpy as np
 import os
 import pandas as pd
-import re
 import torch
 from bidict import bidict
 from collections import OrderedDict
-from PIL import Image
-from scipy.signal import decimate
-from torchvision import transforms
 from os.path import join as pjoin
 import bisect
-import shutil
-import math
+import warnings
 
 # Import support scripts: pull_data
 from data_processing.math import MathPreprocessor
@@ -27,36 +20,30 @@ mne.set_log_level("WARNING")
 ear_class_labels = bidict({0: "awake", 1: "sleepy"})
 
 
-emotion_map = bidict({
-    "disgust": 0,
-    "fear": 1,
-    "sad": 2,
-    "neutral": 3,
-    "happy": 4
-})
-seed_class_labels = bidict({
-    0: f"{emotion_map.inverse[0]}_male",
-    1: f"{emotion_map.inverse[0]}_female",
-    2: f"{emotion_map.inverse[1]}_male",
-    3: f"{emotion_map.inverse[1]}_female",
-    4: f"{emotion_map.inverse[2]}_male",
-    5: f"{emotion_map.inverse[2]}_female",
-    6: f"{emotion_map.inverse[3]}_male",
-    7: f"{emotion_map.inverse[3]}_female",
-    8: f"{emotion_map.inverse[4]}_male",
-    9: f"{emotion_map.inverse[4]}_female",
-})
+emotion_map = bidict({"disgust": 0, "fear": 1, "sad": 2, "neutral": 3, "happy": 4})
+seed_class_labels = bidict(
+    {
+        0: f"{emotion_map.inverse[0]}_male",
+        1: f"{emotion_map.inverse[0]}_female",
+        2: f"{emotion_map.inverse[1]}_male",
+        3: f"{emotion_map.inverse[1]}_female",
+        4: f"{emotion_map.inverse[2]}_male",
+        5: f"{emotion_map.inverse[2]}_female",
+        6: f"{emotion_map.inverse[3]}_male",
+        7: f"{emotion_map.inverse[3]}_female",
+        8: f"{emotion_map.inverse[4]}_male",
+        9: f"{emotion_map.inverse[4]}_female",
+    }
+)
 
-general_class_labels = bidict({
-    0: "male",
-    1: "female",
-})
+general_class_labels = bidict(
+    {
+        0: "male",
+        1: "female",
+    }
+)
 
-general_dataset_map = bidict({
-    0: "math",
-    1: "parkinsons",
-    2: "SEED"
-})
+general_dataset_map = bidict({0: "math", 1: "parkinsons", 2: "SEED"})
 
 
 class CacheDict(OrderedDict):
@@ -81,6 +68,7 @@ class CacheDict(OrderedDict):
 
         return val
 
+
 #  Class to generalize all the preprocessors, WORK ON LATER
 
 # class EEGPreprocessor:
@@ -102,13 +90,10 @@ class CacheDict(OrderedDict):
 #         self.subjects = pd.read_csv(os.path.join(datadir, "subject-info.csv"))
 
 
-
-##### General Dataset #####
-
-class GeneralPreprocessor():
-
-    ####  0 = Male, 1 = Female
-
+#################
+# General Dataset
+class GeneralPreprocessor:
+    # 0 = Male, 1 = Female
     # Originally 250, changed to 125
     def __init__(self, datadirs, nsamps, ovr_perc=0, fs=250):
         self.datadirs = datadirs
@@ -118,20 +103,28 @@ class GeneralPreprocessor():
         # Init each processor individually
         # Math init
         self.math_datadir = datadirs["math"]
-        self.math_pre = MathPreprocessor(self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+        self.math_pre = MathPreprocessor(
+            self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+        )
 
         # Parkinsons init
         self.park_datadir = datadirs["parkinsons"]
-        self.park_pre = ParkinsonsPreprocessor(self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+        self.park_pre = ParkinsonsPreprocessor(
+            self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+        )
 
         # SEED init
         self.seed_datadir = datadirs["seed"]
-        self.seed_pre = SEEDPreprocessor(self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs)
+        self.seed_pre = SEEDPreprocessor(
+            self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+        )
 
         # self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
         # self.n_channels = len(parkinsons_channels)
 
-    def preprocess(self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
+    def preprocess(
+        self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None
+    ):
         if seed is not None:
             np.random.seed(seed)
 
@@ -139,10 +132,11 @@ class GeneralPreprocessor():
         self.math_pre.preprocess(resolution=resolution)
 
         # Preprocess Parkinsons data
-        #self.park_pre.preprocess(resolution=resolution)
+        self.park_pre.preprocess(resolution=resolution)
 
         # Preprocess SEED data
         self.seed_pre.preprocess(resolution=resolution)
+
 
 class GeneralDataset(torch.utils.data.ConcatDataset):
     def __init__(self, datasets, resolution=256, hop_length=192, split="train"):
@@ -150,11 +144,13 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
 
         self.split = split
         self.datasets = datasets
-        assert len(self.datasets) > 0, 'datasets should not be an empty iterable'  # type: ignore[arg-type]
+        assert len(self.datasets) > 0, "datasets should not be an empty iterable"  # type: ignore[arg-type]
         for d in self.datasets:
-            assert not isinstance(d, torch.utils.data.IterableDataset), "ConcatDataset does not support IterableDataset"
+            assert not isinstance(
+                d, torch.utils.data.IterableDataset
+            ), "ConcatDataset does not support IterableDataset"
         self.cumulative_sizes = self.cumsum(self.datasets)
-        self.dataset_calls = []        
+        self.dataset_calls = []
 
     def __len__(self):
         return self.cumulative_sizes[-1]
@@ -162,7 +158,9 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
     def __getitem__(self, idx):
         if idx < 0:
             if -idx > len(self):
-                raise ValueError("absolute value of index should not exceed dataset length")
+                raise ValueError(
+                    "absolute value of index should not exceed dataset length"
+                )
             idx = len(self) + idx
         dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
         if dataset_idx == 0:
@@ -175,51 +173,61 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
 
     @property
     def cummulative_sizes(self):
-        warnings.warn("cummulative_sizes attribute is renamed to "
-                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "cummulative_sizes attribute is renamed to " "cumulative_sizes",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.cumulative_sizes
 
     @staticmethod
     def cumsum(sequence):
         r, s = [], 0
         for e in sequence:
-            l = len(e)
-            r.append(l + s)
-            s += l
+            elen = len(e)
+            r.append(elen + s)
+            s += elen
         return r
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
 
+
 class GeneralSampler(torch.utils.data.WeightedRandomSampler):
-    def __init__(self, datasets, num_samples, split="train", replacement=True, generator=None):
+    def __init__(
+        self, datasets, num_samples, split="train", replacement=True, generator=None
+    ):
         self.datasets = datasets
         self.metadatas = []
         for dataset in datasets:
             meta_datadir = pjoin(dataset.datadir, f"{split}-metadata.csv")
             if not os.path.isfile(meta_datadir):
                 meta_datadir = pjoin(dataset.datadir, "metadata.csv")
-            
-            assert os.path.isfile(meta_datadir), "No metadata file found for split {}".format(split)
+
+            assert os.path.isfile(
+                meta_datadir
+            ), "No metadata file found for split {}".format(split)
             metadata = pd.read_csv(meta_datadir)
             self.metadatas.append(metadata)
 
-
-
-        self.weights = torch.as_tensor(self.generate_weights(self.metadatas), dtype=torch.double)
-        self.num_samples = num_samples # Number of samples to draw not total
+        self.weights = torch.as_tensor(
+            self.generate_weights(self.metadatas), dtype=torch.double
+        )
+        self.num_samples = num_samples  # Number of samples to draw not total
         self.split = split
         self.replacement = replacement
         self.generator = generator
 
     def __len__(self):
-        otuput = 0
+        output = 0
         for dataset in self.datasets:
-            output  += len(dataset)
+            output += len(dataset)
         return output
 
     def __iter__(self):
-        rand_tensor = torch.multinomial(self.weights, len(self.metadata), self.replacement, generator=self.generator)
+        rand_tensor = torch.multinomial(
+            self.weights, len(self.metadata), self.replacement, generator=self.generator
+        )
         yield from iter(rand_tensor.tolist())
 
     def generate_weights(self, metadatas):
@@ -229,13 +237,13 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
         for metadata in metadatas:
             for i in range(len(metadata)):
                 gender = metadata.iloc[i]["gender"]
-                if gender == 'F': 
+                if gender == "F":
                     Y.append(1)
                 else:
                     Y.append(0)
-        
+
         # Get the current weights of each class
-        label_weights = [Y.count(i)/len(Y) for i in range(2)]
+        label_weights = [Y.count(i) / len(Y) for i in range(2)]
 
         # Class rankings
         rankings = {}

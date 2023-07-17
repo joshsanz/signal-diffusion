@@ -34,6 +34,7 @@ math_class_labels = bidict({
     3: "math_female",
 })
 
+
 class MathPreprocessor():
     def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
         # Establish directories
@@ -45,13 +46,13 @@ class MathPreprocessor():
         orig_fs = 500
         self.decimation = orig_fs // fs
         print("Decimation factor {} new fs {}".format(self.decimation, orig_fs / self.decimation))
-        self.fs = orig_fs / self.decimation # To compensate for decimation fact being an int
-        self.nsamps = nsamps 
+        self.fs = orig_fs / self.decimation  # To compensate for decimation fact being an int
+        self.nsamps = nsamps
         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
         self.ovr_perc = ovr_perc
         self.noverlap = int(np.floor(nsamps * ovr_perc))
 
-        self.subjects = pd.read_csv(os.path.join(datadir, "subject-info.csv"))
+        self.subjects = pd.read_csv(os.path.join(self.eegdir, "subject-info.csv"))
         # Get dataset descriptions
         self.files = list(filter(lambda f: f.endswith(".edf"), os.listdir(self.eegdir)))
         self.files.sort()
@@ -71,7 +72,7 @@ class MathPreprocessor():
         doing_math = m_or_bk == "2"
         label = torch.tensor(2 * doing_math + 1 * isfemale).long()
         return gender, doing_math, age, label
-    
+
     @staticmethod
     def get_caption(gender, doingmath, age):
         gender = "male" if gender == "M" else "female"
@@ -94,11 +95,11 @@ class MathPreprocessor():
         # Get list of data directories
         subject_dirs = os.listdir(self.eegdir)
         subject_dirs = list(filter(lambda d: d.startswith("Subject"), subject_dirs))
-        subject_dirs = np.unique([sub[:len(sub)-6] for sub in subject_dirs])
+        subject_dirs = np.unique([sub[:len(sub) - 6] for sub in subject_dirs])
         subject_dirs.sort()
 
         # Create spectrograms
-        files , genders , maths, ages, labels = self._generate_spectrograms(subject_dirs, outdir, resolution, hop_length) 
+        files, genders, maths, ages, labels = self._generate_spectrograms(subject_dirs, outdir, resolution, hop_length)
         # Write metadata to file
         with open(pjoin(outdir, "metadata.csv"), "w") as f:
             writer = csv.writer(f)
@@ -121,7 +122,7 @@ class MathPreprocessor():
         for sd in subject_dirs:
             # Do one pass to get bkgrnd files and another for math, 1 = bkgnd, 2 = math
             i = 0
-            for state in range(1,3):
+            for state in range(1, 3):
                 sub_file = sd + "_" + str(state) + ".edf"
                 sub_dir = os.path.join(self.eegdir, sub_file)
                 data = mne.io.read_raw_edf(sub_dir, preload=True)
@@ -132,7 +133,7 @@ class MathPreprocessor():
                 # Break data into chunks and save
                 sub_sd = "sub" + sd[len(sd)-2:]
                 os.makedirs(pjoin(outdir, sub_sd), exist_ok=True)
-                N = data.shape[1]                
+                N = data.shape[1]
                 shift_size = self.nsamps - self.noverlap
                 # Conirm the spectrogram is long enough to split up
                 if self.noverlap != 0:
@@ -211,7 +212,7 @@ class MathPreprocessor():
                 valmeta = pd.concat([valmeta, addition])
             else:
                 testmeta = pd.concat([testmeta, addition])
-        
+
         trainmeta.to_csv(pjoin(self.datadir, "stfts", "train-metadata.csv"), index=False)
         valmeta.to_csv(pjoin(self.datadir, "stfts", "val-metadata.csv"), index=False)
         testmeta.to_csv(pjoin(self.datadir, "stfts", "test-metadata.csv"), index=False)
