@@ -1,5 +1,6 @@
 # Training functions for EEG classification
 import torch
+import torch.nn.functional as F
 from dataclasses import dataclass
 from tqdm.auto import tqdm
 from common.dog import DoG, PDoG
@@ -11,6 +12,28 @@ class TrainingConfig:
     opt_restart_every: int = 200
     opt_log_every: int = 100
     val_every_epochs: int = 1
+
+
+def linear_combination(x, y, epsilon):
+    return epsilon * x + (1 - epsilon) * y
+
+
+def reduce_loss(loss, reduction='mean'):
+    return loss.mean() if reduction == 'mean' else loss.sum() if reduction == 'sum' else loss
+
+
+class LabelSmoothingCrossEntropy(torch.nn.Module):
+    def __init__(self, epsilon: float = 0.1, reduction='mean'):
+        super().__init__()
+        self.epsilon = epsilon
+        self.reduction = reduction
+
+    def forward(self, preds, target):
+        n = preds.size()[-1]
+        log_preds = F.log_softmax(preds, dim=-1)
+        loss = reduce_loss(-log_preds.sum(dim=-1), self.reduction)
+        nll = F.nll_loss(log_preds, target, reduction=self.reduction)
+        return linear_combination(loss / n, nll, self.epsilon)
 
 
 def log_etas(tblogger, opt, step):
