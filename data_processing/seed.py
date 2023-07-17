@@ -17,6 +17,8 @@ from os.path import join as pjoin
 import bisect
 import shutil
 import math
+from tqdm.auto import tqdm
+
 
 # import support scripts: pull_data
 import common.multichannel_spectrograms as mcs
@@ -234,7 +236,7 @@ class SEEDPreprocessor():
         subjects_and_sessions = [(f.split('_')[0], f.split('_')[1]) for f in data_files]
         # Extract trials and generate spectrograms
         files, genders, ages, emotions, captions = [], [], [], [], []
-        for (i, (sub, sess)) in enumerate(subjects_and_sessions):
+        for (i, (sub, sess)) in tqdm(enumerate(subjects_and_sessions)):
             sub = int(sub) - 1
             sess = int(sess) - 1
             metadata = self._generate_spectrograms(outdir, data_files[i], sub, sess, resolution, hop_length)
@@ -255,6 +257,7 @@ class SEEDPreprocessor():
 
 class SEEDDataset(torch.utils.data.Dataset):
     def __init__(self, datadir, split="train", transform=None):
+        self.dataname = 'seed'
         self.datadir = datadir
         self.split = split
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)

@@ -9,6 +9,9 @@ from collections import OrderedDict
 from os.path import join as pjoin
 import bisect
 import warnings
+import math
+import shutil
+from tqdm.auto import tqdm
 
 # Import support scripts: pull_data
 from data_processing.math import MathPreprocessor
@@ -95,7 +98,7 @@ class CacheDict(OrderedDict):
 class GeneralPreprocessor:
     # 0 = Male, 1 = Female
     # Originally 250, changed to 125
-    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=250):
+    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=125):
         self.datadirs = datadirs
         self.nsamps = nsamps
         self.ovr_perc = ovr_perc
@@ -113,18 +116,13 @@ class GeneralPreprocessor:
             self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
         )
 
-        # SEED init
+        # # SEED init
         self.seed_datadir = datadirs["seed"]
         self.seed_pre = SEEDPreprocessor(
             self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
         )
 
-        # self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
-        # self.n_channels = len(parkinsons_channels)
-
-    def preprocess(
-        self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None
-    ):
+    def preprocess(self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         if seed is not None:
             np.random.seed(seed)
 
@@ -226,42 +224,70 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
 
     def __iter__(self):
         rand_tensor = torch.multinomial(
-            self.weights, len(self.metadata), self.replacement, generator=self.generator
+            self.weights, len(self), self.replacement, generator=self.generator
         )
         yield from iter(rand_tensor.tolist())
 
     def generate_weights(self, metadatas):
-        # This function could use some optimization
         metadatas = self.metadatas
-        Y = []
-        for metadata in metadatas:
-            for i in range(len(metadata)):
-                gender = metadata.iloc[i]["gender"]
-                if gender == "F":
-                    Y.append(1)
-                else:
-                    Y.append(0)
+        # Find male to female ratio
+        totals, male, female = [], 0, 0
 
-        # Get the current weights of each class
-        label_weights = [Y.count(i) / len(Y) for i in range(2)]
+        for metadata in metadatas:
+            genders = metadata.loc[:,"gender"]
+            totals.append(len(metadata))
+            female += list(genders).count('F')
+            male += list(genders).count('M')
+
+            print("totals: ", totals)
+            print("female: ", female)
+            print("male: ", male)
+
+
+
+        total_samps = sum(totals)
+        gend_weights = [male/total_samps, (female/total_samps)]
+        print(gend_weights)
+        dataset_weights = [total/total_samps for total in totals]
+
+        summed_weights = []
+        weights = []
+        for dw in dataset_weights:
+            data_gender_w = []
+            for gw in gend_weights:
+                data_gender_w.append(gw + dw)
+            summed_weights.append(sum(data_gender_w))
+            weights.append(data_gender_w)
 
         # Class rankings
         rankings = {}
-        for label in range(2):
-            label_weight = label_weights[label]
+        for label in range(len(metadatas)):
+            label_weight = summed_weights[label]
             rank = 0
-            for weight in label_weights:
+            for weight in summed_weights:
                 if label_weight > weight:
                     rank += 1
             rankings[label] = rank
 
         # Flip weights so smaller classes are more prominent
-        label_weights.sort(reverse=True)
-        new_label_weights = [label_weights[rankings[i]] for i in range(2)]
-        output_weights = [new_label_weights[i] for i in Y]
+        new_label_weights = [weights[(len(metadatas) - 1)-rankings[i]] for i in range(len(metadatas))]
+        print("weights: ", weights)
+        print("new_label_weights: ", new_label_weights)
+        
+
+        output_weights = []
+
+        for i in range(len(metadatas)):
+            metadata = metadatas[i]
+            genders = np.array(metadata.loc[:,"gender"])
+            genders[genders == 'F'] = new_label_weights[i][0]
+            genders[genders == 'M'] = new_label_weights[i][1]
+            len(genders)
+            output_weights += list(genders)
 
         # Normalize output weights
         norm_fact = sum(output_weights)
         output_weights = [weights / norm_fact for weights in output_weights]
 
         return output_weights
+

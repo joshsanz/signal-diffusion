@@ -3,18 +3,19 @@ import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import matplotlib.patches as mpatches
+
 
 def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
     model.eval()
     nclass = len(class_map)
     confusion = np.zeros((nclass, nclass), dtype=np.int32)
+    print(len(data_loader))
     for X, y in data_loader:
         with torch.no_grad():
             logits = model(X.to(device))
         y_hat = torch.argmax(logits, dim=-1)
         for true, pred in zip(y, y_hat):
-            if pred == 2:
-                pred = 1
             confusion[true, pred] += 1
 
     make_labels = False
@@ -45,6 +46,62 @@ def dataset_prevalence(datasets, dataset_map):
     plt.bar(dataset_map.values(), counts / np.sum(counts))
     plt.gca().yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=1))
 
+# Display insights about what subjects from what data make up a dataset
+def subject_prevalence(datasets):
+    # Helper function to find gender
+    def find_gend(sub, filesnames):
+        for filey in filenames:
+                if sub in filey:
+                    ind = list(filenames).index(filey)
+                    gender = genders[ind]
+                    return gender
+    
+    female_colors = ['red', 'blue', 'green']
+    male_colors = ['#ff9999','#66b3ff','#99ff99']
+    data_names = [dataset.dataname for dataset in datasets]
+    metadatas = [dataset.metadata for dataset in datasets]
+
+    colors = []
+    data = []
+    labels = []
+
+    for i in range(len(metadatas)):
+        metadata = metadatas[i]
+        filenames = metadata.iloc[:,0]
+        subs = [file.split('/')[0] for file in filenames]
+        genders = metadata.loc[:,'gender']
+        unique_subs = np.unique(subs)
+
+        for sub in unique_subs:
+            sub_count = subs.count(sub)
+            gender = find_gend(sub, filenames)
+            if gender == 'F':
+                colors.append(female_colors[i])
+            else:
+                colors.append(male_colors[i])
+
+            data.append(sub_count)
+            labels.append(sub)
+
+    # Creating plot
+    fig, ax = plt.subplots(figsize =(10, 7))
+    wp = { 'linewidth' : 1, 'edgecolor' : "black" }
+    tp = {'fontsize': 5}
+
+    patches, texts = ax.pie(data, labels = labels,colors=colors, textprops=tp, wedgeprops = wp)
+
+    # Create Legend
+    patches = [mpatches.Patch(color=female_colors[i], label="female " + data_names[i]) for i in range(len(datasets))]
+    patches.extend([mpatches.Patch(color=male_colors[i], label="male " + data_names[i]) for i in range(len(datasets))])
+
+    plt.legend(handles=patches, loc='upper left')
+
+    ax.set_title("Subject Prevalence")
+
+    # show plot
+    plt.show()
+
+
 def class_prevalence(data_loader, class_map):
     nclass = len(class_map)
     counts = np.zeros(nclass, dtype=np.int32)
@@ -74,7 +131,6 @@ def raw_class_confusion(ys, yhats, class_map):
     plt.ylabel("True Class")
     return confusion, fig
 
-
 # This one too!
 def raw_class_prevalence(ys, class_map):
     nclass = len(class_map)
@@ -87,3 +143,19 @@ def raw_class_prevalence(ys, class_map):
     plt.bar(class_map.values(), counts / np.sum(counts))
     plt.gca().yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0, decimals=1))
     return p
+
+# Loss vs Epoch & Acc vs Epoch
+def train_vs_epoch(losses, accuracies, name):
+    plt.subplots(figsize =(30, 7))
+    #plot 1:
+    plt.subplot(1, 2, 1)
+    plt.plot(range(len(losses)),losses)
+    plt.title("Losses")
+
+    #plot 2:
+    plt.subplot(1, 2, 2)
+    plt.plot(range(len(accuracies)),accuracies)
+    plt.title("Accuracies")
+
+    plt.suptitle(name + "Rates")
+    plt.show()
