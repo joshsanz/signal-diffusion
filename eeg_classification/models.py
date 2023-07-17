@@ -1,5 +1,7 @@
 # Models for transformer EEG classification
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 activation_map = {
@@ -71,10 +73,10 @@ class TransformerClassifier(nn.Module):
 # old ff dims: f_dims=[1000, 500, 250], dropout=0.5,
 class CNNClassifier(nn.Module):
     def __init__(self, in_channels, out_dim,
-                 conv_ks=[(12, 3), (8, 3), (4, 3)], conv_cs=[16, 64, 128],
+                 conv_ks=[(7, 3), (5,3), (3, 3)], conv_cs=[8, 16, 128],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 1), (1, 1), (1, 1)],
-                 pool_ks=[(4, 2), (2, 2), (2, 5)], pool_ss=[(4, 2), (2, 2), (2, 5)],
-                 ff_dims=[250, 125, 62], dropout=0.5,
+                 pool_ks=[(4, 2), (4, 2), (2, 2)], pool_ss=[(4, 2), (2, 2), (2, 2)],
+                 ff_dims=[500, 250, 125], dropout=0.5,
                  pooling="max", activation="gelu"):
         super().__init__()
         # Store architecture sizes & strides
@@ -109,7 +111,62 @@ class CNNClassifier(nn.Module):
         for i in range(len(ff_dims) - 1):
             self.fc.append(self.activation_fn())
             self.fc.append(nn.Dropout(dropout))
-            self.fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
+            self.fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))        
+        self.fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
+
+    def forward(self, x):
+        for layer in self.convs:
+            x = layer(x)
+        if len(x.shape) > 3:
+            x = x.view(x.shape[0], -1)
+        else:
+            x = x.view(-1)
+        for layer in self.fc:
+            x = layer(x)
+        return x
+
+
+class CNNClassifierLight(nn.Module):
+    def __init__(self, in_channels, out_dim,
+                 conv_ks=[(5,5), (3, 3)], conv_cs=[3, 8],
+                 conv_ss=[1, 1], conv_ps=[(2, 1), (1, 1)],
+                 pool_ks=[(4, 2), (2, 2)], pool_ss=[(4, 2), (2, 2)],
+                 ff_dims=[250, 125], dropout=0.5,
+                 pooling="max", activation="gelu"):
+        super().__init__()
+        # Store architecture sizes & strides
+        self.conv_kernels = conv_ks
+        self.conv_channels = conv_cs
+        self.conv_strides = conv_ss
+        self.conv_pads = conv_ps
+        self.pool_ks = pool_ks
+        self.pool_ss = pool_ss
+        self.hidden_layers = ff_dims
+        # Pooling type
+        if pooling == "max":
+            self.pooling = nn.MaxPool2d
+        else:
+            self.pooling = nn.AvgPool2d
+
+        self.activation_fn = activation_map[activation]
+        # Build conv layers
+        conv_chan_list = [in_channels] + self.conv_channels
+
+        self.convs = nn.ModuleList()
+        for i in range(len(conv_ks)):
+            self.convs.append(nn.Conv2d(conv_chan_list[i], conv_chan_list[i + 1],
+                                        self.conv_kernels[i], stride=self.conv_strides[i],
+                                        padding=self.conv_pads[i]))
+            self.convs.append(self.activation_fn())
+            self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
+        # Build linear layers
+        self.fc = nn.ModuleList()
+        self.fc.append(nn.Dropout(dropout))
+        self.fc.append(nn.LazyLinear(self.hidden_layers[0]))
+        for i in range(len(ff_dims) - 1):
+            self.fc.append(self.activation_fn())
+            self.fc.append(nn.Dropout(dropout))
+            self.fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))        
         self.fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
 
     def forward(self, x):

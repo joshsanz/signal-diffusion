@@ -58,6 +58,7 @@ def _train(output_permuter, args, model, train_data, val_data, optimizer, criter
     val_accuracies = []
     best_valid_acc = 0
     progress = tqdm(total=len(train_data) * args.epochs)
+    print("progress val: ", len(train_data) * args.epochs)
     for epoch in range(args.epochs):
         model.train()
         for i, (src, trg) in enumerate(train_data):

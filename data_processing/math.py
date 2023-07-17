@@ -19,6 +19,8 @@ from os.path import join as pjoin
 import bisect
 import shutil
 import math
+from tqdm.auto import tqdm
+
 
 # import support scripts: pull_data
 import common.multichannel_spectrograms as mcs
@@ -118,10 +120,10 @@ class MathPreprocessor():
         labels = []
 
         total_specs = 0
-        for sd in subject_dirs:
+        for sd in tqdm(subject_dirs):
             # Do one pass to get bkgrnd files and another for math, 1 = bkgnd, 2 = math
             i = 0
-            for state in range(1,3):
+            for state in range(1,2): # To include math set range to (1,3)
                 sub_file = sd + "_" + str(state) + ".edf"
                 sub_dir = os.path.join(self.eegdir, sub_file)
                 data = mne.io.read_raw_edf(sub_dir, preload=True)
@@ -160,7 +162,6 @@ class MathPreprocessor():
                         resolution=resolution, win_length=resolution,
                     )
                     fname = pjoin(sub_sd, f"spectrogram-{i}.png")
-                    print
                     files.append(fname)
                     isfemale, doing_math, age, label = self.get_label(sub_file)
                     genders.append(isfemale)
@@ -238,6 +239,7 @@ class MathPreprocessor():
 
 class MathDataset(torch.utils.data.Dataset):
     def __init__(self, datadir, split="train", transform=None):
+        self.dataname = 'math'
         self.datadir = datadir
         self.split = split
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)

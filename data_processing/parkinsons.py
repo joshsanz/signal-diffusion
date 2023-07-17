@@ -19,6 +19,8 @@ from os.path import join as pjoin
 import bisect
 import shutil
 import math
+from tqdm.auto import tqdm
+
 
 # import support scripts: pull_data
 import common.multichannel_spectrograms as mcs
@@ -89,7 +91,7 @@ class ParkinsonsPreprocessor():
         pds = []
         # Load data file for each subject
         total_specs = 0
-        for sd in subject_dirs:
+        for sd in tqdm(subject_dirs):
             setfile = glob.glob(pjoin(self.datadir, sd, "eeg", "*eeg.set"))[0]
             data = mne.io.read_raw_eeglab(setfile)
             data = data.get_data()
@@ -209,6 +211,7 @@ class ParkinsonsPreprocessor():
 
 class ParkinsonsDataset(torch.utils.data.Dataset):
     def __init__(self, datadir, split="train", transform=None):
+        self.dataname = 'parkinsons'
         self.datadir = datadir
         self.split = split
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
