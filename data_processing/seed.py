@@ -1,21 +1,15 @@
 # Datasets for EEG classification
 import csv
-import glob
 import mne
 import numpy as np
 import os
 import pandas as pd
-import re
 import torch
 from bidict import bidict
-from collections import OrderedDict
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
-from torch.utils.data import WeightedRandomSampler
 from os.path import join as pjoin
-import bisect
-import shutil
 import math
 from tqdm.auto import tqdm
 
@@ -48,6 +42,7 @@ seed_class_labels = bidict({
     8: f"{emotion_map.inverse[4]}_male",
     9: f"{emotion_map.inverse[4]}_female",
 })
+
 
 class SEEDPreprocessor():
     start_second = {
@@ -125,7 +120,8 @@ class SEEDPreprocessor():
         emotions = []
         captions = []
         # Load data file for each subject
-        raw = mne.io.read_raw_cnt(pjoin(self.datadir, "EEG_raw", data_file), preload=True)
+        sub_file = pjoin(self.datadir, "EEG_raw", data_file)
+        raw = mne.io.read_raw_cnt(sub_file, preload=True)
         raw_np = raw.get_data()
         for trial in range(self.n_trials):
             start_samp = self.start_second[session][trial] * self.orig_fs
@@ -137,7 +133,7 @@ class SEEDPreprocessor():
 
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, f"sub-{subject}"), exist_ok=True)
-            N = data.shape[1]                
+            N = data.shape[1]
             shift_size = self.nsamps - self.noverlap
             if self.noverlap != 0:
                 nblocks = math.floor((N - self.nsamps) / shift_size) + 1
@@ -148,7 +144,6 @@ class SEEDPreprocessor():
                     sub_file, N, self.nsamps, self.decimation
                 )
             )
-
 
             start_ind = 0
             end_ind = self.nsamps
@@ -189,8 +184,8 @@ class SEEDPreprocessor():
         N = len(metadata)
         n_train = int(np.ceil(train_frac * N))
         n_val = int(np.floor(val_frac * N))
-        n_test = N - (n_train + n_val)
-        subjects = metadata.loc[:,"file_name"].apply(lambda s: s.split("/")[0])
+        # n_test = N - (n_train + n_val)
+        subjects = metadata.loc[:, "file_name"].apply(lambda s: s.split("/")[0])
         subjects = subjects.unique()
         np.random.shuffle(subjects)
 
@@ -210,19 +205,18 @@ class SEEDPreprocessor():
             else:
                 testmeta = pd.concat([testmeta, addition])
 
-        print("trainmeta: ", len(trainmeta.loc[:,'file_name'].apply(lambda s: s.split("/")[0]).unique()))
-        
+        print("trainmeta: ", len(trainmeta.loc[:, 'file_name'].apply(lambda s: s.split("/")[0]).unique()))
+
         trainmeta.to_csv(pjoin(self.datadir, "stfts", "train-metadata.csv"), index=False)
         valmeta.to_csv(pjoin(self.datadir, "stfts", "val-metadata.csv"), index=False)
         testmeta.to_csv(pjoin(self.datadir, "stfts", "test-metadata.csv"), index=False)
-
 
     def preprocess(self, resolution=512, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         # Make output dir
         outdir = pjoin(self.datadir, "stfts")
         # Delete any premade stfts
-        #if os.path.isdir(outdir):
-            #shutil.rmtree(outdir)
+        # if os.path.isdir(outdir):
+        #     shutil.rmtree(outdir)
         # Create new stft output directory
         os.makedirs(outdir, exist_ok=True)
         # Spectrogram parameters
@@ -256,6 +250,8 @@ class SEEDPreprocessor():
 
 
 class SEEDDataset(torch.utils.data.Dataset):
+    name = "SEED V"
+
     def __init__(self, datadir, split="train", transform=None):
         self.dataname = 'seed'
         self.datadir = datadir
@@ -271,7 +267,7 @@ class SEEDDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.metadata)
-    
+
     def __getitem__(self, index):
         fn = self.metadata.iloc[index]["file_name"]
         im = Image.open(pjoin(self.datadir, fn))

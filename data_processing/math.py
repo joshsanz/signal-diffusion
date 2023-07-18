@@ -239,6 +239,8 @@ class MathPreprocessor():
 
 
 class MathDataset(torch.utils.data.Dataset):
+    name = "Math"
+
     def __init__(self, datadir, split="train", transform=None):
         self.dataname = 'math'
         self.datadir = datadir

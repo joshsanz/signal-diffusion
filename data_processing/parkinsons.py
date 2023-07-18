@@ -10,13 +10,10 @@ import pandas as pd
 import re
 import torch
 from bidict import bidict
-from collections import OrderedDict
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
-from torch.utils.data import WeightedRandomSampler
 from os.path import join as pjoin
-import bisect
 import shutil
 import math
 from tqdm.auto import tqdm
@@ -50,14 +47,12 @@ class ParkinsonsPreprocessor():
         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
         self.ovr_perc = ovr_perc
         self.noverlap = int(np.floor(nsamps * ovr_perc))
-        
 
         # Get subject info
         self.subjects = pd.read_csv(os.path.join(datadir, "participants.tsv"), sep="\t")
         self.n_channels = len(parkinsons_channels)
 
-
-    def get_num_channels():
+    def get_num_channels(self):
         return self.n_channels
 
     def get_gender(self, sd):
@@ -102,7 +97,7 @@ class ParkinsonsPreprocessor():
             data = self.decimate(data)
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
-            N = data.shape[1]                
+            N = data.shape[1]
             shift_size = self.nsamps - self.noverlap
 
             if self.noverlap != 0:
@@ -113,7 +108,7 @@ class ParkinsonsPreprocessor():
                 "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
                     setfile, N, self.nsamps, self.decimation
                 )
-            )  
+            )
             total_specs += nblocks
 
             start_ind = 0
@@ -138,10 +133,9 @@ class ParkinsonsPreprocessor():
                 i += 1
 
         assert total_specs == len(files), (
-                    "{} spectrograms were generated, {} should've been made".format(
-                        len(files), total_specs
-                    )
-                )
+            "{} spectrograms were generated, {} should've been made".format(
+                len(files), total_specs
+            ))
         return files, genders, ages, pds
 
     def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
@@ -182,7 +176,7 @@ class ParkinsonsPreprocessor():
     def preprocess(self, resolution=512, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         # Make output dir
         outdir = pjoin(self.datadir, "stfts")
-         # Delete any premade stfts
+        # Delete any premade stfts
         if os.path.isdir(outdir):
             shutil.rmtree(outdir)
         # Create new stft output directory
@@ -210,6 +204,8 @@ class ParkinsonsPreprocessor():
 
 
 class ParkinsonsDataset(torch.utils.data.Dataset):
+    name = "Parkinsons"
+
     def __init__(self, datadir, split="train", transform=None):
         self.dataname = 'parkinsons'
         self.datadir = datadir
@@ -239,12 +235,13 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
 
+
 class ParkinsonsSampler(torch.utils.data.Sampler):
     def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
-        self.num_samples = num_samples # Number of samples to draw not total
+        self.num_samples = num_samples  # Number of samples to draw not total
         self.split = split
         self.replacement = replacement
         self.generator = generator
@@ -263,7 +260,7 @@ class ParkinsonsSampler(torch.utils.data.Sampler):
             gender = self.metadata.iloc[i]["gender"]
             Y.append((health == "PD") * 2 + (gender == "F"))
         # Get the current weights of each class
-        label_weights = [Y.count(i)/len(metadata) for i in range(4)]
+        label_weights = [Y.count(i) / len(metadata) for i in range(4)]
 
         # Class rankings
         rankings = {}

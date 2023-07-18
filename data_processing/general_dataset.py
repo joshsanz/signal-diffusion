@@ -9,9 +9,6 @@ from collections import OrderedDict
 from os.path import join as pjoin
 import bisect
 import warnings
-import math
-import shutil
-from tqdm.auto import tqdm
 
 # Import support scripts: pull_data
 from data_processing.math import MathPreprocessor
@@ -121,6 +118,11 @@ class GeneralPreprocessor:
         self.seed_pre = SEEDPreprocessor(
             self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
         )
+
+    def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
+        self.math_pre.make_tvt_splits(train_frac, val_frac, test_frac, seed)
+        self.park_pre.make_tvt_splits(train_frac, val_frac, test_frac, seed)
+        self.seed_pre.make_tvt_splits(train_frac, val_frac, test_frac, seed)
 
     def preprocess(self, resolution=256, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         if seed is not None:
@@ -234,7 +236,7 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
         totals, male, female = [], 0, 0
 
         for metadata in metadatas:
-            genders = metadata.loc[:,"gender"]
+            genders = metadata.loc[:, "gender"]
             totals.append(len(metadata))
             female += list(genders).count('F')
             male += list(genders).count('M')
@@ -243,12 +245,10 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             print("female: ", female)
             print("male: ", male)
 
-
-
         total_samps = sum(totals)
-        gend_weights = [male/total_samps, (female/total_samps)]
+        gend_weights = [male / total_samps, (female / total_samps)]
         print(gend_weights)
-        dataset_weights = [total/total_samps for total in totals]
+        dataset_weights = [total / total_samps for total in totals]
 
         summed_weights = []
         weights = []
@@ -270,16 +270,15 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             rankings[label] = rank
 
         # Flip weights so smaller classes are more prominent
-        new_label_weights = [weights[(len(metadatas) - 1)-rankings[i]] for i in range(len(metadatas))]
+        new_label_weights = [weights[(len(metadatas) - 1) - rankings[i]] for i in range(len(metadatas))]
         print("weights: ", weights)
         print("new_label_weights: ", new_label_weights)
-        
 
         output_weights = []
 
         for i in range(len(metadatas)):
             metadata = metadatas[i]
-            genders = np.array(metadata.loc[:,"gender"])
+            genders = np.array(metadata.loc[:, "gender"])
             genders[genders == 'F'] = new_label_weights[i][0]
             genders[genders == 'M'] = new_label_weights[i][1]
             len(genders)
@@ -290,4 +289,3 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
         output_weights = [weights / norm_fact for weights in output_weights]
 
         return output_weights
-

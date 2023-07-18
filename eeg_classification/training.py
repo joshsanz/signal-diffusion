@@ -12,6 +12,7 @@ class TrainingConfig:
     opt_restart_every: int = 200
     opt_log_every: int = 100
     val_every_epochs: int = 1
+    clip_grad_norm: float = 1.0
 
 
 def linear_combination(x, y, epsilon):
@@ -92,7 +93,7 @@ def _train(output_permuter, args, model, train_data, val_data, optimizer, criter
             output = model(src)
             loss = criterion(output_permuter(output), trg)
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
             # Log loss, accuracy
