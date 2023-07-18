@@ -186,7 +186,7 @@ def display_conv_weights(convs):
             plt.show()
 
 
-def roc(model, data_loader, device='cpu', fig=None):
+def roc(model, data_loader, device='cpu', fig=None, label=None):
     model.to(device)
     model.eval()
     ys = []
@@ -212,12 +212,12 @@ def roc(model, data_loader, device='cpu', fig=None):
     # Area under curve
     auc = np.trapz(prob_detection[::-1], prob_false_alarm[::-1])
 
-    if not fig:
-        plt.figure(figsize=(6, 4))
-    plt.plot(prob_false_alarm, prob_detection, linewidth=2)
-    plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
-    plt.xlabel(f"Probability of False Alarm\nAUC: {auc:.3f}")
-    plt.ylabel("Probability of Detection")
-    plt.title("ROC Curve")
+    if fig is None:
+        fig = plt.figure(figsize=(6, 4))
+        plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
+        plt.xlabel("Probability of False Alarm")
+        plt.ylabel("Probability of Detection")
+        plt.title("ROC Curve")
+    plt.plot(prob_false_alarm, prob_detection, linewidth=2, label=label + f" AUC: {auc:.3f}")
 
     return fig, prob_detection, prob_false_alarm
