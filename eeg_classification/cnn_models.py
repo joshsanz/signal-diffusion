@@ -26,6 +26,8 @@ def model_size(model):
 
 # old ff dims: f_dims=[1000, 500, 250], dropout=0.5,
 class CNNClassifier(nn.Module):
+    name = "CNNClassifier"
+
     def __init__(self, in_channels, out_dim,
                  conv_ks=[(7, 3), (5, 3), (3, 3)], conv_cs=[8, 16, 128],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 1), (1, 1), (1, 1)],
@@ -81,6 +83,8 @@ class CNNClassifier(nn.Module):
 
 
 class CNNClassifierLight(nn.Module):
+    name = "CNNClassifierLight"
+
     def __init__(self, in_channels, out_dim,
                  conv_ks=[(5, 5), (3, 3)], conv_cs=[3, 8],
                  conv_ss=[1, 1], conv_ps=[(2, 1), (1, 1)],
@@ -136,6 +140,8 @@ class CNNClassifierLight(nn.Module):
 
 
 class EfficientNet(nn.Module):
+    name = "EfficientNet"
+
     def __init__(self, out_dim, dropout=0.1):
         super(EfficientNet, self).__init__()
         self.model = torchvision.models.efficientnet_b0(
@@ -143,22 +149,26 @@ class EfficientNet(nn.Module):
         )
 
     def forward(self, x):
+        x = x.expand(-1, 3, -1, -1)
         return self.model(x)
 
 
 class ShuffleNet(nn.Module):
+    name = "ShuffleNet"
+
     def __init__(self, out_dim, dropout=0.1):
         super().__init__()
-        self.model = torchvision.models.shufflenet_v2_x0_5(
+        self.model = torchvision.models.shufflenetv2._shufflenetv2(
             weights=None,
-            dropout=dropout,
             num_classes=out_dim,
             # Repeats and out channels are defaults from pytorch implementation
             stages_repeats=[4, 8, 4],
             stages_out_channels=[24, 48, 96, 192, 1024],
+            progress=False,
         )
 
     def forward(self, x):
+        x = x.expand(-1, 3, -1, -1)
         return self.model(x)
 
 
@@ -194,21 +204,23 @@ class ResidualBlock(nn.Module):
 
 class ResNet(nn.Module):
     """From https://blog.paperspace.com/writing-resnet-from-scratch-in-pytorch/"""
-    def __init__(self, block=ResidualBlock, layers=[2, 2, 4, 2], num_classes=2):
+    name = "ResNet"
+
+    def __init__(self, block=ResidualBlock, layers=[2, 2, 4, 2], out_dim=2):
         super(ResNet, self).__init__()
-        self.inplanes = 64
+        self.inplanes = 16
         self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(1, self.inplanes, kernel_size=7, stride=2, padding=3),
+            nn.BatchNorm2d(self.inplanes),
             nn.ReLU(),
         )
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer0 = self._make_layer(block, 64, layers[0], stride=1)
-        self.layer1 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer2 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer3 = self._make_layer(block, 512, layers[3], stride=2)
+        self.layer0 = self._make_layer(block, self.inplanes, layers[0], stride=1)
+        self.layer1 = self._make_layer(block, self.inplanes * 2, layers[1], stride=2)
+        self.layer2 = self._make_layer(block, self.inplanes * 4, layers[2], stride=2)
+        self.layer3 = self._make_layer(block, self.inplanes * 8, layers[3], stride=2)
         self.avgpool = nn.AvgPool2d(7, stride=1)
-        self.fc = nn.LazyLinear(512, num_classes)
+        self.fc = nn.LazyLinear(512, out_dim)
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
