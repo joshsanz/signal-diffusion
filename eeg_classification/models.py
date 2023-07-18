@@ -128,11 +128,12 @@ class CNNClassifier(nn.Module):
 
 class CNNClassifierLight(nn.Module):
     def __init__(self, in_channels, out_dim,
-                 conv_ks=[(5,5), (3, 3)], conv_cs=[3, 8],
-                 conv_ss=[1, 1], conv_ps=[(2, 1), (1, 1)],
-                 pool_ks=[(4, 2), (2, 2)], pool_ss=[(4, 2), (2, 2)],
-                 ff_dims=[250, 125], dropout=0.5,
+                 conv_ks=[(5,5), (3, 3), (3, 3)], conv_cs=[8, 16, 32],
+                 conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1, 1), (1,1)],
+                 pool_ks=[(2, 2), (2, 2), (2, 2)], pool_ss=[(2, 2), (2, 2), (2, 2)],
+                 ff_dims=[200, 100], dropout=0.5,
                  pooling="max", activation="gelu"):
+
         super().__init__()
         # Store architecture sizes & strides
         self.conv_kernels = conv_ks
@@ -163,6 +164,7 @@ class CNNClassifierLight(nn.Module):
         self.fc = nn.ModuleList()
         self.fc.append(nn.Dropout(dropout))
         self.fc.append(nn.LazyLinear(self.hidden_layers[0]))
+        print("self.hidden_layers[0]: ", self.hidden_layers[0])
         for i in range(len(ff_dims) - 1):
             self.fc.append(self.activation_fn())
             self.fc.append(nn.Dropout(dropout))
@@ -179,3 +181,4 @@ class CNNClassifierLight(nn.Module):
         for layer in self.fc:
             x = layer(x)
         return x
+    
