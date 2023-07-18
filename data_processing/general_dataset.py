@@ -129,13 +129,16 @@ class GeneralPreprocessor:
             np.random.seed(seed)
 
         # Preprocess Math data
-        self.math_pre.preprocess(resolution=resolution)
+        self.math_pre.preprocess(resolution=resolution, train_frac=train_frac, 
+            val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess Parkinsons data
-        self.park_pre.preprocess(resolution=resolution)
+        self.park_pre.preprocess(resolution=resolution, train_frac=train_frac, 
+            val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess SEED data
-        self.seed_pre.preprocess(resolution=resolution)
+        self.seed_pre.preprocess(resolution=resolution, train_frac=train_frac, 
+            val_frac=val_frac, test_frac=test_frac)
 
 
 class GeneralDataset(torch.utils.data.ConcatDataset):
@@ -241,14 +244,9 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             female += list(genders).count('F')
             male += list(genders).count('M')
 
-            print("totals: ", totals)
-            print("female: ", female)
-            print("male: ", male)
-
         total_samps = sum(totals)
-        gend_weights = [male / total_samps, (female / total_samps)]
-        print(gend_weights)
-        dataset_weights = [total / total_samps for total in totals]
+        gend_weights = [male/total_samps, (female/total_samps)]
+        dataset_weights = [total/total_samps for total in totals]
 
         summed_weights = []
         weights = []
@@ -270,10 +268,7 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             rankings[label] = rank
 
         # Flip weights so smaller classes are more prominent
-        new_label_weights = [weights[(len(metadatas) - 1) - rankings[i]] for i in range(len(metadatas))]
-        print("weights: ", weights)
-        print("new_label_weights: ", new_label_weights)
-
+        new_label_weights = [weights[(len(metadatas) - 1)-rankings[i]] for i in range(len(metadatas))]
         output_weights = []
 
         for i in range(len(metadatas)):

@@ -4,6 +4,10 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.patches as mpatches
+from IPython.display import Image, display
+import os
+from os.path import join as pjoin
+import pandas as pd
 
 
 def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
@@ -185,7 +189,6 @@ def display_conv_weights(convs):
 
             plt.show()
 
-
 def roc(model, data_loader, device='cpu', fig=None, label=None):
     model.to(device)
     model.eval()
@@ -219,5 +222,37 @@ def roc(model, data_loader, device='cpu', fig=None, label=None):
         plt.ylabel("Probability of Detection")
         plt.title("ROC Curve")
     plt.plot(prob_false_alarm, prob_detection, linewidth=2, label=label + f" AUC: {auc:.3f}")
+    plt.legend()
 
     return fig, prob_detection, prob_false_alarm
+
+def display_sftf(datadir, dataset, sub_ind=0, spec_ind=0):
+    if sub_ind != 0:
+        sub_ind -= 1
+
+    sub_ind_str = str(sub_ind)
+    spec_ind = str(spec_ind)
+    if dataset == 'math':
+        num_zeros = (2 - len(sub_ind_str)) * '0'
+        sub_ind_str = num_zeros + sub_ind_str
+        image_path = os.path.join(datadir, "eeg_math/stfts/sub" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
+        sub_info = pd.read_csv(os.path.join(datadir, "eeg_math/subject-info.csv"))
+
+    elif dataset == 'parkinsons':
+        
+        num_zeros = (3 - len(str(sub_ind_str))) * '0'
+        sub_ind_str = num_zeros + sub_ind_str
+        image_path = os.path.join(datadir, "parkinsons/stfts/sub-" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
+        sub_info = pd.read_csv(os.path.join(datadir, "parkinsons/participants.tsv"), sep="\t")
+
+    elif dataset == 'seed':
+        image_path = os.path.join(datadir, "seed/stfts/sub-" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
+        sub_info = pd.read_csv(os.path.join(datadir, "seed/participants_info.csv"))
+
+    sub_info = sub_info.iloc[sub_ind, :]
+    print(sub_info)     
+    display(Image(filename=image_path))
+
+
+        
+    
