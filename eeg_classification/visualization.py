@@ -159,3 +159,23 @@ def train_vs_epoch(losses, accuracies, name):
 
     plt.suptitle(name + "Rates")
     plt.show()
+
+
+def display_conv_weights(convs):
+    for conv in convs:
+        i = 1
+        if type(conv) == torch.nn.modules.conv.Conv2d:
+            num_cols = conv.weight.shape[0]
+            num_rows = conv.weight.shape[1]
+            conv_max, conv_min = conv.weight.max(), conv.weight.min()
+            filters = (conv.weight- conv_min) / (conv_max - conv_min)
+
+            plt.subplots(figsize =(30, 30))
+            print(filters.shape)
+            for layer in filters:
+                for filt in layer:
+                    plt.subplot(num_rows, num_cols, i)
+                    plt.imshow(filt.cpu().detach().numpy(), cmap='gray')
+                    i += 1
+            
+            plt.show()
