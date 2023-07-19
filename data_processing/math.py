@@ -2,21 +2,16 @@
 
 # Datasets for EEG classification
 import csv
-import glob
 import mne
 import numpy as np
 import os
 import pandas as pd
-import re
 import torch
 from bidict import bidict
-from collections import OrderedDict
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
-from torch.utils.data import WeightedRandomSampler
 from os.path import join as pjoin
-import bisect
 import shutil
 import math
 from tqdm.auto import tqdm
@@ -24,7 +19,6 @@ from tqdm.auto import tqdm
 
 # import support scripts: pull_data
 import common.multichannel_spectrograms as mcs
-from data_processing.channel_map import math_channels
 
 mne.set_log_level("WARNING")
 
@@ -124,7 +118,7 @@ class MathPreprocessor():
         for sd in tqdm(subject_dirs):
             # Do one pass to get bkgrnd files and another for math, 1 = bkgnd, 2 = math
             i = 0
-            for state in range(1,2): # To include math set range to (1,3)
+            for state in range(1, 2):  # To include math set range to (1,3)
                 sub_file = sd + "_" + str(state) + ".edf"
                 sub_dir = os.path.join(self.eegdir, sub_file)
                 data = mne.io.read_raw_edf(sub_dir, preload=True)
@@ -133,7 +127,7 @@ class MathPreprocessor():
                 # Decimate data
                 data = self.decimate(data)
                 # Break data into chunks and save
-                sub_sd = "sub" + sd[len(sd)-2:]
+                sub_sd = "sub" + sd[len(sd) - 2:]
                 os.makedirs(pjoin(outdir, sub_sd), exist_ok=True)
                 N = data.shape[1]
                 shift_size = self.nsamps - self.noverlap
@@ -173,12 +167,11 @@ class MathPreprocessor():
                     i += 1
 
         assert total_specs == len(files), (
-                    "{} spectrograms where generated, {} should've been made".format(
-                        len(files), total_specs
-                    )
-                )
+            "{} spectrograms where generated, {} should've been made".format(
+                len(files), total_specs
+            ))
 
-        return files , genders , maths, ages, labels
+        return files, genders, maths, ages, labels
 
     def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
         if seed is not None:
@@ -193,8 +186,8 @@ class MathPreprocessor():
         N = len(metadata)
         n_train = int(np.ceil(train_frac * N))
         n_val = int(np.floor(val_frac * N))
-        n_test = N - (n_train + n_val)
-        subjects = metadata.loc[:,"file_name"].apply(lambda s: s.split("/")[0])
+        # n_test = N - (n_train + n_val)
+        subjects = metadata.loc[:, "file_name"].apply(lambda s: s.split("/")[0])
         subjects = subjects.unique()
         np.random.shuffle(subjects)
 
@@ -241,10 +234,13 @@ class MathPreprocessor():
 class MathDataset(torch.utils.data.Dataset):
     name = "Math"
 
-    def __init__(self, datadir, split="train", transform=None):
+    def __init__(self, datadir, split="train", transform=None, task="gender"):
         self.dataname = 'math'
         self.datadir = datadir
         self.split = split
+        assert task in ["gender", "math"], (
+            "Invalid task {} for MathDataset: choices are gender, math".format(self.task)
+        )
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         if transform is None:
@@ -264,9 +260,11 @@ class MathDataset(torch.utils.data.Dataset):
         doing_math = self.metadata.iloc[index]["doingmath"]
         gender = self.metadata.iloc[index]["gender"]
         isfemale = gender == "F"
-        y = int(2 * doing_math + 1 * isfemale)
-
-        return im, y % 2
+        if self.task == "gender":
+            y = int(isfemale)
+        else:
+            y = int(doing_math)
+        return im, y
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]

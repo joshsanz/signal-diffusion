@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 
 activation_map = {
@@ -86,19 +87,11 @@ class CNNClassifierLight(nn.Module):
     name = "CNNClassifierLight"
 
     def __init__(self, in_channels, out_dim,
-                 conv_ks=[(5,5), (3, 3), (3,3)], conv_cs=[4, 8, 16],
-                 conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1,1), (1,1)],
+                 conv_ks=[(5, 5), (3, 3), (3, 3)], conv_cs=[4, 8, 16],
+                 conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1, 1), (1, 1)],
                  pool_ks=[(2, 2), (2, 2), (2, 2)], pool_ss=[(2, 2), (2, 2), (2, 2)],
                  ff_dims=[250, 75], dropout=0.5,
                  pooling="max", activation="gelu"):
-
-    # def __init__(self, in_channels, out_dim,
-    #              conv_ks=[(5,5), (3, 3), (3,3)], conv_cs=[4, 8, 16],
-    #              conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1,1), (1,1)],
-    #              pool_ks=[(2, 2), (2, 2), (2, 2)], pool_ss=[(2, 2), (2, 2), (2, 2)],
-    #              ff_dims=[500, 250, 75], dropout=0.5,
-    #              pooling="max", activation="gelu"):
-
         super().__init__()
         # Store architecture sizes & strides
         self.conv_kernels = conv_ks
@@ -126,26 +119,28 @@ class CNNClassifierLight(nn.Module):
             self.convs.append(self.activation_fn())
             self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
         # Build linear layers
-        self.fc = nn.ModuleList()
-        self.fc.append(nn.Dropout(dropout))
-        #self.fc.append(nn.LazyLinear(self.hidden_layers[0]))
-        self.fc.append(nn.Linear(16384, self.hidden_layers[0]))        
-        for i in range(len(ff_dims) - 1):
-            self.fc.append(self.activation_fn())
-            self.fc.append(nn.Dropout(dropout))
-            self.fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))        
-        self.fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
+        self.fcs = {"gender": nn.ModuleList(), "emotion": nn.ModuleList(), "health": nn.ModuleList()}
+        for fc in self.fcs.values():
+            fc.append(nn.Dropout(dropout))
+            # fc.append(nn.LazyLinear(self.hidden_layers[0]))
+            fc.append(nn.Linear(16384, self.hidden_layers[0]))
+            for i in range(len(ff_dims) - 1):
+                fc.append(self.activation_fn())
+                fc.append(nn.Dropout(dropout))
+                fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
+            fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
 
-    def forward(self, x):
+    def forward(self, x, task="gender"):
         for layer in self.convs:
             x = layer(x)
         if len(x.shape) > 3:
             x = x.view(x.shape[0], -1)
         else:
             x = x.view(-1)
-        for layer in self.fc:
+        for layer in self.fcs[task]:
             x = layer(x)
         return x
+
 
 class EfficientNet(nn.Module):
     name = "EfficientNet"
@@ -259,23 +254,24 @@ class ResNet(nn.Module):
 
         return x
 
-import torch.nn.functional as F
 
-def linear_combination(x, y, epsilon): 
-    return epsilon*x + (1-epsilon)*y
+def linear_combination(x, y, epsilon):
+    return epsilon * x + (1 - epsilon) * y
+
 
 def reduce_loss(loss, reduction='mean'):
-    return loss.mean() if reduction=='mean' else loss.sum() if reduction=='sum' else loss
+    return loss.mean() if reduction == 'mean' else loss.sum() if reduction == 'sum' else loss
+
 
 class LabelSmoothingCrossEntropy(nn.Module):
-    def __init__(self, epsilon:float=0.0, reduction='mean'):
+    def __init__(self, epsilon: float = 0.0, reduction='mean'):
         super().__init__()
         self.epsilon = epsilon
         self.reduction = reduction
-    
+
     def forward(self, preds, target):
         n = preds.size()[-1]
         log_preds = F.log_softmax(preds, dim=-1)
         loss = reduce_loss(-log_preds.sum(dim=-1), self.reduction)
         nll = F.nll_loss(log_preds, target, reduction=self.reduction)
-        return linear_combination(loss/n, nll, self.epsilon)
+        return linear_combination(loss / n, nll, self.epsilon)

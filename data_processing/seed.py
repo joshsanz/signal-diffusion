@@ -252,10 +252,14 @@ class SEEDPreprocessor():
 class SEEDDataset(torch.utils.data.Dataset):
     name = "SEED V"
 
-    def __init__(self, datadir, split="train", transform=None):
+    def __init__(self, datadir, split="train", transform=None, task="gender"):
         self.dataname = 'seed'
         self.datadir = datadir
         self.split = split
+        assert task in ["gender", "emotion"], (
+            "Invalid task {} for SEEDDataset: choices are gender, emotion".format(self.task)
+        )
+        self.task = task
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         if transform is None:
@@ -274,8 +278,11 @@ class SEEDDataset(torch.utils.data.Dataset):
         im = self.transform(im)
         emotion = self.metadata.iloc[index]["emotion"]
         gender = self.metadata.iloc[index]["gender"]
-        y = (emotion) * 2 + (gender == "F")
-        return im, (y % 2)
+        if self.task == "gender":
+            y = int(gender == "F")
+        else:
+            y = emotion
+        return im, y
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]

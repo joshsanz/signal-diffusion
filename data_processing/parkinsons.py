@@ -206,10 +206,14 @@ class ParkinsonsPreprocessor():
 class ParkinsonsDataset(torch.utils.data.Dataset):
     name = "Parkinsons"
 
-    def __init__(self, datadir, split="train", transform=None):
+    def __init__(self, datadir, split="train", transform=None, task="gender"):
         self.dataname = 'parkinsons'
         self.datadir = datadir
         self.split = split
+        assert task in ["gender", "health"], (
+            "Invalid task {} for ParkinsonsDataset: choices are gender, health".format(self.task)
+        )
+        self.task = task
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
         if transform is None:
@@ -228,9 +232,11 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         im = self.transform(im)
         health = self.metadata.iloc[index]["health"]
         gender = self.metadata.iloc[index]["gender"]
-        y = (health == "PD") * 2 + (gender == "F")
-
-        return im, y % 2
+        if self.task == "gender":
+            y = int(gender == "F")
+        else:
+            y = int(health == "PD")
+        return im, y
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]

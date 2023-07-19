@@ -69,27 +69,6 @@ class CacheDict(OrderedDict):
         return val
 
 
-#  Class to generalize all the preprocessors, WORK ON LATER
-
-# class EEGPreprocessor:
-#     def __init__(self, datadir, nsampls, orig_fs, ovr_perc=0, fs=250):
-#         self.datadir = datadir
-#         self.eegdir = os.path.join(self.datadir, "raw_eeg")
-#         self.stfttdir = os.path.join(self.datadir, "stfts")
-
-#         # Establish sampling constants
-#         self.orig_fs = orig_fs
-#         self.fs = fs
-#         self.decimation = orig_fs // fs
-#         print("Decimation factor {} new fs {}".format(self.decimation, orig_fs / self.decimation))
-#         self.nsamps = int(nsamps * (1/self.decimation))
-#         print("Decimation factor {} new number of samples {}".format(self.decimation, self.nsamps))
-#         self.ovr_perc = ovr_perc
-#         self.noverlaps = int(nsamps * ovr_perc * (1/self.decimation))
-
-#         self.subjects = pd.read_csv(os.path.join(datadir, "subject-info.csv"))
-
-
 #################
 # General Dataset
 class GeneralPreprocessor:
@@ -129,23 +108,30 @@ class GeneralPreprocessor:
             np.random.seed(seed)
 
         # Preprocess Math data
-        self.math_pre.preprocess(resolution=resolution, train_frac=train_frac, 
-            val_frac=val_frac, test_frac=test_frac)
+        self.math_pre.preprocess(resolution=resolution, train_frac=train_frac,
+                                 val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess Parkinsons data
-        self.park_pre.preprocess(resolution=resolution, train_frac=train_frac, 
-            val_frac=val_frac, test_frac=test_frac)
+        self.park_pre.preprocess(resolution=resolution, train_frac=train_frac,
+                                 val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess SEED data
-        self.seed_pre.preprocess(resolution=resolution, train_frac=train_frac, 
-            val_frac=val_frac, test_frac=test_frac)
+        self.seed_pre.preprocess(resolution=resolution, train_frac=train_frac,
+                                 val_frac=val_frac, test_frac=test_frac)
 
 
 class GeneralDataset(torch.utils.data.ConcatDataset):
-    def __init__(self, datasets, resolution=256, hop_length=192, split="train"):
+    def __init__(self, datasets, resolution=256, hop_length=192, split="train", task="gender"):
         super().__init__(datasets)
 
         self.split = split
+        assert task in ["gender", "other"], "Invalid task {}: options are gender, other".format(task)
+        self.task = task
+        if task == "other":
+            raise NotImplementedError("'Other' task not implemented yet")
+        else:
+            for dataset in datasets:
+                assert task == dataset.task, "Task mismatch: {} != {}".format(task, dataset.task)
         self.datasets = datasets
         assert len(self.datasets) > 0, "datasets should not be an empty iterable"  # type: ignore[arg-type]
         for d in self.datasets:
@@ -245,8 +231,8 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             male += list(genders).count('M')
 
         total_samps = sum(totals)
-        gend_weights = [male/total_samps, (female/total_samps)]
-        dataset_weights = [total/total_samps for total in totals]
+        gend_weights = [male / total_samps, (female / total_samps)]
+        dataset_weights = [total / total_samps for total in totals]
 
         summed_weights = []
         weights = []
@@ -268,7 +254,7 @@ class GeneralSampler(torch.utils.data.WeightedRandomSampler):
             rankings[label] = rank
 
         # Flip weights so smaller classes are more prominent
-        new_label_weights = [weights[(len(metadatas) - 1)-rankings[i]] for i in range(len(metadatas))]
+        new_label_weights = [weights[(len(metadatas) - 1) - rankings[i]] for i in range(len(metadatas))]
         output_weights = []
 
         for i in range(len(metadatas)):

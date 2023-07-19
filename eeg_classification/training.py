@@ -96,7 +96,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
-            
+
             # Log loss, accuracy
             losses.append(loss.item())
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
@@ -117,6 +117,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
 
         if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
             _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device, tblogger, global_step)
+            _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device, tblogger, global_step, swa=True)
             val_accuracies.append(val_acc)
             if val_acc > best_valid_acc:
                 best_valid_acc = val_acc
@@ -137,7 +138,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     return losses, accuracies, val_accuracies
 
 
-def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step):
+def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, swa=False):
     model.eval()
     eval_loss = 0
     eval_accuracy = 0
@@ -152,6 +153,11 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
             eval_accuracy += accuracy.item()
-    tblogger.add_scalar("Loss/validate", eval_loss / N, global_step=step)
-    tblogger.add_scalar("Accuracy/validate", eval_accuracy / N, global_step=step)
+    loss_name = "Loss/validate"
+    acc_name = "Accuracy/validate"
+    if swa:
+        loss_name = "Loss/validate_swa"
+        acc_name = "Accuracy/validate_swa"
+    tblogger.add_scalar(loss_name, eval_loss / N, global_step=step)
+    tblogger.add_scalar(acc_name, eval_accuracy / N, global_step=step)
     return eval_loss / N, eval_accuracy / N
