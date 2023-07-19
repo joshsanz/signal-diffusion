@@ -119,16 +119,28 @@ class CNNClassifierLight(nn.Module):
             self.convs.append(self.activation_fn())
             self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
         # Build linear layers
-        self.fcs = {"gender": nn.ModuleList(), "emotion": nn.ModuleList(), "health": nn.ModuleList()}
-        for fc in self.fcs.values():
-            fc.append(nn.Dropout(dropout))
-            # fc.append(nn.LazyLinear(self.hidden_layers[0]))
-            fc.append(nn.Linear(16384, self.hidden_layers[0]))
-            for i in range(len(ff_dims) - 1):
-                fc.append(self.activation_fn())
+        if isinstance(out_dim, dict):
+            self.fcs = {"gender": nn.ModuleList(), "emotion": nn.ModuleList(), "health": nn.ModuleList()}
+            for task, fc in self.fcs.items():
+                self.register_module(f"fc_{task}", fc)
                 fc.append(nn.Dropout(dropout))
-                fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
-            fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
+                # fc.append(nn.LazyLinear(self.hidden_layers[0]))
+                fc.append(nn.Linear(16384, self.hidden_layers[0]))
+                for i in range(len(ff_dims) - 1):
+                    fc.append(self.activation_fn())
+                    fc.append(nn.Dropout(dropout))
+                    fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
+                fc.append(nn.Linear(self.hidden_layers[-1], out_dim[task]))
+        else:
+            self.fcs = nn.ModuleList()
+            self.fcs.append(nn.Dropout(dropout))
+            # self.fcs.append(nn.LazyLinear(self.hidden_layers[0]))
+            self.fcs.append(nn.Linear(16384, self.hidden_layers[0]))
+            for i in range(len(ff_dims) - 1):
+                self.fcs.append(self.activation_fn())
+                self.fcs.append(nn.Dropout(dropout))
+                self.fcs.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
+            self.fcs.append(nn.Linear(self.hidden_layers[-1], out_dim[task]))
 
     def forward(self, x, task="gender"):
         for layer in self.convs:
@@ -137,7 +149,11 @@ class CNNClassifierLight(nn.Module):
             x = x.view(x.shape[0], -1)
         else:
             x = x.view(-1)
-        for layer in self.fcs[task]:
+        if isinstance(self.fcs, dict):
+            fc = self.fcs[task]
+        else:
+            fc = self.fcs
+        for layer in fc:
             x = layer(x)
         return x
 

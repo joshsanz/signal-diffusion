@@ -30,6 +30,7 @@ emotion_map = bidict({
     "neutral": 3,
     "happy": 4
 })
+emotion_class_labels = {i: emotion_map.inverse[i] for i in range(len(emotion_map))}
 seed_class_labels = bidict({
     0: f"{emotion_map.inverse[0]}_male",
     1: f"{emotion_map.inverse[0]}_female",

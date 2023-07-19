@@ -31,6 +31,10 @@ parkinsons_class_labels = bidict({
     2: "parkinsons_male",
     3: "parkinsons_female",
 })
+health_class_labels = bidict({
+    0: "healthy",
+    1: "parkinsons",
+})
 
 
 class ParkinsonsPreprocessor():

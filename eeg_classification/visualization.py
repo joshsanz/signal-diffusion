@@ -6,18 +6,20 @@ import matplotlib.ticker as ticker
 import matplotlib.patches as mpatches
 from IPython.display import Image, display
 import os
-from os.path import join as pjoin
 import pandas as pd
 
 
-def class_confusion(model, data_loader, class_map, device='cpu', fig=None):
+def class_confusion(model, data_loader, class_map, device='cpu', fig=None, task=None):
     model.eval()
     nclass = len(class_map)
     confusion = np.zeros((nclass, nclass), dtype=np.int32)
     print(len(data_loader))
     for X, y in data_loader:
         with torch.no_grad():
-            logits = model(X.to(device))
+            if task:
+                logits = model(X.to(device), task=task)
+            else:
+                logits = model(X.to(device))
         y_hat = torch.argmax(logits, dim=-1)
         for true, pred in zip(y, y_hat):
             confusion[true, pred] += 1
@@ -189,14 +191,18 @@ def display_conv_weights(convs):
 
             plt.show()
 
-def roc(model, data_loader, device='cpu', fig=None, label=None):
+
+def roc(model, data_loader, device='cpu', fig=None, label=None, task=None):
     model.to(device)
     model.eval()
     ys = []
     probs = []
     for X, y in data_loader:
         with torch.no_grad():
-            logits = model(X.to(device))
+            if task:
+                logits = model(X.to(device), task=task)
+            else:
+                logits = model(X.to(device))
         prob_1 = torch.softmax(logits, dim=-1)[:, 1]
         probs.append(prob_1.cpu().numpy())
         ys.append(y)
@@ -226,6 +232,7 @@ def roc(model, data_loader, device='cpu', fig=None, label=None):
 
     return fig, prob_detection, prob_false_alarm
 
+
 def display_sftf(datadir, dataset, sub_ind=0, spec_ind=0):
     if sub_ind != 0:
         sub_ind -= 1
@@ -239,7 +246,7 @@ def display_sftf(datadir, dataset, sub_ind=0, spec_ind=0):
         sub_info = pd.read_csv(os.path.join(datadir, "eeg_math/subject-info.csv"))
 
     elif dataset == 'parkinsons':
-        
+
         num_zeros = (3 - len(str(sub_ind_str))) * '0'
         sub_ind_str = num_zeros + sub_ind_str
         image_path = os.path.join(datadir, "parkinsons/stfts/sub-" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
@@ -250,9 +257,5 @@ def display_sftf(datadir, dataset, sub_ind=0, spec_ind=0):
         sub_info = pd.read_csv(os.path.join(datadir, "seed/participants_info.csv"))
 
     sub_info = sub_info.iloc[sub_ind, :]
-    print(sub_info)     
+    print(sub_info)
     display(Image(filename=image_path))
-
-
-        
-    

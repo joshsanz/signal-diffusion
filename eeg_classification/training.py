@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 from tqdm.auto import tqdm
+from typing import Optional
 from common.dog import DoG, PDoG
 
 
@@ -14,6 +15,7 @@ class TrainingConfig:
     val_every_epochs: int = 1
     clip_grad_norm: float = 1.0
     swa_start: int = 2
+    task: Optional[str] = None
 
 
 def linear_combination(x, y, epsilon):
@@ -51,28 +53,28 @@ def log_etas(tblogger, opt, step):
 
 
 # Define training and evaluation functions for sequence & class variants
-def train_seq(epochs, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
+def train_seq(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
     def do_permute(output):
         return output.permute(0, 2, 1)
-    return _train(do_permute, epochs, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
+    return _train(do_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
 
 
-def train_class(epochs, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
+def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
     def no_permute(output):
         return output
-    return _train(no_permute, epochs, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
+    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
 
 
-def evaluate_seq(model, iterator, criterion, device, tblogger, step):
+def evaluate_seq(model, iterator, criterion, device, tblogger, step, task):
     def do_permute(output):
         return output.permute(0, 2, 1)
-    return _evaluate(do_permute, model, iterator, criterion, device, tblogger, step)
+    return _evaluate(do_permute, model, iterator, criterion, device, tblogger, step, task="gender")
 
 
-def evaluate_class(model, iterator, criterion, device, tblogger, step):
+def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
     def no_permute(output):
         return output
-    return _evaluate(no_permute, model, iterator, criterion, device, tblogger, step)
+    return _evaluate(no_permute, model, iterator, criterion, device, tblogger, step, task="gender")
 
 
 # True training and evaluation functions
@@ -90,7 +92,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             src = src.to(device)
             trg = trg.to(device)
             # Run classifier & take step
-            output = model(src)
+            output = model(src, task=args.task)
             loss = criterion(output_permuter(output), trg)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -116,8 +118,10 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             optimizer.reset(keep_etas=False)
 
         if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
-            _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device, tblogger, global_step)
-            _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device, tblogger, global_step, swa=True)
+            _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
+                                   tblogger, global_step, args.task)
+            _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
+                                       tblogger, global_step, args.task, swa=True)
             val_accuracies.append(val_acc)
             if val_acc > best_valid_acc:
                 best_valid_acc = val_acc
@@ -131,6 +135,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             swa_scheduler.step()
         elif scheduler:
             scheduler.step()
+        tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
 
     # End of training, save last model
     progress.close()
@@ -138,7 +143,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     return losses, accuracies, val_accuracies
 
 
-def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, swa=False):
+def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
     model.eval()
     eval_loss = 0
     eval_accuracy = 0
@@ -147,7 +152,7 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
         for i, (src, trg) in enumerate(data_loader):
             src = src.to(device)
             trg = trg.to(device)
-            output = model(src)
+            output = model(src, task=task)
             loss = criterion(output_permuter(output), trg)
             eval_loss += loss.item()
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
