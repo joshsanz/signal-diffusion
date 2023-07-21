@@ -167,7 +167,7 @@ class EfficientNet(nn.Module):
             weights=None, dropout=dropout, num_classes=out_dim
         )
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = x.expand(-1, 3, -1, -1)
         return self.model(x)
 
@@ -186,7 +186,7 @@ class ShuffleNet(nn.Module):
             progress=False,
         )
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = x.expand(-1, 3, -1, -1)
         return self.model(x)
 
@@ -256,7 +256,7 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = self.conv1(x)
         x = self.maxpool(x)
         x = self.layer0(x)
