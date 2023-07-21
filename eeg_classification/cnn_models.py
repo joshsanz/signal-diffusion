@@ -140,7 +140,7 @@ class CNNClassifierLight(nn.Module):
                 self.fcs.append(self.activation_fn())
                 self.fcs.append(nn.Dropout(dropout))
                 self.fcs.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
-            self.fcs.append(nn.Linear(self.hidden_layers[-1], out_dim[task]))
+            self.fcs.append(nn.Linear(self.hidden_layers[-1], out_dim))
 
     def forward(self, x, task="gender"):
         for layer in self.convs:
