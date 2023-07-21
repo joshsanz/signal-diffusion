@@ -168,6 +168,7 @@ class SEEDPreprocessor():
                 emotions.append(self.get_emotion(session, trial))
                 captions.append(self.get_caption(subject, session, trial))
                 S.save(pjoin(outdir, fname))
+                i += 1
         return files, genders, ages, emotions, captions
 
     def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
@@ -251,7 +252,7 @@ class SEEDPreprocessor():
 
 
 class SEEDDataset(torch.utils.data.Dataset):
-    name = "SEED V"
+    name = "SEED_V"
 
     def __init__(self, datadir, split="train", transform=None, task="gender"):
         self.dataname = 'seed'
@@ -287,3 +288,50 @@ class SEEDDataset(torch.utils.data.Dataset):
 
     def caption(self, index):
         return self.metadata.iloc[index]["text"]
+
+
+class EmotionSampler(torch.utils.data.Sampler):
+    def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples  # Number of samples to draw not total
+        self.split = split
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __iter__(self):
+        rand_tensor = torch.multinomial(self.weights, len(self.metadata), self.replacement, generator=self.generator)
+        yield from iter(rand_tensor.tolist())
+
+    def generate_weights(self, metadata):
+        Y = []
+        for i in range(len(metadata)):
+            emotion = self.metadata.iloc[i]["emotion"]
+            Y.append(emotion)
+        # Get the current weights of each class
+        label_weights = [Y.count(i) / len(metadata) for i in range(5)]
+
+        # Class rankings
+        rankings = {}
+        for label in range(5):
+            label_weight = label_weights[label]
+            rank = 0
+            for weight in label_weights:
+                if label_weight > weight:
+                    rank += 1
+            rankings[label] = rank
+
+        # Flip weights so smaller classes are more prominent
+        label_weights.sort(reverse=True)
+        new_label_weights = [label_weights[rankings[i]] for i in range(5)]
+        output_weights = [new_label_weights[i] for i in Y]
+
+        # Normalize output weights
+        norm_factor = sum(output_weights)
+        output_weights = [weights / norm_factor for weights in output_weights]
+
+        return output_weights

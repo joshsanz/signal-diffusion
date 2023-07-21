@@ -246,6 +246,53 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         return self.metadata.iloc[index]["text"]
 
 
+class HealthSampler(torch.utils.data.Sampler):
+    def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
+        assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
+        self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
+        self.weights = torch.as_tensor(self.generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples  # Number of samples to draw not total
+        self.split = split
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __iter__(self):
+        rand_tensor = torch.multinomial(self.weights, len(self.metadata), self.replacement, generator=self.generator)
+        yield from iter(rand_tensor.tolist())
+
+    def generate_weights(self, metadata):
+        Y = []
+        for i in range(len(metadata)):
+            health = self.metadata.iloc[i]["health"]
+            Y.append(health == "PD")
+        # Get the current weights of each class
+        label_weights = [Y.count(i) / len(metadata) for i in range(2)]
+
+        # Class rankings
+        rankings = {}
+        for label in range(2):
+            label_weight = label_weights[label]
+            rank = 0
+            for weight in label_weights:
+                if label_weight > weight:
+                    rank += 1
+            rankings[label] = rank
+
+        # Flip weights so smaller classes are more prominent
+        label_weights.sort(reverse=True)
+        new_label_weights = [label_weights[rankings[i]] for i in range(2)]
+        output_weights = [new_label_weights[i] for i in Y]
+
+        # Normalize output weights
+        norm_factor = sum(output_weights)
+        output_weights = [weights / norm_factor for weights in output_weights]
+
+        return output_weights
+
+
 class ParkinsonsSampler(torch.utils.data.Sampler):
     def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
@@ -288,7 +335,7 @@ class ParkinsonsSampler(torch.utils.data.Sampler):
         output_weights = [new_label_weights[i] for i in Y]
 
         # Normalize output weights
-        norm_fact = sum(output_weights)
-        output_weights = [weights / norm_fact for weights in output_weights]
+        norm_factor = sum(output_weights)
+        output_weights = [weights / norm_factor for weights in output_weights]
 
         return output_weights
