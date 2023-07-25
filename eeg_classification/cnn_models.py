@@ -87,7 +87,7 @@ class CNNClassifierLight(nn.Module):
     name = "CNNClassifierLight"
 
     def __init__(self, in_channels, out_dim,
-                 conv_ks=[(5, 5), (3, 3), (3, 3)], conv_cs=[4, 8, 16],
+                 conv_ks=[(5, 5), (3, 3), (3, 3)], conv_cs=[8, 16, 32],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1, 1), (1, 1)],
                  pool_ks=[(2, 2), (2, 2), (2, 2)], pool_ss=[(2, 2), (2, 2), (2, 2)],
                  ff_dims=[250, 75], dropout=0.5,
@@ -125,7 +125,7 @@ class CNNClassifierLight(nn.Module):
                 self.register_module(f"fc_{task}", fc)
                 fc.append(nn.Dropout(dropout))
                 # fc.append(nn.LazyLinear(self.hidden_layers[0]))
-                fc.append(nn.Linear(16384, self.hidden_layers[0]))
+                fc.append(nn.Linear(32768, self.hidden_layers[0]))
                 for i in range(len(ff_dims) - 1):
                     fc.append(self.activation_fn())
                     fc.append(nn.Dropout(dropout))
@@ -135,7 +135,7 @@ class CNNClassifierLight(nn.Module):
             self.fcs = nn.ModuleList()
             self.fcs.append(nn.Dropout(dropout))
             # self.fcs.append(nn.LazyLinear(self.hidden_layers[0]))
-            self.fcs.append(nn.Linear(16384, self.hidden_layers[0]))
+            self.fcs.append(nn.Linear(32768, self.hidden_layers[0]))
             for i in range(len(ff_dims) - 1):
                 self.fcs.append(self.activation_fn())
                 self.fcs.append(nn.Dropout(dropout))
