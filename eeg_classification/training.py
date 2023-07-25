@@ -93,9 +93,6 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             trg = trg.to(device)
             # Run classifier & take step
             output = model(src, task=args.task)
-            if i < 5:
-                print("THIS IS IIIII :", i)
-                print("model weight: ", list(model.parameters())[0][0])
             optimizer.zero_grad()
             loss = criterion(output_permuter(output), trg)
             loss.backward()
@@ -107,7 +104,6 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
                 swa_model.update_parameters(model)
                 swa_scheduler.step()
             elif scheduler:
-                print("THIS DONE")
                 scheduler.step()
 
             # Log loss, accuracy
