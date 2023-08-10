@@ -59,10 +59,11 @@ def train_seq(args, model, swa_model, train_data, val_data, optimizer, scheduler
     return _train(do_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
 
 
-def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
+def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, 
+criterion, device, tblogger, comment, i, save_model=True):
     def no_permute(output):
         return output
-    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
+    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger, comment, i, save_model)
 
 
 def evaluate_seq(model, iterator, criterion, device, tblogger, step, task):
@@ -78,13 +79,18 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 
 # True training and evaluation functions
-def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
+def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer, 
+    scheduler, swa_scheduler, criterion, device, tblogger, comment, county, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
     val_accuracies = []
     best_valid_acc = 0
     progress = tqdm(total=len(train_data) * args.epochs)
+
+    val_swa_acc = 0
+    val_acc = 0
+
     for epoch in range(args.epochs):
         model.train()
         for i, (src, trg) in enumerate(train_data):
@@ -133,23 +139,42 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             val_accuracies.append(val_acc)
             if val_acc > best_valid_acc:
                 best_valid_acc = val_acc
-                torch.save(model.state_dict(), "best_model.pt")
+                if save_model == True:
+                    torch.save(model.state_dict(), "best_model.pt")
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
-
-        
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
+
 
     # SWA batch norm
     if swa_model: 
         torch.optim.swa_utils.update_bn(train_data, swa_model)
-
-
-
+    
     # End of training, save last model
     progress.close()
-    torch.save(model.state_dict(), "last_model.pt")
-    return losses, accuracies, val_accuracies, swa_model
+    if save_model == True:
+        torch.save(model.state_dict(), "last_model.pt")
+
+    if swa_model:
+        if val_swa_acc > 0.68:
+           # ADD TO RESULTS
+           with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+            out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
+            swa_line = str(out_tuple) + "\n"
+            out.write(swa_line)
+            out.close()
+
+    if val_acc > 0.68:
+       # ADD TO RESULTS
+       with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+            out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
+            base_line = str(out_tuple) + "\n"
+            out.write(base_line)
+            out.close()
+
+
+    # torch.save(model.state_dict(), "last_model.pt")
+    return losses, accuracies, val_accuracies
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
