@@ -59,8 +59,8 @@ def train_seq(args, model, swa_model, train_data, val_data, optimizer, scheduler
     return _train(do_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
 
 
-def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, 
-criterion, device, tblogger, comment, i, save_model=True):
+def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler,
+                criterion, device, tblogger, comment, i, save_model=True):
     def no_permute(output):
         return output
     return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger, comment, i, save_model=save_model)
@@ -79,18 +79,19 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 
 # True training and evaluation functions
-def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer, 
-    scheduler, swa_scheduler, criterion, device, tblogger, comment,county, save_model=True):
+def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer,
+           scheduler, swa_scheduler, criterion, device, tblogger, comment, county, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
     val_accuracies = []
     lrs = []
-    best_valid_acc = 0
     progress = tqdm(total=len(train_data) * args.epochs)
 
     val_swa_acc = 0
     val_acc = 0
+    best_val_acc = 0
+    best_swa_val_acc = 0
 
     for epoch in range(args.epochs):
         model.train()
@@ -123,21 +124,15 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             global_step += 1
 
         # END OF EPOCH
-        swa_model.update_parameters(model) # push into if statement
-
-        
+        if swa_model and epoch > args.swa_start:
+            swa_model.update_parameters(model)  # push into if statement
 
         # Take scheduler step
-        if epoch > args.swa_start:
+        if epoch > args.swa_start and swa_scheduler:
             swa_scheduler.step()
         elif scheduler:
             scheduler.step()
-
-        if scheduler != None:
-            if epoch > args.swa_start:
-                lrs.append(swa_scheduler.get_last_lr())
-            else:
-                lrs.append(scheduler.get_last_lr())
+        lrs.append(optimizer.param_groups[0]['lr'])
 
         # Validate
         if args.opt_restart_every > 0 and isinstance(optimizer, DoG) and (epoch + 1) % args.opt_restart_every == 0:
@@ -146,46 +141,50 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
         if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
             _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
                                    tblogger, global_step, args.task)
+            val_accuracies.append(val_acc)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                if save_model:
+                    torch.save(model.state_dict(), "best_model.pt")
             if swa_model:
                 _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
-                                        tblogger, global_step, args.task, swa=True)
-            val_accuracies.append(val_acc)
-            if val_acc > best_valid_acc:
-                best_valid_acc = val_acc
-                if save_model == True:
-                    torch.save(model.state_dict(), "best_model.pt")
+                                           tblogger, global_step, args.task, swa=True)
+                if val_swa_acc > best_swa_val_acc:
+                    best_swa_val_acc = val_swa_acc
+                    if save_model:
+                        torch.save(swa_model.state_dict(), "best_swa_model.pt")
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
 
     # SWA batch norm
-    if swa_model: 
+    if swa_model:
         torch.optim.swa_utils.update_bn(train_data, swa_model)
-    
+
     # End of training, save last model
     progress.close()
-    if save_model == True:
+    if save_model:
         torch.save(model.state_dict(), "last_model.pt")
+        if swa_model:
+            torch.save(swa_model.state_dict(), "last_swa_model.pt")
 
-    if swa_model:
-        if val_swa_acc > 0.68:
-           # ADD TO RESULTS
-           with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-            out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
-            swa_line = str(out_tuple) + "\n"
-            out.write(swa_line)
-            out.close()
+    # if swa_model:
+    #     if val_swa_acc > 0.68:
+    #         # ADD TO RESULTS
+    #         with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+    #             out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
+    #             swa_line = str(out_tuple) + "\n"
+    #             out.write(swa_line)
+    #             out.close()
 
-    if val_acc > 0.68:
-       # ADD TO RESULTS
-       with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-            out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
-            base_line = str(out_tuple) + "\n"
-            out.write(base_line)
-            out.close()
+    # if val_acc > 0.68:
+    #     # ADD TO RESULTS
+    #     with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+    #         out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
+    #         base_line = str(out_tuple) + "\n"
+    #         out.write(base_line)
+    #         out.close()
 
-
-    # torch.save(model.state_dict(), "last_model.pt")
     return losses, accuracies, val_accuracies, lrs
 
 
