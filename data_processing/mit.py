@@ -38,7 +38,7 @@ class MITPreprocessor():
     # Originally 250, changed to 125
     def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
         self.datadir = datadir
-        self.eggdir = os.path.join(self.datadir, 'physionet.org/files/chbmit/1.0.0/')
+        self.eegdir = os.path.join(self.datadir, 'files')
         
         # Establish sampling constants
         orig_fs = 256
@@ -51,23 +51,23 @@ class MITPreprocessor():
         self.noverlap = int(np.floor(nsamps * ovr_perc))
 
         # Get subject info
-        self.subjects = pd.read_csv(os.path.join(datadir, "SUBJECT-INFO.csv"))
+        self.subjects = pd.read_csv(os.path.join(datadir, "files/SUBJECT-INFO.csv"))
         self.n_channels = len(mit_channels)
 
     def get_num_channels(self):
         return self.n_channels
 
     def get_gender(self, sd):
-        sub_id = int(sd.split('-')[1]) - 1
-        return self.subjects.iloc[sub_id].GENDER
+        sub_id = int(sd[3:]) - 1
+        return self.subjects.iloc[sub_id].Gender
 
-    def get_health(self, sd):
-        sub_id = int(sd.split('-')[1]) - 1
-        return self.subjects.iloc[sub_id].GROUP
+    # def get_health(self, sd):
+    #     sub_id = int(sd[3:]) - 1
+    #     return self.subjects.iloc[sub_id].GROUP
 
     def get_age(self, sd):
-        sub_id = int(sd.split('-')[1]) - 1
-        return self.subjects.iloc[sub_id].AGE
+        sub_id = int(sd[3:]) - 1
+        return self.subjects.iloc[sub_id].Age
 
     @staticmethod
     def get_caption(gender, health, age):
@@ -85,54 +85,83 @@ class MITPreprocessor():
         files = []
         genders = []
         ages = []
-        pds = []
+        seizures = []
         # Load data file for each subject
         total_specs = 0
         for sd in tqdm(subject_dirs):
-            setfile = glob.glob(pjoin(self.datadir, sd, "eeg", "*eeg.set"))[0]
-            data = mne.io.read_raw_eeglab(setfile)
-            data = data.get_data()
-            # Get subset of channels we want
-            chan_inds = [ch[1] for ch in parkinsons_channels]
-            data = data[chan_inds, :]
-            # Decimate data
-            data = self.decimate(data)
-            # Break data into chunks and save
-            os.makedirs(pjoin(outdir, sd), exist_ok=True)
-            N = data.shape[1]
-            shift_size = self.nsamps - self.noverlap
+            sub_dir = os.path.join(self.eegdir, sd)
+            sub_recordings = [x for x in os.listdir(sub_dir) if x[len(x) - 4:] == '.edf']
 
-            if self.noverlap != 0:
-                nblocks = math.floor((N - self.nsamps) / shift_size) + 1
-            else:
-                nblocks = math.floor(N / self.nsamps)
-            assert nblocks > 1, (
-                "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
-                    setfile, N, self.nsamps, self.decimation
+            # Create directory to save data
+            sub_sd = "sub" + sd[len(sd) - 2:]
+            print("sub_sd: ", sub_sd)
+            os.makedirs(pjoin(outdir, sub_sd), exist_ok=True)
+            rec_ind = 0
+            for rec in sub_recordings:
+                print("rec_ind: ", rec_ind)
+                rec_ind += 1
+                # Confirm if there was a seizure in recording
+                seizure_exists = 0
+                if os.path.isfile(rec + '.seizures'):
+                    seizure_exists = 1
+                    seiz_info = np.split(openSeizure(rec + '.seizures')[1::2], 2)
+                    
+                # setfile = glob.glob(pjoin(self.datadir, sd, "eeg", "*eeg.set"))[0]
+                # setfile = rec
+                setfile = os.path.join(sub_dir, rec)
+                data = mne.io.read_raw_edf(setfile, preload=True)
+                data = data.get_data()
+                # Get subset of channels we want
+                chan_inds = [ch[1] for ch in mit_channels]
+                data = data[chan_inds, :]
+
+                # Decimate data
+                data = self.decimate(data)
+                # Break data into chunks and save
+                N = data.shape[1]
+                shift_size = self.nsamps - self.noverlap
+
+                if self.noverlap != 0:
+                    nblocks = math.floor((N - self.nsamps) / shift_size) + 1
+                else:
+                    nblocks = math.floor(N / self.nsamps)
+                assert nblocks > 1, (
+                    "File {} (T={}) is too short to be used with nsamps {} and decimation {}".format(
+                        setfile, N, self.nsamps, self.decimation
+                    )
                 )
-            )
-            total_specs += nblocks
+                total_specs += nblocks
 
-            start_ind = 0
-            end_ind = self.nsamps
-            i = 0
-            while end_ind <= N:
-                blk = data[:, start_ind: end_ind]
-                start_ind += shift_size
-                end_ind += shift_size
+                start_ind = 0
+                end_ind = self.nsamps
+                i = 0
+                while end_ind <= N:
+                    blk = data[:, start_ind: end_ind]
 
-                S = mcs.multichannel_spectrogram(
-                    blk,
-                    hop_length=hop_length,
-                    resolution=resolution, win_length=resolution,
-                )
-                fname = pjoin(sd, f"spectrogram-{i}.png")
-                files.append(fname)
-                genders.append(self.get_gender(sd))
-                ages.append(self.get_age(sd))
-                pds.append(self.get_health(sd))
-                S.save(pjoin(outdir, fname))
-                i += 1
+                    # Check if this is a moment of seizure
+                    active_seizure = 0
+                    if seizure_exists == 1:
+                        for seiz in seiz_info:
+                            seiz_start, seiz_end = seiz[0], seiz[1]
+                            min_seiz_len = int(self.nsamps * (0.1))
+                            if (seiz_start - end_ind) < min_seiz_len or (start_ind - seiz_end) < min_seiz_len:
+                                active_seizure = 1
+
+                    start_ind += shift_size
+                    end_ind += shift_size
+
+                    S = mcs.multichannel_spectrogram(
+                        blk,
+                        hop_length=hop_length,
+                        resolution=resolution, win_length=resolution,
+                    )
+                    fname = pjoin(sub_sd, f"spectrogram-{i}.png")
+                    files.append(fname)
+                    genders.append(self.get_gender(sd))
+                    ages.append(self.get_age(sd))
+                    seizures.append(active_seizure)
+                    S.save(pjoin(outdir, fname))
+                    i += 1
 
         assert total_specs == len(files), (
             "{} spectrograms were generated, {} should've been made".format(
@@ -189,12 +218,11 @@ class MITPreprocessor():
         while self.nsamps / hop_length > max_bins:
             hop_length += 8
         # Get list of data directories
+        subject_dirs = os.listdir(self.eegdir)
+        subject_dirs = list(filter(lambda d: os.path.isdir(pjoin(self.eegdir, d)), subject_dirs))
+        subject_dirs = list(filter(lambda d: d.startswith("chb"), subject_dirs))
+        print("subject_dirs: ", subject_dirs)
 
-
-
-        subject_dirs = os.listdir(self.datadir)
-        subject_dirs = list(filter(lambda d: os.path.isdir(pjoin(self.datadir, d)), subject_dirs))
-        subject_dirs = list(filter(lambda d: d.startswith("sub"), subject_dirs))
         # Create spectrograms
         files, genders, ages, pds = self._generate_spectrograms(subject_dirs, outdir, resolution, hop_length)
         # Write metadata to file
@@ -208,7 +236,7 @@ class MITPreprocessor():
         self.make_tvt_splits(train_frac, val_frac, test_frac, seed)
 
 
-class ParkinsonsDataset(torch.utils.data.Dataset):
+class MITDataset(torch.utils.data.Dataset):
     name = "Parkinsons"
 
     def __init__(self, datadir, split="train", transform=None, task="gender"):
@@ -247,7 +275,7 @@ class ParkinsonsDataset(torch.utils.data.Dataset):
         return self.metadata.iloc[index]["text"]
 
 
-class HealthSampler(torch.utils.data.Sampler):
+class MITSampler(torch.utils.data.Sampler):
     def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
@@ -294,7 +322,7 @@ class HealthSampler(torch.utils.data.Sampler):
         return output_weights
 
 
-class ParkinsonsSampler(torch.utils.data.Sampler):
+class MITSampler(torch.utils.data.Sampler):
     def __init__(self, datadir, num_samples, split="train", replacement=True, generator=None):
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
         self.metadata = pd.read_csv(pjoin(datadir, f"{split}-metadata.csv"))
@@ -340,3 +368,53 @@ class ParkinsonsSampler(torch.utils.data.Sampler):
         output_weights = [weights / norm_factor for weights in output_weights]
 
         return output_weights
+
+def openSeizure(file):
+    data = []
+    with open(file,"rb") as f:
+        buf = []
+        byte = f.read(1)
+        i = 0
+        while byte:
+            byte = f.read(1)
+            if len(buf)<4:
+                buf.append(byte)
+            else:
+                buf = buf[1:] #throw away oldest byte
+                buf.append(byte) #append new byte to end.
+            i = i+1
+            #print(byte)
+            
+            if buf ==[b'\x01', b'\x00',b'\x00',b'\xec']: #0x010000ec appears to be a control sequence of some sort, signifying beginning of seizure data
+                while byte:
+                    byte = f.read(1) #next byte should be msb of seizure offset in seconds
+                    if byte == b'':
+                        continue #if byte is empty we've reached end of file
+                    data.append(byte)
+                    f.seek(2,1) #skip over next 2 bytes, they seem unimportant
+                    byte = f.read(1)#this byte should be lsb of seizure offset in seconds
+                    data.append(byte)
+                    f.seek(7,1)#skip over next 7 bytes, again they seem unimportant
+                    byte = f.read(1)#this should be the length of seizure in seconds
+                    data.append(byte)
+                    f.seek(4,1)#skip over next 4 bytes, if there are more seizures, looping should handle them.
+                continue # once we've finished reading the seizures, we're finished with the file
+                
+        #print(data)
+    legible_data = []
+    i = 0
+    currentTimePointer = 0 #the time points seem to be in offsets from last event for some godforsaken reason so this is for keeping current time
+    while i<len(data):
+        startTimeSec = data[i] + data[i+1]
+        lengthSecInt = int.from_bytes(data[i+2], "big")
+        startTimeSecInt = int.from_bytes(startTimeSec, "big") #get ints from parsed bytes
+        currentTimePointer = currentTimePointer + startTimeSecInt #increment current time by start seizure event offset
+        legible_data.append(currentTimePointer) #add current time to array
+        legible_data.append(currentTimePointer*256) #convert seconds to samples
+        currentTimePointer = currentTimePointer + lengthSecInt #increment current time by end of the seizure event offset
+        legible_data.append(currentTimePointer) #add current time to array
+        legible_data.append(currentTimePointer*256) #convert seconds to samples
+        i = i+3 #weve got 3 datapoints per seizure so just move to the next one
+    print(file)#print the file path for clarity
+    print(legible_data)#print the datapoints for clarity
+    return legible_data

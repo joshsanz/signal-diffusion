@@ -1,8 +1,8 @@
 import pyedflib
 import numpy as np
 
-ch01_h_path = '/data/shared/signal-diffusion/mit/physionet.org/files/chbmit/1.0.0/chb01/chb01_01.edf'
-ch03_s_path = 'data/shared/signal-diffusion/mit/physionet.org/files/chbmit/1.0.0/chb01/chb01_03.edf.seizures'
+ch01_h_path = '/data/shared/signal-diffusion/mit/files/chb03/chb03_01.edf'
+ch03_s_path = '/data/shared/signal-diffusion/mit/files/chb03/chb03_01.edf.seizures'
 
 
 f = pyedflib.EdfReader(ch01_h_path)
@@ -68,5 +68,5 @@ def openSeizure(file):
 
 legible_data = openSeizure(ch03_s_path)
 
-print(legible_data)
+print(legible_data[1::2])
 

@@ -165,16 +165,35 @@ torch.backends.cudnn.benchmark = True
 # label_smoothing_epsilons = [0.9, 0.5, 0.3, 0.1, 0.0]
 # schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR, None]
 
-SGD_learning_rates = [1e-1, 1e-2, 1e-3]
-adam_learning_rates = [1e-2, 1e-3, 1e-4]
+# ('MODEL: 379', 'base_model', 'run_379: cnnclass_CNNClassifierLight_SGD_decay0.1_epoch:50,swa_start:37,base_lr:0.001,swa_lr:0.1,epsilon:0.1,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f746db30b80>', 0.7911082475455766
 
-epochs = [15, 25, 50]
-swa_start_percs = [0.75, 1.5]
-optimizers = [torch.optim.SGD] # torch.optim.AdamW]
-base_learning_rates = SGD_learning_rates
-swa_learning_rates = [0.1, 0.05, 0.01]
-decays = [0.1, 0.05, 0.001]
-label_smoothing_epsilons = [0.3, 0.1, 0.0]
+
+# ('MODEL: 167', 'swa_model', 'run_167: cnnclass_CNNClassifierLight_AdamW_decay0.05_epoch:25,swa_start:18,base_lr:0.01,swa_lr:0.1,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f09ecce6440>', 0.8906572166177416)
+# ('cnnclass_CNNClassifierLight_AdamW_decay0.001_epoch:25,swa_start:18,base_lr:0.01,swa_lr:0.1,epsilon:0.3,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f09ece651b0>', 0.8906572166177416)
+
+
+# SGD_learning_rates = [1e-1, 1e-2, 1e-3]
+# adam_learning_rates = [1e-2, 1e-3, 1e-4]
+
+# epochs = [15, 25, 50]
+# swa_start_percs = [0.75, 1.5]
+# optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
+# base_learning_rates = adam_learning_rates
+# swa_learning_rates = [0.1, 0.05, 0.01]
+# decays = [0.1, 0.05, 0.001]
+# label_smoothing_epsilons = [0.3, 0.1, 0.0]
+# schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR] # , None]
+# save_model = False
+
+adam_learning_rates = [1e-2]
+
+epochs = [25]
+swa_start_percs = [0.75]
+optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
+base_learning_rates = adam_learning_rates
+swa_learning_rates = [0.1]
+decays = [0.05]
+label_smoothing_epsilons = [0.3]
 schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR] # , None]
 save_model = False
 i = 0
@@ -229,9 +248,12 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
     if isinstance(optimizer, DoG):
         postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
     comment = f"run_{i}: cnnclass_{model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
-    tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" + 
-                        datetime.now().isoformat(sep='_'), 
+    tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment, 
                         comment=comment)
+
+    # tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" + 
+    #                 datetime.now().isoformat(sep='_'), 
+    #                 comment=comment)
     print("#" * 80)
     print("Training", comment)
 

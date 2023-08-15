@@ -63,7 +63,7 @@ def train_class(args, model, swa_model, train_data, val_data, optimizer, schedul
 criterion, device, tblogger, comment, i, save_model=True):
     def no_permute(output):
         return output
-    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger, comment, i, save_model)
+    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger, comment, i, save_model=save_model)
 
 
 def evaluate_seq(model, iterator, criterion, device, tblogger, step, task):
@@ -80,11 +80,12 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 # True training and evaluation functions
 def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer, 
-    scheduler, swa_scheduler, criterion, device, tblogger, comment, county, save_model=True):
+    scheduler, swa_scheduler, criterion, device, tblogger, comment,county, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
     val_accuracies = []
+    lrs = []
     best_valid_acc = 0
     progress = tqdm(total=len(train_data) * args.epochs)
 
@@ -93,6 +94,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
 
     for epoch in range(args.epochs):
         model.train()
+
         for i, (src, trg) in enumerate(train_data):
             # Send to device
             src = src.to(device)
@@ -104,13 +106,6 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
-
-            # Take scheduler step
-            if epoch > args.swa_start:
-                swa_model.update_parameters(model)
-                swa_scheduler.step()
-            elif scheduler:
-                scheduler.step()
 
             # Log loss, accuracy
             losses.append(loss.item())
@@ -126,7 +121,25 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             progress.set_postfix({"loss": round(loss.item(), 5), "acc": round(accuracy.item(), 3)})
             progress.update(1)
             global_step += 1
-        # End of epoch, validate
+
+        # END OF EPOCH
+        swa_model.update_parameters(model) # push into if statement
+
+        
+
+        # Take scheduler step
+        if epoch > args.swa_start:
+            swa_scheduler.step()
+        elif scheduler:
+            scheduler.step()
+
+        if scheduler != None:
+            if epoch > args.swa_start:
+                lrs.append(swa_scheduler.get_last_lr())
+            else:
+                lrs.append(scheduler.get_last_lr())
+
+        # Validate
         if args.opt_restart_every > 0 and isinstance(optimizer, DoG) and (epoch + 1) % args.opt_restart_every == 0:
             optimizer.reset(keep_etas=False)
 
@@ -144,7 +157,6 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
-
 
     # SWA batch norm
     if swa_model: 
@@ -174,7 +186,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
 
 
     # torch.save(model.state_dict(), "last_model.pt")
-    return losses, accuracies, val_accuracies
+    return losses, accuracies, val_accuracies, lrs
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
