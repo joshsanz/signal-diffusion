@@ -122,13 +122,16 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             progress.set_postfix({"loss": round(loss.item(), 5), "acc": round(accuracy.item(), 3)})
             progress.update(1)
             global_step += 1
-
         # END OF EPOCH
-        if swa_model and epoch > args.swa_start:
+
+        # Update SWA model
+        if epoch == args.swa_start and swa_model is None:
+            swa_model = torch.optim.swa_utils.AveragedModel(model)
+        elif swa_model and epoch >= args.swa_start:
             swa_model.update_parameters(model)  # push into if statement
 
         # Take scheduler step
-        if epoch > args.swa_start and swa_scheduler:
+        if epoch >= args.swa_start and swa_scheduler:
             swa_scheduler.step()
         elif scheduler:
             scheduler.step()
