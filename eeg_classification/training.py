@@ -152,7 +152,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
                 if val_swa_acc > best_swa_val_acc:
                     best_swa_val_acc = val_swa_acc
                     if save_model:
-                        torch.save(swa_model.state_dict(), "best_swa_model.pt")
+                        torch.save(swa_model.module.state_dict(), "best_swa_model.pt")
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
@@ -166,7 +166,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     if save_model:
         torch.save(model.state_dict(), "last_model.pt")
         if swa_model:
-            torch.save(swa_model.state_dict(), "last_swa_model.pt")
+            torch.save(swa_model.module.state_dict(), "last_swa_model.pt")
 
     # if swa_model:
     #     if val_swa_acc > 0.68:
