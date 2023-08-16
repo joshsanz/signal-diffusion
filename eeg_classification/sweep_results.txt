@@ -490,3 +490,4 @@
 ('MODEL: 0', 'base_model', 'CNNClassifierLight_SGD_decay0.1_epoch:15,swa_start:11,base_lr:0.01,swa_lr:0.05,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f81b0a83f70>', 0.6865979383901223)
 ('MODEL: 0', 'base_model', 'CNNClassifierLight_SGD_decay0.1_epoch:15,swa_start:11,base_lr:0.005,swa_lr:0.05,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f81b093f550>', 0.6920747425138336)
 ('MODEL: 0', 'base_model', 'CNNClassifierLight_SGD_decay0.1_epoch:15,swa_start:11,base_lr:0.01,swa_lr:0.05,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f81b08b4d00>', 0.6865979383901223)
+('MODEL: 0', 'base_model', 'CNNClassifierLight_SGD_decay0.1_epoch:5,swa_start:3,base_lr:0.1,swa_lr:0.05,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7ff58c6dc520>', 0.6818943300198034)
