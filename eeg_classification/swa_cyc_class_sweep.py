@@ -18,7 +18,7 @@ from collections import OrderedDict
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from typing import Tuple
-
+from os.path import join as pjoin
 from tqdm.auto import tqdm
 
 import torch
@@ -156,46 +156,19 @@ torch.backends.cudnn.benchmark = True
 # Make sure you're saving models into models dir
 
 # Scheduler
-# epochs = [5,10,15]
-# swa_start_percs = [0.6, 0.8, 1.5]
-# optimizers = [torch.optim.SGD] #torch.optim.AdamW, 
-# base_learning_rates = [1e-2, 1e-3, 1e-4, 3e-2, 3e-3, 3e-4]
-# swa_learning_rates = [1e-2, 1e-3, 1e-4, 1e-5, 3e-2, 3e-3, 3e-4, 3e-5]
-# decays = [0.1, 0.01, 0.001, 0.3, 0.03, 0.003, 0.5, 0.05, 0.005]
-# label_smoothing_epsilons = [0.9, 0.5, 0.3, 0.1, 0.0]
-# schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR, None]
-
-# ('MODEL: 379', 'base_model', 'run_379: cnnclass_CNNClassifierLight_SGD_decay0.1_epoch:50,swa_start:37,base_lr:0.001,swa_lr:0.1,epsilon:0.1,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f746db30b80>', 0.7911082475455766
+adam_learning_rates = [1e-2, 5e-3, 1e-3, 1e-4]
+sgd_learning_rates = [1e-1, 5e-2, 1e-2, 1e-3]
 
 
-# ('MODEL: 167', 'swa_model', 'run_167: cnnclass_CNNClassifierLight_AdamW_decay0.05_epoch:25,swa_start:18,base_lr:0.01,swa_lr:0.1,epsilon:0.0,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f09ecce6440>', 0.8906572166177416)
-# ('cnnclass_CNNClassifierLight_AdamW_decay0.001_epoch:25,swa_start:18,base_lr:0.01,swa_lr:0.1,epsilon:0.3,sched:<torch.optim.lr_scheduler.CosineAnnealingLR object at 0x7f09ece651b0>', 0.8906572166177416)
-
-
-# SGD_learning_rates = [1e-1, 1e-2, 1e-3]
-# adam_learning_rates = [1e-2, 1e-3, 1e-4]
-
-# epochs = [15, 25, 50]
-# swa_start_percs = [0.75, 1.5]
-# optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
-# base_learning_rates = adam_learning_rates
-# swa_learning_rates = [0.1, 0.05, 0.01]
-# decays = [0.1, 0.05, 0.001]
-# label_smoothing_epsilons = [0.3, 0.1, 0.0]
-# schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR] # , None]
-# save_model = False
-
-adam_learning_rates = [1e-2]
-
-epochs = [25]
-swa_start_percs = [0.75]
+epochs = [5, 10, 15]
+swa_start_percs = [0.5, 1.5]
 optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
 base_learning_rates = adam_learning_rates
-swa_learning_rates = [0.1]
-decays = [0.05]
-label_smoothing_epsilons = [0.3]
-schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR] # , None]
-save_model = False
+swa_learning_rates = [0.1, 0.01, 0.05]
+decays = [0.1, 0.05, 0.01]
+label_smoothing_epsilons = [0.0, 0.3]
+schedulers = [torch.optim.lr_scheduler.CosineAnnealingWarmRestarts] # , None]
+save_model = pjoin(datahome, 'models')
 i = 0
 
 for params in product(epochs, swa_start_percs, optimizers, base_learning_rates, 
@@ -203,7 +176,7 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
 
     EPOCHS, SWA_START, optimizer, BASE_LEARNING_RATE, SWA_LEARNING_RATE, L2_REG_DECAY, EPSILON, scheduler = params
 
-    SWA_START = int(SWA_START * EPOCHS)
+    SWA_START = math.floor(SWA_START * EPOCHS)
 
     random_seed = 205 #205 Gave a good split for training
     np.random.seed(random_seed)
@@ -222,15 +195,16 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
     if opt == torch.optim.AdamW:
         optimizer = opt(model.parameters(), lr=BASE_LEARNING_RATE, weight_decay=decay)
     elif opt == torch.optim.SGD:
-        #BASE_LEARNING_RATE = BASE_LEARNING_RATE * 100
-        # optimizer = opt(model.parameters(), lr=BASE_LEARNING_RATE, weight_decay=decay, momentum = 0.5)
-        optimizer = opt(model.parameters(), lr=BASE_LEARNING_RATE)
+        optimizer = opt(model.parameters(), lr=BASE_LEARNING_RATE, weight_decay=decay, momentum = 0.5)
 
     if scheduler == torch.optim.lr_scheduler.ExponentialLR:
         exp_sched_gamma = 0.9
         scheduler = scheduler(optimizer, exp_sched_gamma, verbose=False, last_epoch=- 1)
     elif scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
-        scheduler = scheduler(optimizer, T_max=EPOCHS, last_epoch=- 1)
+        scheduler = scheduler(optimizer, T_max=int(EPOCHS/4), last_epoch=- 1)
+    elif scheduler == torch.optim.lr_scheduler.CosineAnnealingWarmRestarts:
+        scheduler = scheduler(optimizer, T_0=int(EPOCHS/4), last_epoch=-1,
+                                eta_min=BASE_LEARNING_RATE * 1e-4)
 
     # SWA model instance
     if SWA_START < EPOCHS:
@@ -247,7 +221,7 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
     postfix = ""
     if isinstance(optimizer, DoG):
         postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
-    comment = f"run_{i}: cnnclass_{model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
+    comment = f"run_{i}: {model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
     tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment, 
                         comment=comment)
 
@@ -258,7 +232,7 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
     print("Training", comment)
 
     # Training loop
-    losses, accs, val_accs = train_class(
+    losses, accs, val_accs, lrs = train_class(
         ARGS, model, swa_model,
         real_train_loader, val_loader,
         optimizer, scheduler, swa_scheduler, 

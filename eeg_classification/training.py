@@ -122,8 +122,8 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             progress.set_postfix({"loss": round(loss.item(), 5), "acc": round(accuracy.item(), 3)})
             progress.update(1)
             global_step += 1
-        # END OF EPOCH
 
+        # END OF EPOCH
         # Update SWA model
         if epoch == args.swa_start and swa_model is None:
             swa_model = torch.optim.swa_utils.AveragedModel(model)
@@ -171,24 +171,28 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
         if swa_model:
             torch.save(swa_model.module.state_dict(), "last_swa_model.pt")
 
-    # if swa_model:
-    #     if val_swa_acc > 0.68:
-    #         # ADD TO RESULTS
-    #         with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-    #             out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
-    #             swa_line = str(out_tuple) + "\n"
-    #             out.write(swa_line)
-    #             out.close()
+    if swa_model:
+        if val_swa_acc > 0.68:
+            # ADD TO RESULTS
+            with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+                out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
+                swa_line = str(out_tuple) + "\n"
+                out.write(swa_line)
+                out.close()
 
-    # if val_acc > 0.68:
-    #     # ADD TO RESULTS
-    #     with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-    #         out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
-    #         base_line = str(out_tuple) + "\n"
-    #         out.write(base_line)
-    #         out.close()
+    if val_acc > 0.68:
+        # ADD TO RESULTS
+        with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
+            out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
+            base_line = str(out_tuple) + "\n"
+            out.write(base_line)
+            out.close()
 
-    return losses, accuracies, val_accuracies, lrs
+    hip_plot_dic = {
+        'dropout': dropout
+    }
+
+    return losses, accuracies, val_accuracies, lrs, hip_plot_dic
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
