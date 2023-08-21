@@ -147,26 +147,29 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
-# Tune primary model first, thn weight averaging model; Done
-# Label smoothing don't need every .1 -> .3, .5, .9, 0; Done
-# Only save models to disk, the best models dict is being kept in RAM prob
-# Do a .cpu at the end of training and save to disk 
-
-# Itertools.product instead of a bunch of for loops
-# Make sure you're saving models into models dir
-
 # Scheduler
 adam_learning_rates = [1e-2, 5e-3, 1e-3, 1e-4]
 sgd_learning_rates = [1e-1, 5e-2, 1e-2, 1e-3]
 
 
-epochs = [5, 10, 15]
-swa_start_percs = [0.5, 1.5]
+# epochs = [5, 10, 15]
+# swa_start_percs = [0.5, 1.5]
+# optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
+# base_learning_rates = adam_learning_rates
+# swa_learning_rates = [0.1, 0.01, 0.05]
+# decays = [0.1, 0.05, 0.01]
+# label_smoothing_epsilons = [0.0, 0.3]
+# schedulers = [torch.optim.lr_scheduler.CosineAnnealingWarmRestarts] # , None]
+# save_model = pjoin(datahome, 'models')
+
+
+epochs = [5]
+swa_start_percs = [0.5]
 optimizers =  [torch.optim.AdamW] # [torch.optim.SGD]
 base_learning_rates = adam_learning_rates
-swa_learning_rates = [0.1, 0.01, 0.05]
-decays = [0.1, 0.05, 0.01]
-label_smoothing_epsilons = [0.0, 0.3]
+swa_learning_rates = [0.1]
+decays = [0.1]
+label_smoothing_epsilons = [0.3]
 schedulers = [torch.optim.lr_scheduler.CosineAnnealingWarmRestarts] # , None]
 save_model = pjoin(datahome, 'models')
 i = 0
@@ -221,8 +224,12 @@ for params in product(epochs, swa_start_percs, optimizers, base_learning_rates,
     postfix = ""
     if isinstance(optimizer, DoG):
         postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
-    comment = f"run_{i}: {model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
-    tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment, 
+
+    comment = f"run:{i}-{model.name}-opt:{str(type(optimizer)).split('.')[-1][:-2]}-decay:{decay}{postfix}-epoch:{EPOCHS}-
+                swa_start:{SWA_START}-base_lr:{BASE_LEARNING_RATE}-swa_lr:{SWA_LEARNING_RATE}-epsilon:{EPSILON}-sched:{scheduler}- 
+                drop:{DROPOUT}-"
+    comment = comment + "date:" + datetime.now().isoformat(sep='_')
+    tbsw = SummaryWriter(log_dir="./tensorboard_logs/cnn/" + comment, 
                         comment=comment)
 
     # tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" + 

@@ -93,6 +93,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     best_val_acc = 0
     best_swa_val_acc = 0
 
+
     for epoch in range(args.epochs):
         model.train()
 
@@ -142,20 +143,23 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             optimizer.reset(keep_etas=False)
 
         if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
-            _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
+            val_loss, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
                                    tblogger, global_step, args.task)
             val_accuracies.append(val_acc)
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 if save_model:
-                    torch.save(model.state_dict(), "best_model.pt")
+                    best_base_dir = pjoin(save_model, "best_model-" + comment + ".pt")
+                    torch.save(model.state_dict(), best_base_dir)
+
             if swa_model:
-                _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
+                val_swa_loss, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
                                            tblogger, global_step, args.task, swa=True)
                 if val_swa_acc > best_swa_val_acc:
                     best_swa_val_acc = val_swa_acc
                     if save_model:
-                        torch.save(swa_model.module.state_dict(), "best_swa_model.pt")
+                        best_swa_dir = pjoin(save_model, "best_swa_model-" + comment + ".pt")
+                        torch.save(swa_model.module.state_dict(), best_swa_dir)
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
@@ -167,9 +171,11 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     # End of training, save last model
     progress.close()
     if save_model:
-        torch.save(model.state_dict(), "last_model.pt")
+        last_base_dir = pjoin(save_model, "last_model-" + comment + ".pt")
+        torch.save(model.state_dict(), last_base_dir)
         if swa_model:
-            torch.save(swa_model.module.state_dict(), "last_swa_model.pt")
+            last_swa_dir = pjoin(save_model, "last_swa_model-" + comment + ".pt")
+            torch.save(swa_model.module.state_dict(), last_swa_dir)
 
     if swa_model:
         if val_swa_acc > 0.68:
@@ -200,6 +206,7 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
     eval_loss = 0
     eval_accuracy = 0
     N = len(data_loader)
+    classification_reports = []
     with torch.no_grad():
         for i, (src, trg) in enumerate(data_loader):
             src = src.to(device)
@@ -210,6 +217,16 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
             eval_accuracy += accuracy.item()
+            classification_reports.append(sklearn.metrics.classification_report(y_hat, trg, [0,1]))
+
+    classification_report = {}
+    for key in classification_reports[0].keys():
+        classification_report[key] = 0
+        for report in classification_reports:
+            classification_report[key] += report[key]
+        
+        classification_report[key] = classification_report[key] / N
+
     loss_name = "Loss/validate"
     acc_name = "Accuracy/validate"
     if swa:
