@@ -4,6 +4,67 @@ import numpy as np
 from PIL import Image
 
 
+def lin_dftmtx(N):
+    is_odd = N % 2 == 1
+    spacing = 1 / N
+    freqs = np.concatenate([
+        np.linspace(-0.5, 0, N // 2 + 1, endpoint=True),
+        np.linspace(spacing, 0.5, (N - 1) // 2, endpoint=is_odd)
+    ])
+    omega = np.exp(-2j * np.pi / N)
+    W = omega ** (np.outer(np.fft.ifftshift(freqs) * N, np.arange(N))) / np.sqrt(N)
+    return freqs, W
+
+
+def log_dftmtx(N, min_exponent=-3):
+    is_odd = N % 2 == 1
+    neg_freqs = [-(10 ** i) for i in np.linspace(np.log10(0.5), -3, N // 2, endpoint=True)]
+    freqs = np.array(neg_freqs + [0] + [-f for f in neg_freqs[not is_odd:][::-1]])
+    omega = np.exp(-2j * np.pi / N)
+    W = omega ** (np.outer(np.fft.ifftshift(freqs) * N, np.arange(N))) / np.sqrt(N)
+    return freqs, W
+
+
+def fft2rfft(X):
+    N = X.shape[0]
+    X = X.reshape(N, -1)
+    is_odd = N % 2 == 1
+    is_even = N % 2 == 0
+    split_idx = N // 2 + is_odd
+    rX = X[:split_idx, :]
+    rX[1:, :] += X[split_idx + is_even:, :][::-1, :].conjugate()
+    return rX.squeeze()
+
+
+def apply_stft(x, W, win_length, hop_length, window=None):
+    x_strided = np.lib.stride_tricks.sliding_window_view(x, win_length)[::hop_length]
+    if window == 'hann':
+        window = np.hanning(win_length)
+    elif isinstance(window, np.ndarray):
+        assert window.shape == (win_length,), "Window must be of shape (win_length,)"
+    elif window is None:
+        window = np.ones(win_length)
+    X = W @ (x_strided.T * window.reshape(win_length, 1))
+    return X
+
+
+def apply_rstft(x, W, win_length, hop_length, window=None):
+    assert x.dtype == np.float32 or x.dtype == np.float64, "Only real-valued x is allowed"
+    X = apply_stft(x, W, win_length, hop_length, window)
+    rX = fft2rfft(X)
+    return rX
+
+
+def log_stft(x, win_length, hop_length, window=None):
+    f, W = log_dftmtx(win_length)
+    return f, apply_rstft(x, W, win_length, hop_length, window)
+
+
+def lin_stft(x, win_length, hop_length, window=None):
+    f, W = lin_dftmtx(win_length)
+    return f, apply_rstft(x, W, win_length, hop_length, window)
+
+
 def scale_minmax(X, minval=0.0, maxval=1.0):
     xmax = X.max()
     xmin = X.min()
@@ -21,10 +82,9 @@ def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='lin
             y=y, win_length=win_length, hop_length=hop_length, n_fft=win_length * 2 - 1,
         )
     elif bin_spacing == 'log':
-        lin_freqs = np.linspace(-0.5, 0.5, win_length, endpoint=True)
-        log_freqs = ([-(10 ** i) for i in np.linspace(0, -4, win_length // 2, endpoint=True)] + [0] +
-                     [10 ** i for i in np.linspace(-4, 0, (win_length - 1) // 2, endpoint=True)])
-
+        _, stft = log_stft(
+            x=y, win_length=win_length, hop_length=hop_length, window='hann',
+        )
     else:
         raise ValueError(f"Invalid bin spacing {bin_spacing}")
     stft = 20 * np.log10(np.abs(stft) + 1e-9)
