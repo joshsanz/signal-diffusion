@@ -15,10 +15,18 @@ def scale_minmax(X, minval=0.0, maxval=1.0):
     return X_scaled
 
 
-def spectrogram(y, hop_length, win_length, noise_floor_db=-100):
-    stft = librosa.stft(
-        y=y, win_length=win_length, hop_length=hop_length, n_fft=win_length * 2 - 1,
-    )
+def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='linear'):
+    if bin_spacing == 'linear':
+        stft = librosa.stft(
+            y=y, win_length=win_length, hop_length=hop_length, n_fft=win_length * 2 - 1,
+        )
+    elif bin_spacing == 'log':
+        lin_freqs = np.linspace(-0.5, 0.5, win_length, endpoint=True)
+        log_freqs = ([-(10 ** i) for i in np.linspace(0, -4, win_length // 2, endpoint=True)] + [0] +
+                     [10 ** i for i in np.linspace(-4, 0, (win_length - 1) // 2, endpoint=True)])
+
+    else:
+        raise ValueError(f"Invalid bin spacing {bin_spacing}")
     stft = 20 * np.log10(np.abs(stft) + 1e-9)
 
     # Set noise floor to reduce dynamic range
