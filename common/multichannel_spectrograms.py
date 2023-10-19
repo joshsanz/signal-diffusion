@@ -41,31 +41,43 @@ def fft2rfft(X):
     return rX.squeeze()
 
 
-def apply_stft(x, W, win_length, hop_length, window=None):
-    x_strided = np.lib.stride_tricks.sliding_window_view(x, win_length)[::hop_length]
+def apply_stft(x, W, win_length, hop_length, window=None, pad=True, demean=True):
+    if demean:
+        # Remove DC component during DFT to avoid large sidelobes
+        # Insert DC component back in the first row at end
+        dc = x.sum() / np.sqrt(x.shape[0])
+        x = x - x.mean()
+    # Zero-pad to fit integer number of frames
+    if pad:
+        padding = win_length + (x.shape[0] % hop_length)
+        x = np.concatenate([x, np.zeros(padding, dtype=x.dtype)])
     if window == 'hann':
         window = np.hanning(win_length)
     elif isinstance(window, np.ndarray):
         assert window.shape == (win_length,), "Window must be of shape (win_length,)"
     elif window is None:
         window = np.ones(win_length)
+    # Form strided window view of x and apply DFT
+    x_strided = np.lib.stride_tricks.sliding_window_view(x, win_length)[::hop_length]
     X = W @ (x_strided.T * window.reshape(win_length, 1))
+    if demean:
+        X[0, :] = dc
     return X
 
 
-def apply_rstft(x, W, win_length, hop_length, window=None):
+def apply_rstft(x, W, win_length, hop_length, window=None, pad=True, demean=True):
     assert x.dtype == np.float32 or x.dtype == np.float64, "Only real-valued x is allowed"
-    X = apply_stft(x, W, win_length, hop_length, window)
+    X = apply_stft(x, W, win_length, hop_length, window, pad)
     rX = fft2rfft(X)
     return rX
 
 
-def log_stft(x, win_length, hop_length, window=None):
+def log_rstft(x, win_length, hop_length, window=None, pad=True, demean=True):
     f, W = log_dftmtx(win_length)
     return f, apply_rstft(x, W, win_length, hop_length, window)
 
 
-def lin_stft(x, win_length, hop_length, window=None):
+def lin_rstft(x, win_length, hop_length, window=None, pad=True, demean=True):
     f, W = lin_dftmtx(win_length)
     return f, apply_rstft(x, W, win_length, hop_length, window)
 
@@ -87,7 +99,7 @@ def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='lin
             y=y, win_length=win_length, hop_length=hop_length, n_fft=win_length * 2 - 1,
         )
     elif bin_spacing == 'log':
-        _, stft = log_stft(
+        _, stft = log_rstft(
             x=y, win_length=win_length * 2 - 1, hop_length=hop_length, window='hann',
         )
     else:
