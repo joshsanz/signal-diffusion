@@ -175,7 +175,7 @@ def train_vs_epoch(losses, accuracies, name):
 def display_conv_weights(convs):
     for conv in convs:
         i = 1
-        if type(conv) == torch.nn.modules.conv.Conv2d:
+        if isinstance(conv, torch.nn.modules.conv.Conv2d):
             num_cols = conv.weight.shape[0]
             num_rows = conv.weight.shape[1]
             conv_max, conv_min = conv.weight.max(), conv.weight.min()
