@@ -36,10 +36,11 @@ mit_class_labels = bidict({
 
 class MITPreprocessor():
     # Originally 250, changed to 125
-    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250, bin_spacing="linear"):
         self.datadir = datadir
         self.eegdir = os.path.join(self.datadir, 'files')
-        
+        self.bin_spacing = bin_spacing
+
         # Establish sampling constants
         orig_fs = 256
         self.decimation = orig_fs // fs
@@ -105,7 +106,7 @@ class MITPreprocessor():
                 if os.path.isfile(rec + '.seizures'):
                     seizure_exists = 1
                     seiz_info = np.split(openSeizure(rec + '.seizures')[1::2], 2)
-                    
+
                 # setfile = glob.glob(pjoin(self.datadir, sd, "eeg", "*eeg.set"))[0]
                 # setfile = rec
                 setfile = os.path.join(sub_dir, rec)
@@ -154,6 +155,7 @@ class MITPreprocessor():
                         blk,
                         hop_length=hop_length,
                         resolution=resolution, win_length=resolution,
+                        bin_spacing=self.bin_spacing,
                     )
                     fname = pjoin(sub_sd, f"spectrogram-{i}.png")
                     files.append(fname)
@@ -384,7 +386,7 @@ def openSeizure(file):
                 buf.append(byte) #append new byte to end.
             i = i+1
             #print(byte)
-            
+
             if buf ==[b'\x01', b'\x00',b'\x00',b'\xec']: #0x010000ec appears to be a control sequence of some sort, signifying beginning of seizure data
                 while byte:
                     byte = f.read(1) #next byte should be msb of seizure offset in seconds
@@ -399,7 +401,7 @@ def openSeizure(file):
                     data.append(byte)
                     f.seek(4,1)#skip over next 4 bytes, if there are more seizures, looping should handle them.
                 continue # once we've finished reading the seizures, we're finished with the file
-                
+
         #print(data)
     legible_data = []
     i = 0

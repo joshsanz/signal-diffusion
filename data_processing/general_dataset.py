@@ -74,28 +74,30 @@ class CacheDict(OrderedDict):
 class GeneralPreprocessor:
     # 0 = Male, 1 = Female
     # Originally 250, changed to 125
-    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=125):
+    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=125, bin_spacing="linear"):
         self.datadirs = datadirs
         self.nsamps = nsamps
         self.ovr_perc = ovr_perc
+        self.fs = fs
+        self.bin_spacing = bin_spacing
 
         # Init each processor individually
         # Math init
         self.math_datadir = datadirs["math"]
         self.math_pre = MathPreprocessor(
-            self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+            self.math_datadir, nsamps, ovr_perc=ovr_perc, fs=fs, bin_spacing=bin_spacing,
         )
 
         # Parkinsons init
         self.park_datadir = datadirs["parkinsons"]
         self.park_pre = ParkinsonsPreprocessor(
-            self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+            self.park_datadir, nsamps, ovr_perc=ovr_perc, fs=fs, bin_spacing=bin_spacing,
         )
 
         # # SEED init
         self.seed_datadir = datadirs["seed"]
         self.seed_pre = SEEDPreprocessor(
-            self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs
+            self.seed_datadir, nsamps, ovr_perc=ovr_perc, fs=fs, bin_spacing=bin_spacing,
         )
 
     def make_tvt_splits(self, train_frac=0.8, val_frac=0.1, test_frac=0.1, seed=None):
@@ -108,14 +110,17 @@ class GeneralPreprocessor:
             np.random.seed(seed)
 
         # Preprocess Math data
+        print("Preprocessing Math data...")
         self.math_pre.preprocess(resolution=resolution, train_frac=train_frac,
                                  val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess Parkinsons data
+        print("Preprocessing Parkinsons data...")
         self.park_pre.preprocess(resolution=resolution, train_frac=train_frac,
                                  val_frac=val_frac, test_frac=test_frac)
 
         # Preprocess SEED data
+        print("Preprocessing SEED data...")
         self.seed_pre.preprocess(resolution=resolution, train_frac=train_frac,
                                  val_frac=val_frac, test_frac=test_frac)
 

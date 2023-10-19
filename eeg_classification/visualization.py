@@ -233,7 +233,7 @@ def roc(model, data_loader, device='cpu', fig=None, label=None, task=None):
     return fig, prob_detection, prob_false_alarm
 
 
-def display_sftf(datadir, dataset, sub_ind=0, spec_ind=0):
+def display_stft(datadir, dataset, sub_ind=0, spec_ind=0):
     if sub_ind != 0:
         sub_ind -= 1
 

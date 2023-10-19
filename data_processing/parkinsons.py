@@ -39,8 +39,9 @@ health_class_labels = bidict({
 
 class ParkinsonsPreprocessor():
     # Originally 250, changed to 125
-    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250, bin_spacing="linear"):
         self.datadir = datadir
+        self.bin_spacing = bin_spacing
 
         # Establish sampling constants
         orig_fs = 500
@@ -82,6 +83,17 @@ class ParkinsonsPreprocessor():
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
         return data
 
+    def get_data(self, subject_dir):
+        setfile = glob.glob(pjoin(self.datadir, subject_dir, "eeg", "*eeg.set"))[0]
+        data = mne.io.read_raw_eeglab(setfile)
+        data = data.get_data()
+        # Get subset of channels we want
+        chan_inds = [ch[1] for ch in parkinsons_channels]
+        data = data[chan_inds, :]
+        # Decimate data
+        data = self.decimate(data)
+        return data
+
     def _generate_spectrograms(self, subject_dirs, outdir, resolution, hop_length):
         # Containers for sample metadata
         files = []
@@ -91,14 +103,8 @@ class ParkinsonsPreprocessor():
         # Load data file for each subject
         total_specs = 0
         for sd in tqdm(subject_dirs):
+            data = self.get_data(sd)
             setfile = glob.glob(pjoin(self.datadir, sd, "eeg", "*eeg.set"))[0]
-            data = mne.io.read_raw_eeglab(setfile)
-            data = data.get_data()
-            # Get subset of channels we want
-            chan_inds = [ch[1] for ch in parkinsons_channels]
-            data = data[chan_inds, :]
-            # Decimate data
-            data = self.decimate(data)
             # Break data into chunks and save
             os.makedirs(pjoin(outdir, sd), exist_ok=True)
             N = data.shape[1]
@@ -127,6 +133,7 @@ class ParkinsonsPreprocessor():
                     blk,
                     hop_length=hop_length,
                     resolution=resolution, win_length=resolution,
+                    bin_spacing=self.bin_spacing,
                 )
                 fname = pjoin(sd, f"spectrogram-{i}.png")
                 files.append(fname)

@@ -2,8 +2,11 @@
 import librosa
 import numpy as np
 from PIL import Image
+from functools import lru_cache
 
 
+# Cache DFT matrices to avoid recomputing
+@lru_cache(maxsize=32)
 def lin_dftmtx(N):
     is_odd = N % 2 == 1
     spacing = 1 / N
@@ -16,7 +19,9 @@ def lin_dftmtx(N):
     return freqs, W
 
 
-def log_dftmtx(N, min_exponent=-3):
+# Cache DFT matrices to avoid recomputing
+@lru_cache(maxsize=32)
+def log_dftmtx(N, min_exponent=-2):
     is_odd = N % 2 == 1
     neg_freqs = [-(10 ** i) for i in np.linspace(np.log10(0.5), -3, N // 2, endpoint=True)]
     freqs = np.array(neg_freqs + [0] + [-f for f in neg_freqs[not is_odd:][::-1]])
@@ -83,7 +88,7 @@ def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='lin
         )
     elif bin_spacing == 'log':
         _, stft = log_stft(
-            x=y, win_length=win_length, hop_length=hop_length, window='hann',
+            x=y, win_length=win_length * 2 - 1, hop_length=hop_length, window='hann',
         )
     else:
         raise ValueError(f"Invalid bin spacing {bin_spacing}")
@@ -99,7 +104,8 @@ def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='lin
     return img
 
 
-def multichannel_spectrogram(x, resolution, hop_length, win_length, noise_floor_db=-100):
+def multichannel_spectrogram(x, resolution, hop_length, win_length,
+                             noise_floor_db=-100, bin_spacing='linear'):
     """
     Create a multichannel spectrogram image from a 2D array X
 
@@ -110,8 +116,9 @@ def multichannel_spectrogram(x, resolution, hop_length, win_length, noise_floor_
     - win_length (int): STFT window length; n_fft will be win_length * 2 - 1 to
                         enforce win_length output samples
     - noise_floor_db (float): noise floor in dB to clip the STFT output to, helps image dynamic range
+    - bin_spacing (str): 'linear' or 'log', spacing of frequency bins in the STFT
     """
-    specs = [spectrogram(x[i, :], hop_length, win_length, noise_floor_db) for i in range(x.shape[0])]
+    specs = [spectrogram(x[i, :], hop_length, win_length, noise_floor_db, bin_spacing) for i in range(x.shape[0])]
     swidth = specs[0].shape[1]
     Width = swidth * len(specs)
     assert Width <= resolution, f"Image width {Width}={len(specs)}*{swidth} is greater than resolution {resolution}"

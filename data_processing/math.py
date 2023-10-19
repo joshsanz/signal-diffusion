@@ -32,11 +32,12 @@ math_class_labels = bidict({
 
 
 class MathPreprocessor():
-    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250, bin_spacing="linear"):
         # Establish directories
         self.datadir = datadir
         self.eegdir = os.path.join(self.datadir, "raw_eeg")
         self.stfttdir = os.path.join(self.datadir, "stfts")
+        self.bin_spacing = bin_spacing
 
         # Establish sampling constants
         orig_fs = 500
@@ -155,6 +156,7 @@ class MathPreprocessor():
                         blk,
                         hop_length=hop_length,
                         resolution=resolution, win_length=resolution,
+                        bin_spacing=self.bin_spacing,
                     )
                     fname = pjoin(sub_sd, f"spectrogram-{i}.png")
                     files.append(fname)

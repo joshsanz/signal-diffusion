@@ -69,8 +69,9 @@ class SEEDPreprocessor():
         2: [2, 1, 3, 0, 4, 4, 0, 3, 2, 1, 3, 4, 1, 2, 0],
     }
 
-    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250):
+    def __init__(self, datadir, nsamps, ovr_perc=0, fs=250, bin_spacing="linear"):
         self.datadir = datadir
+        self.bin_spacing = bin_spacing
 
         # Establish sampling constants
         self.orig_fs = 1000
@@ -160,6 +161,7 @@ class SEEDPreprocessor():
                     blk,
                     hop_length=hop_length,
                     resolution=resolution, win_length=resolution,
+                    bin_spacing=self.bin_spacing,
                 )
                 fname = pjoin(f"sub-{subject}", f"spectrogram-s{session}-t{trial}-{i}.png")
                 files.append(fname)
