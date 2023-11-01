@@ -480,7 +480,7 @@ def get_dataset(accelerator, args, tokenizer, batch_size):
     else:
         data_files = {}
         if args.train_data_dir is not None:
-            data_files["train"] = os.path.join(args.train_data_dir, "**")
+            data_files["train"] = os.path.join(args.train_data_dir, "**", "*")
         dataset = load_dataset(
             "imagefolder",
             data_files=data_files,
@@ -575,16 +575,21 @@ def get_dataset(accelerator, args, tokenizer, batch_size):
 
 def get_models(accelerator, args):
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",
+                                                    cache_dir=args.cache_dir)
     tokenizer = CLIPTokenizer.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
+        args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision,
+        cache_dir=args.cache_dir
     )
     text_encoder = CLIPTextModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision,
+        cache_dir=args.cache_dir
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
+    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision,
+                                        cache_dir=args.cache_dir)
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision,
+        cache_dir=args.cache_dir
     )
 
     # Freeze vae and text_encoder
@@ -594,7 +599,8 @@ def get_models(accelerator, args):
     # Create EMA for the unet.
     if args.use_ema:
         ema_unet = UNet2DConditionModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision,
+            cache_dir=args.cache_dir
         )
         ema_unet = EMAModel(ema_unet.parameters(), model_cls=UNet2DConditionModel, model_config=ema_unet.config)
     else:

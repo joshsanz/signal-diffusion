@@ -46,17 +46,17 @@ run: |
   set -e
   echo "Hello, SkyPilot!"
   export RUN_ID=parkinsons.1
-  export MODEL_NAME='runwayml/stable-diffusion-v1-5'
-  export dataset_name='/data/parkinsons/stfts'
+  export MODEL_NAME="runwayml/stable-diffusion-v1-5"
+  export dataset_name="/data/reweighted_meta_dataset"
   export output_dir="/output-s3/stft-full.$RUN_ID"
   echo "Model $MODEL_NAME"
   echo "Dataset $dataset_name"
   echo "Output location $output_dir"
   PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 accelerate launch --mixed_precision=no train_text_to_image.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
-    --dataset_name=$dataset_name \
+    --train_data_dir="$dataset_name" \
     --use_ema \
-    --resolution=512 --center_crop \
+    --resolution=256 --center_crop \
     --train_batch_size=1 \
     --gradient_accumulation_steps=32 \
     --gradient_checkpointing \
