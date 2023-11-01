@@ -44,8 +44,9 @@ setup: |
 # Invoked under the workdir (i.e., can use its files).
 run: |
   set -e
+  export PATH=$PATH:/home/ubuntu/.local/bin
   echo "Hello, SkyPilot!"
-  export RUN_ID=parkinsons.1
+  export RUN_ID=meta_set.0
   export MODEL_NAME="runwayml/stable-diffusion-v1-5"
   export dataset_name="/data/reweighted_meta_dataset"
   export output_dir="/output-s3/stft-full.$RUN_ID"
@@ -57,13 +58,13 @@ run: |
     --train_data_dir="$dataset_name" \
     --use_ema \
     --resolution=256 --center_crop \
-    --train_batch_size=1 \
-    --gradient_accumulation_steps=32 \
+    --train_batch_size=4 \
+    --gradient_accumulation_steps=16 \
     --gradient_checkpointing \
     --max_train_steps=2000 \
     --learning_rate=1e-5 \
     --optimizer=adamw \
-    --adam_weight_decay=1e-5 \
+    --adam_weight_decay=3e-6 \
     --max_grad_norm=1 \
     --allow_tf32 \
     --lr_scheduler="constant" --lr_warmup_steps=100 \
