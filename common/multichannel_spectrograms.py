@@ -49,7 +49,7 @@ def apply_stft(x, W, win_length, hop_length, window=None, pad=True, demean=True)
         x = x - x.mean()
     # Zero-pad to fit integer number of frames
     if pad:
-        padding = win_length + (x.shape[0] % hop_length)
+        padding = win_length - (x.shape[0] % hop_length)
         x = np.concatenate([x, np.zeros(padding, dtype=x.dtype)])
     if window == 'hann':
         window = np.hanning(win_length)

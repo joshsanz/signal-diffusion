@@ -234,7 +234,7 @@ class SEEDPreprocessor():
         subjects_and_sessions = [(f.split('_')[0], f.split('_')[1]) for f in data_files]
         # Extract trials and generate spectrograms
         files, genders, ages, emotions, captions = [], [], [], [], []
-        for (i, (sub, sess)) in tqdm(enumerate(subjects_and_sessions)):
+        for (i, (sub, sess)) in enumerate(tqdm(subjects_and_sessions)):
             sub = int(sub) - 1
             sess = int(sess) - 1
             metadata = self._generate_spectrograms(outdir, data_files[i], sub, sess, resolution, hop_length)

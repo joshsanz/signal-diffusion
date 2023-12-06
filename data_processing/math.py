@@ -86,9 +86,10 @@ class MathPreprocessor():
         os.makedirs(outdir, exist_ok=True)
         # Spectrogram parameters
         max_bins = math.floor(resolution / self.n_channels)
-        hop_length = 8  # number of samples per time-step in spectrogram
+        hop_length = 4  # number of samples per time-step in spectrogram
         while self.nsamps / hop_length > max_bins:
-            hop_length += 8
+            hop_length += 4
+        print("Hop length:", hop_length)
         # Get list of data directories
         subject_dirs = os.listdir(self.eegdir)
         subject_dirs = list(filter(lambda d: d.startswith("Subject"), subject_dirs))
