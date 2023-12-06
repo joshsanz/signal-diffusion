@@ -20,10 +20,10 @@ scipy
 sox
 streamlit>=1.10.0
 tensorboard==2.12.2
-torch
-torchaudio
-torchvision
+torch==2.0.1
+torchaudio==2.0.2
+torchvision==0.15.2
 transformers
 triton
 wandb
-xformers
+xformers==0.0.21

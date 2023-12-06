@@ -834,6 +834,10 @@ def main():
         logger.debug("VAE size {:.3f} MB".format(get_model_size(vae)))
         logger.debug("Text encoder size {:.3f} MB".format(get_model_size(text_encoder)))
 
+        print(torch.cuda.is_available())
+        print(accelerator.device)
+        print(unet.device)
+
         # Potentially load in the weights and states from a previous save
         if args.resume_from_checkpoint:
             if args.resume_from_checkpoint != "latest":
