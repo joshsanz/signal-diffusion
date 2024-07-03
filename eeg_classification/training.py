@@ -149,7 +149,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
                         best_swa_file = pjoin("models", f"best_swa_model-{comment}.pt")
                         torch.save(swa_model.module.state_dict(), best_swa_file)
 
-        progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
+        progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
 
     # SWA batch norm

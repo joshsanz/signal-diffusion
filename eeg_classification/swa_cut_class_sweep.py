@@ -1,12 +1,15 @@
 # ## Imports and Setup
 import numpy as np
 import os
-import shutil
+# import shutil
 import sys
 from datetime import datetime
+import time
+from functools import reduce
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.summary import hparams
 from torchvision import transforms
 from itertools import product
 
@@ -22,7 +25,44 @@ from data_processing.general_dataset import GeneralPreprocessor, GeneralDataset,
 from training import train_class, TrainingConfig
 
 
+class SummaryWriter(SummaryWriter):
+    def add_hparams(self, hparam_dict, metric_dict):
+        torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
+        if type(hparam_dict) is not dict or type(metric_dict) is not dict:
+            raise TypeError('hparam_dict and metric_dict should be dictionary.')
+        exp, ssi, sei = hparams(hparam_dict, metric_dict)
+
+        logdir = self._get_file_writer().get_logdir()
+
+        with SummaryWriter(log_dir=logdir) as w_hp:
+            w_hp.file_writer.add_summary(exp)
+            w_hp.file_writer.add_summary(ssi)
+            w_hp.file_writer.add_summary(sei)
+            for k, v in metric_dict.items():
+                w_hp.add_scalar(k, v)
+
+
+def timefmt(t):
+    t = int(t)
+    h = t // 3600
+    m = (t % 3600) // 60
+    s = t % 60
+    fmtd = f"{h:02d}:" if h > 0 else ""
+    fmtd += f"{m:02d}:" if m > 0 else "00:"
+    fmtd += f"{s:02d}"
+    return fmtd
+
+
+def print_run_header(t0, run, num_runs):
+    t1 = time.time()
+    t_run = timefmt(t1 - t0)
+    t_est = "??" if run == 0 else timefmt((t1 - t0) / run * num_runs)
+    print(f"Training run {run + 1}/{num_runs} [{t_run}/{t_est}]")
+
+
 pjoin = os.path.join
+os.makedirs("models", exist_ok=True)
+os.makedirs("tensorboard_logs", exist_ok=True)
 
 random_seed = 205  # 205 Gave a good split for training
 np.random.seed(random_seed)
@@ -134,17 +174,18 @@ decays = [0.1, 0.003, 0.0]
 label_smoothing_epsilons = [0.3, 0.0]
 dropouts = [0, 0.25, 0.5, 0.75]
 schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR, None]
-poolings = ["mean"]
+poolings = ["mean", "max"]
 save_model = True
 run = 0
 
 num_combos = (len(epochs) * len(swa_start_fracs) * len(optimizers) * len(base_learning_rates) *
               len(swa_learning_rates) * len(decays) * len(dropouts) * len(poolings) *
               len(label_smoothing_epsilons) * len(schedulers))
-print(f"Total number of combinations: {num_combos}")
+print(f"*** Total number of combinations: {num_combos} ***")
+t0 = time.time()
 for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
                       swa_learning_rates, decays, dropouts, poolings, label_smoothing_epsilons, schedulers):
-
+    print_run_header(t0, run, num_combos)
     EPOCHS, SWA_START, optimizer, BASE_LEARNING_RATE, SWA_LEARNING_RATE, L2_REG_DECAY, DROPOUT, POOLING, EPSILON, scheduler = params
 
     SWA_START = int(SWA_START * EPOCHS)
@@ -185,7 +226,17 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
     postfix = ""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     comment = f"run{run}-{model.name}-{timestamp}"
-    tbsw = SummaryWriter(log_dir="tensorboard_logs/cnn/" + comment)
+    tbsw = SummaryWriter(log_dir=pjoin("tensorboard_logs/cnn", comment))
+    print("#" * 80)
+    print("Training", comment)
+
+    # Training loop
+    losses, accs, val_accs = train_class(
+        ARGS, model, swa_model,
+        real_train_loader, val_loader,
+        optimizer, scheduler, swa_scheduler,
+        criterion, device, tbsw, comment, run, save_model=save_model
+    )
     tbsw.add_hparams(dict(
         epochs=ARGS.epochs, task=ARGS.task,
         clip_grad_norm=ARGS.clip_grad_norm,
@@ -198,28 +249,18 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
         pooling=POOLING,
         criterion=criterion.__class__.__name__,
         label_smoothing=0 if not isinstance(criterion, LabelSmoothingCrossEntropy) else criterion.epsilon,
-    ), {})
-    print("#" * 80)
-    print("Training", comment)
-
-    # Training loop
-    losses, accs, val_accs = train_class(
-        ARGS, model, swa_model,
-        real_train_loader, val_loader,
-        optimizer, scheduler, swa_scheduler,
-        criterion, device, tbsw, comment, run, save_model=save_model)
+    ), {
+        'hparams/val_acc': max(val_accs),
+        'hparams/train_acc': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, accs, 0),  # Smoothed final estimate
+        'hparams/train_loss': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, losses, 0),  # Smoothed final estimate
+    })
+    tbsw.flush()
+    tbsw.close()
 
     # load best model and evaluate on test set
-    model.load_state_dict(torch.load(f'best_model-{comment}.pt'))
+    # model.load_state_dict(torch.load(f'best_model-{comment}.pt'))
     # test_loss, test_acc = evaluate_class(model, test_loader, criterion, device,
     #                                      tbsw, ARGS.epochs * len(real_train_loader) + 1)
     # print(f'Test loss={test_loss:.3f}; test accuracy={test_acc:.3f}')
-
-    # Copy model to unique filename
-    if save_model:
-        os.makedirs("models", exist_ok=True)
-        shutil.copyfile("best_model.pt", f"models/best_model-{comment}.pt")
-        shutil.copyfile("last_model.pt", f"models/last_model-{comment}.pt")
-        print(f"Copied best model to models/best_model-{comment}.pt")
 
     run += 1
