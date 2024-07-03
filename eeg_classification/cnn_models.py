@@ -33,9 +33,9 @@ class CNNClassifier(nn.Module):
                  conv_ks=[(7, 3), (5, 3), (3, 3)], conv_cs=[8, 16, 128],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 1), (1, 1), (1, 1)],
                  pool_ks=[(4, 2), (4, 2), (2, 2)], pool_ss=[(4, 2), (2, 2), (2, 2)],
-                 ff_dims=[500, 250, 125], dropout=0.5,
-                 pooling="max", activation="gelu"):
+                 dropout=0.5, pooling="max", activation="gelu"):
         super().__init__()
+        self.dropout = dropout
         # Store architecture sizes & strides
         self.conv_kernels = conv_ks
         self.conv_channels = conv_cs
@@ -43,7 +43,6 @@ class CNNClassifier(nn.Module):
         self.conv_pads = conv_ps
         self.pool_ks = pool_ks
         self.pool_ss = pool_ss
-        self.hidden_layers = ff_dims
         # Pooling type
         if pooling == "max":
             self.pooling = nn.MaxPool2d
@@ -61,25 +60,16 @@ class CNNClassifier(nn.Module):
                                         padding=self.conv_pads[i]))
             self.convs.append(self.activation_fn())
             self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
-        # Build linear layers
-        self.fc = nn.ModuleList()
-        self.fc.append(nn.Dropout(dropout))
-        self.fc.append(nn.LazyLinear(self.hidden_layers[0]))
-        for i in range(len(ff_dims) - 1):
-            self.fc.append(self.activation_fn())
-            self.fc.append(nn.Dropout(dropout))
-            self.fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
-        self.fc.append(nn.Linear(self.hidden_layers[-1], out_dim))
+            self.convs.append(nn.Dropout(dropout))
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.lin_out = nn.Linear(self.conv_channels[-1], out_dim, bias=False)
 
     def forward(self, x):
         for layer in self.convs:
             x = layer(x)
-        if len(x.shape) > 3:
-            x = x.view(x.shape[0], -1)
-        else:
-            x = x.view(-1)
-        for layer in self.fc:
-            x = layer(x)
+        x = self.global_pool(x)
+        x = x.view(x.shape[0], -1)  # Flatten for linear layer
+        x = self.lin_out(x)
         return x
 
 
@@ -90,9 +80,9 @@ class CNNClassifierLight(nn.Module):
                  conv_ks=[(5, 5), (3, 3), (3, 3)], conv_cs=[8, 16, 32],
                  conv_ss=[1, 1, 1], conv_ps=[(2, 2), (1, 1), (1, 1)],
                  pool_ks=[(2, 2), (2, 2), (2, 2)], pool_ss=[(2, 2), (2, 2), (2, 2)],
-                 ff_dims=[250, 75], dropout=0.5,
-                 pooling="max", activation="gelu"):
+                 dropout=0.5, pooling="max", activation="gelu"):
         super().__init__()
+        self.dropout = dropout
         # Store architecture sizes & strides
         self.conv_kernels = conv_ks
         self.conv_channels = conv_cs
@@ -100,9 +90,8 @@ class CNNClassifierLight(nn.Module):
         self.conv_pads = conv_ps
         self.pool_ks = pool_ks
         self.pool_ss = pool_ss
-        self.hidden_layers = ff_dims
         # Pooling type
-        if pooling == "max":
+        if pooling.lower() == "max":
             self.pooling = nn.MaxPool2d
         else:
             self.pooling = nn.AvgPool2d
@@ -118,43 +107,17 @@ class CNNClassifierLight(nn.Module):
                                         padding=self.conv_pads[i]))
             self.convs.append(self.activation_fn())
             self.convs.append(self.pooling(self.pool_ks[i], self.pool_ss[i]))
+            self.convs.append(nn.Dropout(dropout))
         # Build linear layers
-        if isinstance(out_dim, dict):
-            self.fcs = {"gender": nn.ModuleList(), "emotion": nn.ModuleList(), "health": nn.ModuleList()}
-            for task, fc in self.fcs.items():
-                self.register_module(f"fc_{task}", fc)
-                fc.append(nn.Dropout(dropout))
-                # fc.append(nn.LazyLinear(self.hidden_layers[0]))
-                fc.append(nn.Linear(32768, self.hidden_layers[0]))
-                for i in range(len(ff_dims) - 1):
-                    fc.append(self.activation_fn())
-                    fc.append(nn.Dropout(dropout))
-                    fc.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
-                fc.append(nn.Linear(self.hidden_layers[-1], out_dim[task]))
-        else:
-            self.fcs = nn.ModuleList()
-            self.fcs.append(nn.Dropout(dropout))
-            # self.fcs.append(nn.LazyLinear(self.hidden_layers[0]))
-            self.fcs.append(nn.Linear(32768, self.hidden_layers[0]))
-            for i in range(len(ff_dims) - 1):
-                self.fcs.append(self.activation_fn())
-                self.fcs.append(nn.Dropout(dropout))
-                self.fcs.append(nn.Linear(self.hidden_layers[i], self.hidden_layers[i + 1]))
-            self.fcs.append(nn.Linear(self.hidden_layers[-1], out_dim))
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.lin_out = nn.Linear(self.conv_channels[-1], out_dim, bias=False)
 
     def forward(self, x, task="gender"):
         for layer in self.convs:
             x = layer(x)
-        if len(x.shape) > 3:
-            x = x.view(x.shape[0], -1)
-        else:
-            x = x.view(-1)
-        if isinstance(self.fcs, dict):
-            fc = self.fcs[task]
-        else:
-            fc = self.fcs
-        for layer in fc:
-            x = layer(x)
+        x = self.global_pool(x)
+        x = x.view(x.shape[0], -1)
+        x = self.lin_out(x)
         return x
 
 
@@ -163,6 +126,7 @@ class EfficientNet(nn.Module):
 
     def __init__(self, out_dim, dropout=0.1):
         super(EfficientNet, self).__init__()
+        self.dropout = dropout
         self.model = torchvision.models.efficientnet_b0(
             weights=None, dropout=dropout, num_classes=out_dim
         )
@@ -177,6 +141,7 @@ class ShuffleNet(nn.Module):
 
     def __init__(self, out_dim, dropout=0.1):
         super().__init__()
+        self.dropout = dropout
         self.model = torchvision.models.shufflenetv2._shufflenetv2(
             weights=None,
             num_classes=out_dim,

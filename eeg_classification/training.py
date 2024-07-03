@@ -4,13 +4,14 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from tqdm.auto import tqdm
 from typing import Optional
-from common.dog import DoG, PDoG
+# import sklearn.metrics
 
+from os.path import join as pjoin
+from os.path import dirname
 
 @dataclass
 class TrainingConfig:
     epochs: int = 100
-    opt_restart_every: int = 200
     opt_log_every: int = 100
     val_every_epochs: int = 1
     clip_grad_norm: float = 1.0
@@ -38,18 +39,6 @@ class LabelSmoothingCrossEntropy(torch.nn.Module):
         loss = reduce_loss(-log_preds.sum(dim=-1), self.reduction)
         nll = F.nll_loss(log_preds, target, reduction=self.reduction)
         return linear_combination(loss / n, nll, self.epsilon)
-
-
-def log_etas(tblogger, opt, step):
-    state = opt.state_dict()
-    scalars = {}
-    for i, p in enumerate(state['param_groups']):
-        if isinstance(opt, PDoG):
-            etas = torch.stack([eta.norm() for eta in p['eta']]).detach().cpu()
-        else:
-            etas = torch.stack(p['eta']).detach().cpu()
-        tblogger.add_histogram(f"Eta.{i}", etas, global_step=step)
-    return scalars
 
 
 # Define training and evaluation functions for sequence & class variants
@@ -80,7 +69,7 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 # True training and evaluation functions
 def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer,
-           scheduler, swa_scheduler, criterion, device, tblogger, comment, county, save_model=True):
+           scheduler, swa_scheduler, criterion, device, tblogger, comment, count, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
@@ -92,7 +81,8 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     val_acc = 0
     best_val_acc = 0
     best_swa_val_acc = 0
-
+    running_loss = 0
+    running_acc = 0
 
     for epoch in range(args.epochs):
         model.train()
@@ -111,16 +101,16 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
 
             # Log loss, accuracy
             losses.append(loss.item())
+            running_loss = 0.99 * running_loss + 0.01 * loss.item()
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
+            running_acc = 0.99 * running_acc + 0.01 * accuracy.item()
             accuracies.append(accuracy.item())
             tblogger.add_scalar("Loss/train", loss.item(), global_step=global_step)
             tblogger.add_scalar("Accuracy/train", accuracy.item(), global_step=global_step)
             tblogger.add_scalar("Grads/norm", grad_norm.item(), global_step=global_step)
-            if isinstance(optimizer, DoG) and global_step % args.opt_log_every == 0:
-                log_etas(tblogger, optimizer, global_step)
             # Update progress bar
-            progress.set_postfix({"loss": round(loss.item(), 5), "acc": round(accuracy.item(), 3)})
+            progress.set_postfix({"loss": round(running_loss, 5), "acc": round(running_acc, 3)})
             progress.update(1)
             global_step += 1
 
@@ -139,27 +129,24 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
         lrs.append(optimizer.param_groups[0]['lr'])
 
         # Validate
-        if args.opt_restart_every > 0 and isinstance(optimizer, DoG) and (epoch + 1) % args.opt_restart_every == 0:
-            optimizer.reset(keep_etas=False)
-
         if epoch % args.val_every_epochs == 0 or epoch == args.epochs - 1:
-            val_loss, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
+            _, val_acc = _evaluate(output_permuter, model, val_data, criterion, device,
                                    tblogger, global_step, args.task)
             val_accuracies.append(val_acc)
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 if save_model:
-                    best_base_dir = pjoin(save_model, "best_model-" + comment + ".pt")
-                    torch.save(model.state_dict(), best_base_dir)
+                    best_base_file = pjoin("models", f"best_model-{comment}.pt")
+                    torch.save(model.state_dict(), best_base_file)
 
             if swa_model:
-                val_swa_loss, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
+                _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
                                            tblogger, global_step, args.task, swa=True)
                 if val_swa_acc > best_swa_val_acc:
                     best_swa_val_acc = val_swa_acc
                     if save_model:
-                        best_swa_dir = pjoin(save_model, "best_swa_model-" + comment + ".pt")
-                        torch.save(swa_model.module.state_dict(), best_swa_dir)
+                        best_swa_file = pjoin("models", f"best_swa_model-{comment}.pt")
+                        torch.save(swa_model.module.state_dict(), best_swa_file)
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(accuracies[-1], 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
@@ -171,34 +158,28 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     # End of training, save last model
     progress.close()
     if save_model:
-        last_base_dir = pjoin(save_model, "last_model-" + comment + ".pt")
+        last_base_dir = pjoin("models", "last_model-" + comment + ".pt")
         torch.save(model.state_dict(), last_base_dir)
         if swa_model:
-            last_swa_dir = pjoin(save_model, "last_swa_model-" + comment + ".pt")
+            last_swa_dir = pjoin("models", "last_swa_model-" + comment + ".pt")
             torch.save(swa_model.module.state_dict(), last_swa_dir)
 
     if swa_model:
         if val_swa_acc > 0.68:
             # ADD TO RESULTS
-            with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-                out_tuple = ("MODEL: "+str(county), "swa_model", comment, val_swa_acc)
+            with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
+                out_tuple = ("MODEL: " + str(count), "swa_model", comment, val_swa_acc)
                 swa_line = str(out_tuple) + "\n"
                 out.write(swa_line)
-                out.close()
 
     if val_acc > 0.68:
         # ADD TO RESULTS
-        with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'a') as out:
-            out_tuple = ("MODEL: "+str(county), "base_model", comment, val_acc)
+        with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
+            out_tuple = ("MODEL: " + str(count), "base_model", comment, val_acc)
             base_line = str(out_tuple) + "\n"
             out.write(base_line)
-            out.close()
 
-    hip_plot_dic = {
-        'dropout': dropout
-    }
-
-    return losses, accuracies, val_accuracies, lrs, hip_plot_dic
+    return losses, accuracies, val_accuracies
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
@@ -206,7 +187,7 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
     eval_loss = 0
     eval_accuracy = 0
     N = len(data_loader)
-    classification_reports = []
+    # classification_reports = []
     with torch.no_grad():
         for i, (src, trg) in enumerate(data_loader):
             src = src.to(device)
@@ -217,15 +198,15 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
             eval_accuracy += accuracy.item()
-            classification_reports.append(sklearn.metrics.classification_report(y_hat, trg, [0,1]))
+            # classification_reports.append(sklearn.metrics.classification_report(y_hat, trg, [0, 1]))
 
-    classification_report = {}
-    for key in classification_reports[0].keys():
-        classification_report[key] = 0
-        for report in classification_reports:
-            classification_report[key] += report[key]
-        
-        classification_report[key] = classification_report[key] / N
+    # classification_report = {}
+    # for key in classification_reports[0].keys():
+    #     classification_report[key] = 0
+    #     for report in classification_reports:
+    #         classification_report[key] += report[key]
+
+    #     classification_report[key] = classification_report[key] / N
 
     loss_name = "Loss/validate"
     acc_name = "Accuracy/validate"
