@@ -9,6 +9,7 @@ from typing import Optional
 from os.path import join as pjoin
 from os.path import dirname
 
+
 @dataclass
 class TrainingConfig:
     epochs: int = 100

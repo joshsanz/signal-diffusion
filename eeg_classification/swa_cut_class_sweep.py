@@ -12,8 +12,6 @@ from itertools import product
 
 sys.path.append("../")
 
-# %%
-from cnn_models import model_size
 from cnn_models import CNNClassifierLight, LabelSmoothingCrossEntropy
 # from cnn_models import EfficientNet, ShuffleNet, ResNet, CNNClassifier
 from data_processing.math import MathDataset
@@ -21,8 +19,7 @@ from data_processing.parkinsons import ParkinsonsDataset
 from data_processing.seed import SEEDDataset
 from data_processing.general_dataset import GeneralPreprocessor, GeneralDataset, GeneralSampler
 # from data_processing.general_dataset import general_class_labels, general_dataset_map
-from training import train_class, evaluate_class, TrainingConfig
-from visualization import *
+from training import train_class, TrainingConfig
 
 
 pjoin = os.path.join
@@ -53,7 +50,7 @@ datadirs['seed-stft'] = os.path.join(datadirs['seed'], "stfts")
 nsamps = 2000
 
 preprocessor = GeneralPreprocessor(datadirs, nsamps, ovr_perc=0.5, fs=125)
-#preprocessor.preprocess(resolution=256, train_frac=0.8, val_frac=0.2, test_frac=0.0)
+# preprocessor.preprocess(resolution=256, train_frac=0.8, val_frac=0.2, test_frac=0.0)
 
 # # Train on Real Data
 
@@ -158,7 +155,6 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
 
     # Loss function
     criterion = LabelSmoothingCrossEntropy(epsilon=EPSILON)
-
 
     # Create model instance
     model = CNNClassifierLight(1, OUTPUT_DIM, dropout=DROPOUT, pooling=POOLING)
