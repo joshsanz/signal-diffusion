@@ -118,9 +118,9 @@ parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="v
 seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
 val_datasets = [parkinsons_val_dataset, seed_val_dataset]
 
-math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train")
-parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=None)
-seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train", transform=None)
+math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train", transform=randtxfm)
+parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=randtxfm)
+seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train", transform=randtxfm)
 real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
 
 val_set = GeneralDataset(val_datasets, split='val')
@@ -231,7 +231,7 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
     print("Training", comment)
 
     # Training loop
-    losses, accs, val_accs = train_class(
+    losses, accs, val_accs, swa_val_accs = train_class(
         ARGS, model, swa_model,
         real_train_loader, val_loader,
         optimizer, scheduler, swa_scheduler,
@@ -251,6 +251,7 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
         label_smoothing=0 if not isinstance(criterion, LabelSmoothingCrossEntropy) else criterion.epsilon,
     ), {
         'hparams/val_acc': max(val_accs),
+        'hparams/swa_val_acc': max(swa_val_accs),
         'hparams/train_acc': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, accs, 0),  # Smoothed final estimate
         'hparams/train_loss': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, losses, 0),  # Smoothed final estimate
     })

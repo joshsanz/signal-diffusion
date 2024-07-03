@@ -75,6 +75,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
     losses = []
     accuracies = []
     val_accuracies = []
+    swa_val_accuracies = []
     lrs = []
     progress = tqdm(total=len(train_data) * args.epochs)
 
@@ -143,11 +144,14 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             if swa_model:
                 _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
                                            tblogger, global_step, args.task, swa=True)
+                swa_val_accuracies.append(val_swa_acc)
                 if val_swa_acc > best_swa_val_acc:
                     best_swa_val_acc = val_swa_acc
                     if save_model:
                         best_swa_file = pjoin("models", f"best_swa_model-{comment}.pt")
                         torch.save(swa_model.module.state_dict(), best_swa_file)
+            else:
+                swa_val_accuracies.append(0)
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3), "VAcc": round(val_acc, 3)})
         tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
@@ -180,7 +184,7 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             base_line = str(out_tuple) + "\n"
             out.write(base_line)
 
-    return losses, accuracies, val_accuracies
+    return losses, accuracies, val_accuracies, swa_val_accuracies
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
