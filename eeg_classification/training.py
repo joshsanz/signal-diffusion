@@ -141,7 +141,7 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
 
             if ema_model:
                 _, val_ema_acc = _evaluate(output_permuter, ema_model, val_data, criterion, device,
-                                           tblogger, global_step, args.task, swa=True)
+                                           tblogger, global_step, args.task, ema=True)
                 ema_val_accuracies.append(val_ema_acc)
                 if val_ema_acc > best_ema_val_acc:
                     best_ema_val_acc = val_ema_acc
@@ -167,30 +167,14 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
             last_ema_dir = pjoin("models", "last_ema_model-" + run_name + ".pt")
             torch.save(ema_model.module.state_dict(), last_ema_dir)
 
-    if ema_model:
-        if val_ema_acc > 0.68:
-            # ADD TO RESULTS
-            with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
-                out_tuple = ("MODEL: " + str(count), "ema_model", run_name, val_ema_acc)
-                ema_line = str(out_tuple) + "\n"
-                out.write(ema_line)
-
-    if val_acc > 0.68:
-        # ADD TO RESULTS
-        with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
-            out_tuple = ("MODEL: " + str(count), "base_model", run_name, val_acc)
-            base_line = str(out_tuple) + "\n"
-            out.write(base_line)
-
     return losses, accuracies, val_accuracies, ema_val_accuracies
 
 
-def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
+def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, ema=False):
     model.eval()
     eval_loss = 0
     eval_accuracy = 0
     N = len(data_loader)
-    # classification_reports = []
     with torch.no_grad():
         for i, (src, trg) in enumerate(data_loader):
             src = src.to(device)
@@ -201,21 +185,11 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, 
             y_hat = torch.argmax(output, dim=-1, keepdim=False)
             accuracy = torch.sum(y_hat == trg) / y_hat.nelement()
             eval_accuracy += accuracy.item()
-            # classification_reports.append(sklearn.metrics.classification_report(y_hat, trg, [0, 1]))
-
-    # classification_report = {}
-    # for key in classification_reports[0].keys():
-    #     classification_report[key] = 0
-    #     for report in classification_reports:
-    #         classification_report[key] += report[key]
-
-    #     classification_report[key] = classification_report[key] / N
-
     loss_name = "Loss/validate"
     acc_name = "Accuracy/validate"
-    if swa:
-        loss_name = "Loss/validate_swa"
-        acc_name = "Accuracy/validate_swa"
+    if ema:
+        loss_name = "Loss/validate_ema"
+        acc_name = "Accuracy/validate_ema"
     tblogger.add_scalar(loss_name, eval_loss / N, global_step=step)
     tblogger.add_scalar(acc_name, eval_accuracy / N, global_step=step)
     return eval_loss / N, eval_accuracy / N
