@@ -1,3 +1,4 @@
+# import plotly.graph_objects as go
 import plotly.express as px
 from tbparse import SummaryReader
 
@@ -23,9 +24,35 @@ def generate_pivot_table(logdir, columns=None):
     return hparams
 
 
+def _cleanup_df(df):
+    df = df.infer_objects()
+    for col in df.columns:
+        if df[col].dtype == "object":
+            df[col] = df[col].astype("category")
+    return df
+
+
 def parallel_coord_plot(df, metric="hparams/val_acc"):
-    fig = px.parallel_coordinates(df, color=metric)
+    if "acc" in metric:
+        cmin = 0
+        cmax = 1
+    else:
+        cmin = df[metric].min()
+        cmax = df[metric].max()
+    df = _cleanup_df(df)
+    fig = px.parallel_coordinates(df, color=metric, color_continuous_scale=px.colors.sequential.Viridis)
     fig.show()
+    # fig = go.Figure(data=
+    #     go.Parcoords(
+    #         line=dict(color=df[metric],
+    #                   colorscale='Viridis',
+    #                   showscale=True,
+    #                   cmin=cmin,
+    #                   cmax=cmax),
+    #         dimensions=list([
+    #             dict(range=
+    #         ])
+
 
 
 if __name__ == "__main__":

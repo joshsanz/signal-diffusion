@@ -3,14 +3,17 @@ import numpy as np
 import os
 # import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 import time
 from functools import reduce
+import warnings
 
 import torch
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard.summary import hparams
-from torchvision import transforms
+import torchvision.transforms.v2 as transforms
 from itertools import product
 
 sys.path.append("../")
@@ -26,6 +29,7 @@ from training import train_class, TrainingConfig
 
 
 class SummaryWriter(SummaryWriter):
+    """Override SummaryWriter so it doesn't place hparams in a separate subdirectory."""
     def add_hparams(self, hparam_dict, metric_dict):
         torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
         if type(hparam_dict) is not dict or type(metric_dict) is not dict:
@@ -40,6 +44,12 @@ class SummaryWriter(SummaryWriter):
             w_hp.file_writer.add_summary(sei)
             for k, v in metric_dict.items():
                 w_hp.add_scalar(k, v)
+
+
+@dataclass
+class DataLoaders:
+    real_train_loader: torch.utils.data.DataLoader
+    val_loader: torch.utils.data.DataLoader
 
 
 def timefmt(t):
@@ -113,29 +123,37 @@ randtxfm = transforms.Compose([
 ])
 
 # Datasets, excluding math
-math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
-parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
-seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
-val_datasets = [parkinsons_val_dataset, seed_val_dataset]
+dataloaders = dict()
+for transform_type in [None, "trivial_augment_wide"]:
+    if transform_type == "trivial_augment_wide":
+        transform_fn = randtxfm
+    else:
+        transform_fn = None
 
-math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train", transform=randtxfm)
-parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=randtxfm)
-seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train", transform=randtxfm)
-real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
+    math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
+    parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
+    seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
+    val_datasets = [parkinsons_val_dataset, seed_val_dataset]
 
-val_set = GeneralDataset(val_datasets, split='val')
-real_train_set = GeneralDataset(real_train_datasets, split='train')
+    math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train", transform=transform_fn)
+    parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=randtxfm)
+    seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train", transform=transform_fn)
+    real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
 
-# Sampler for balanced training data
-train_samp = GeneralSampler(real_train_datasets, BATCH_SIZE, split='train')
+    val_set = GeneralDataset(val_datasets, split='val')
+    real_train_set = GeneralDataset(real_train_datasets, split='train')
 
-# Dataloaders
-val_loader = torch.utils.data.DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=SHUFFLE,
-                                         num_workers=NUM_WORKERS, pin_memory=True,
-                                         persistent_workers=persistent)
-real_train_loader = torch.utils.data.DataLoader(real_train_set, batch_size=BATCH_SIZE,
-                                                num_workers=NUM_WORKERS, pin_memory=True,
-                                                persistent_workers=persistent, sampler=train_samp)
+    # Sampler for balanced training data
+    train_samp = GeneralSampler(real_train_datasets, BATCH_SIZE, split='train')
+
+    # Dataloaders
+    val_loader = torch.utils.data.DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=SHUFFLE,
+                                             num_workers=NUM_WORKERS, pin_memory=True,
+                                             persistent_workers=persistent)
+    real_train_loader = torch.utils.data.DataLoader(real_train_set, batch_size=BATCH_SIZE,
+                                                    num_workers=NUM_WORKERS, pin_memory=True,
+                                                    persistent_workers=persistent, sampler=train_samp)
+    dataloaders[transform_type] = DataLoaders(real_train_loader, val_loader)
 
 # Define hyper paramters
 OUTPUT_DIM = 2
@@ -157,42 +175,40 @@ torch.backends.cudnn.benchmark = True
 
 # Scheduler
 # epochs = [5,10,15]
-# swa_start_fracs = [0.6, 0.8, 1.5]
 # optimizers = [torch.optim.SGD] #torch.optim.AdamW,
 # base_learning_rates = [1e-2, 1e-3, 1e-4, 3e-2, 3e-3, 3e-4]
-# swa_learning_rates = [1e-2, 1e-3, 1e-4, 1e-5, 3e-2, 3e-3, 3e-4, 3e-5]
 # decays = [0.1, 0.01, 0.001, 0.3, 0.03, 0.003, 0.5, 0.05, 0.005]
 # label_smoothing_epsilons = [0.9, 0.5, 0.3, 0.1, 0.0]
-# schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR, None]
+# schedulers = [torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, None]
 
-epochs = [10]
-swa_start_fracs = [0.6, 1.5]  # 1.5 results in no SWA
+epochs = [15]
+transform_types = [None, "trivial_augment_wide"]
 optimizers = [torch.optim.AdamW]
-base_learning_rates = [1e-2, 1e-3, 3e-3]  # for adam 1e-2 -> 1e-4
-swa_learning_rates = [1e-2]
+base_learning_rates = [1e-2, 3e-3, 1e-3, 3e-4, 1e-4]  # for adam 1e-2 -> 1e-4
 decays = [0.1, 0.003, 0.0]
-label_smoothing_epsilons = [0.3, 0.0]
+label_smoothing_epsilons = [0.3, 0.1, 0.0]
 dropouts = [0, 0.25, 0.5, 0.75]
-schedulers = [torch.optim.lr_scheduler.CosineAnnealingLR, None]
-poolings = ["mean", "max"]
+schedulers = [None]
+poolings = ["mean"]  # "max"
 save_model = True
-run = 0
 
-num_combos = (len(epochs) * len(swa_start_fracs) * len(optimizers) * len(base_learning_rates) *
-              len(swa_learning_rates) * len(decays) * len(dropouts) * len(poolings) *
+num_combos = (len(epochs) * len(transform_types) * len(optimizers) * len(base_learning_rates) *
+              len(decays) * len(dropouts) * len(poolings) *
               len(label_smoothing_epsilons) * len(schedulers))
 print(f"*** Total number of combinations: {num_combos} ***")
 t0 = time.time()
-for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
-                      swa_learning_rates, decays, dropouts, poolings, label_smoothing_epsilons, schedulers):
+run = 0
+for params in product(epochs, transform_types, optimizers, base_learning_rates,
+                      decays, dropouts, poolings, label_smoothing_epsilons, schedulers):
+    print("#" * 80)
     print_run_header(t0, run, num_combos)
-    EPOCHS, SWA_START, optimizer, BASE_LEARNING_RATE, SWA_LEARNING_RATE, L2_REG_DECAY, DROPOUT, POOLING, EPSILON, scheduler = params
-
-    SWA_START = int(SWA_START * EPOCHS)
-
+    EPOCHS, TRANSFORM_TYPE, optimizer, BASE_LEARNING_RATE, L2_REG_DECAY, DROPOUT, POOLING, EPSILON, scheduler = params
     random_seed = 205  # 205 Gave a good split for training
     np.random.seed(random_seed)
     torch.manual_seed(random_seed)
+
+    # Data
+    real_train_loader, val_loader = dataloaders[TRANSFORM_TYPE]
 
     # Loss function
     criterion = LabelSmoothingCrossEntropy(epsilon=EPSILON)
@@ -208,39 +224,32 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
     if scheduler == torch.optim.lr_scheduler.ExponentialLR:
         exp_sched_gamma = 0.9
         scheduler = scheduler(optimizer, exp_sched_gamma, verbose=False, last_epoch=-1)
-    elif scheduler == torch.optim.lr_scheduler.CosineAnnealingLR:
-        scheduler = scheduler(optimizer, T_max=EPOCHS, last_epoch=- 1)
+    elif scheduler == torch.optim.lr_scheduler.CosineAnnealingWarmRestarts:
+        scheduler = scheduler(optimizer, T_0=EPOCHS // 3, T_mult=1, eta_min=1e-5, last_epoch=-1)
+        warnings.warn("CosineAnnealingWarmRestarts is not used correctly in the training function")
 
-    # SWA model instance
-    if SWA_START < EPOCHS:
-        swa_model = torch.optim.swa_utils.AveragedModel(model)
-        swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=SWA_LEARNING_RATE)
-    else:
-        swa_model = None
-        swa_scheduler = None
+    # EMA model
+    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(0.999))
 
     # Create training configuration
-    ARGS = TrainingConfig(epochs=EPOCHS, val_every_epochs=1, swa_start=SWA_START)
+    ARGS = TrainingConfig(epochs=EPOCHS, val_every_epochs=1)
 
     # Log statistics
     postfix = ""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    comment = f"run{run}-{model.name}-{timestamp}"
-    tbsw = SummaryWriter(log_dir=pjoin("tensorboard_logs/cnn", comment))
-    print("#" * 80)
-    print("Training", comment)
+    run_name = f"run{run}-{model.name}-{timestamp}"
+    print("Run name:", run_name)
+    tbsw = SummaryWriter(log_dir=pjoin("tensorboard_logs/cnn", run_name))
 
     # Training loop
-    losses, accs, val_accs, swa_val_accs = train_class(
-        ARGS, model, swa_model,
-        real_train_loader, val_loader,
-        optimizer, scheduler, swa_scheduler,
-        criterion, device, tbsw, comment, run, save_model=save_model
+    losses, accs, val_accs, ema_val_accs = train_class(
+        ARGS, model, ema_model, real_train_loader, val_loader,
+        optimizer, scheduler, criterion, device, tbsw, run_name, run,
+        save_model=save_model
     )
     tbsw.add_hparams(dict(
         epochs=ARGS.epochs, task=ARGS.task,
         clip_grad_norm=ARGS.clip_grad_norm,
-        swa_start=ARGS.swa_start,
         dropout=model.dropout,
         optimizer=optimizer.__class__.__name__,
         scheduler=scheduler.__class__.__name__,
@@ -249,9 +258,10 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
         pooling=POOLING,
         criterion=criterion.__class__.__name__,
         label_smoothing=0 if not isinstance(criterion, LabelSmoothingCrossEntropy) else criterion.epsilon,
+        transform=transform_type,
     ), {
         'hparams/val_acc': max(val_accs),
-        'hparams/swa_val_acc': max(swa_val_accs),
+        'hparams/ema_val_acc': max(ema_val_accs),
         'hparams/train_acc': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, accs, 0),  # Smoothed final estimate
         'hparams/train_loss': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, losses, 0),  # Smoothed final estimate
     })
@@ -259,7 +269,7 @@ for params in product(epochs, swa_start_fracs, optimizers, base_learning_rates,
     tbsw.close()
 
     # load best model and evaluate on test set
-    # model.load_state_dict(torch.load(f'best_model-{comment}.pt'))
+    # model.load_state_dict(torch.load(f'best_model-{run_name}.pt'))
     # test_loss, test_acc = evaluate_class(model, test_loader, criterion, device,
     #                                      tbsw, ARGS.epochs * len(real_train_loader) + 1)
     # print(f'Test loss={test_loss:.3f}; test accuracy={test_acc:.3f}')

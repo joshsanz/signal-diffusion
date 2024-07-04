@@ -16,7 +16,6 @@ class TrainingConfig:
     opt_log_every: int = 100
     val_every_epochs: int = 1
     clip_grad_norm: float = 1.0
-    swa_start: int = 2
     task: Optional[str] = None
 
 
@@ -43,46 +42,51 @@ class LabelSmoothingCrossEntropy(torch.nn.Module):
 
 
 # Define training and evaluation functions for sequence & class variants
-def train_seq(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger):
+def train_seq(args, model, ema_model, train_data, val_data,
+              optimizer, scheduler, criterion, device, tblogger):
     def do_permute(output):
         return output.permute(0, 2, 1)
-    return _train(do_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger)
+    return _train(do_permute, args, model, ema_model, train_data, val_data,
+                  optimizer, scheduler, criterion, device, tblogger)
 
 
-def train_class(args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler,
-                criterion, device, tblogger, comment, i, save_model=True):
+def train_class(args, model, ema_model, train_data, val_data,
+                optimizer, scheduler, criterion, device, tblogger, run_name, i,
+                save_model=True):
     def no_permute(output):
         return output
-    return _train(no_permute, args, model, swa_model, train_data, val_data, optimizer, scheduler, swa_scheduler, criterion, device, tblogger, comment, i, save_model=save_model)
+    return _train(no_permute, args, model, ema_model, train_data, val_data,
+                  optimizer, scheduler, criterion, device, tblogger, run_name, i,
+                  save_model=save_model)
 
 
 def evaluate_seq(model, iterator, criterion, device, tblogger, step, task):
     def do_permute(output):
         return output.permute(0, 2, 1)
-    return _evaluate(do_permute, model, iterator, criterion, device, tblogger, step, task="gender")
+    return _evaluate(do_permute, model, iterator, criterion, device, tblogger, step, task=task)
 
 
 def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
     def no_permute(output):
         return output
-    return _evaluate(no_permute, model, iterator, criterion, device, tblogger, step, task="gender")
+    return _evaluate(no_permute, model, iterator, criterion, device, tblogger, step, task=task)
 
 
 # True training and evaluation functions
-def _train(output_permuter, args, model, swa_model, train_data, val_data, optimizer,
-           scheduler, swa_scheduler, criterion, device, tblogger, comment, count, save_model=True):
+def _train(output_permuter, args, model, ema_model, train_data, val_data, optimizer,
+           scheduler, criterion, device, tblogger, run_name, count, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
     val_accuracies = []
-    swa_val_accuracies = []
+    ema_val_accuracies = []
     lrs = []
     progress = tqdm(total=len(train_data) * args.epochs)
 
-    val_swa_acc = 0
+    val_ema_acc = 0
     val_acc = 0
     best_val_acc = 0
-    best_swa_val_acc = 0
+    best_ema_val_acc = 0
     running_loss = 0
     running_acc = 0
 
@@ -100,6 +104,8 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
+            if ema_model:
+                ema_model.update_parameters(model)
 
             # Log loss, accuracy
             losses.append(loss.item())
@@ -117,16 +123,8 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             global_step += 1
 
         # END OF EPOCH
-        # Update SWA model
-        if epoch == args.swa_start and swa_model is None:
-            swa_model = torch.optim.swa_utils.AveragedModel(model)
-        elif swa_model and epoch >= args.swa_start:
-            swa_model.update_parameters(model)  # push into if statement
-
         # Take scheduler step
-        if epoch >= args.swa_start and swa_scheduler:
-            swa_scheduler.step()
-        elif scheduler:
+        if scheduler:
             scheduler.step()
         lrs.append(optimizer.param_groups[0]['lr'])
 
@@ -138,53 +136,53 @@ def _train(output_permuter, args, model, swa_model, train_data, val_data, optimi
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 if save_model:
-                    best_base_file = pjoin("models", f"best_model-{comment}.pt")
+                    best_base_file = pjoin("models", f"best_model-{run_name}.pt")
                     torch.save(model.state_dict(), best_base_file)
 
-            if swa_model:
-                _, val_swa_acc = _evaluate(output_permuter, swa_model, val_data, criterion, device,
+            if ema_model:
+                _, val_ema_acc = _evaluate(output_permuter, ema_model, val_data, criterion, device,
                                            tblogger, global_step, args.task, swa=True)
-                swa_val_accuracies.append(val_swa_acc)
-                if val_swa_acc > best_swa_val_acc:
-                    best_swa_val_acc = val_swa_acc
+                ema_val_accuracies.append(val_ema_acc)
+                if val_ema_acc > best_ema_val_acc:
+                    best_ema_val_acc = val_ema_acc
                     if save_model:
-                        best_swa_file = pjoin("models", f"best_swa_model-{comment}.pt")
-                        torch.save(swa_model.module.state_dict(), best_swa_file)
+                        best_ema_file = pjoin("models", f"best_ema_model-{run_name}.pt")
+                        torch.save(ema_model.module.state_dict(), best_ema_file)
             else:
-                swa_val_accuracies.append(0)
+                ema_val_accuracies.append(0)
 
         progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3), "VAcc": round(val_acc, 3)})
-        tblogger.add_scalar("LR", optimizer.param_groups[0]['lr'], global_step=global_step)
+        tblogger.add_scalar("Scheduling/LR", optimizer.param_groups[0]['lr'], global_step=global_step)
 
     # SWA batch norm
-    if swa_model:
-        torch.optim.swa_utils.update_bn(train_data, swa_model)
+    if ema_model:
+        torch.optim.swa_utils.update_bn(train_data, ema_model)
 
     # End of training, save last model
     progress.close()
     if save_model:
-        last_base_dir = pjoin("models", "last_model-" + comment + ".pt")
+        last_base_dir = pjoin("models", "last_model-" + run_name + ".pt")
         torch.save(model.state_dict(), last_base_dir)
-        if swa_model:
-            last_swa_dir = pjoin("models", "last_swa_model-" + comment + ".pt")
-            torch.save(swa_model.module.state_dict(), last_swa_dir)
+        if ema_model:
+            last_ema_dir = pjoin("models", "last_ema_model-" + run_name + ".pt")
+            torch.save(ema_model.module.state_dict(), last_ema_dir)
 
-    if swa_model:
-        if val_swa_acc > 0.68:
+    if ema_model:
+        if val_ema_acc > 0.68:
             # ADD TO RESULTS
             with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
-                out_tuple = ("MODEL: " + str(count), "swa_model", comment, val_swa_acc)
-                swa_line = str(out_tuple) + "\n"
-                out.write(swa_line)
+                out_tuple = ("MODEL: " + str(count), "ema_model", run_name, val_ema_acc)
+                ema_line = str(out_tuple) + "\n"
+                out.write(ema_line)
 
     if val_acc > 0.68:
         # ADD TO RESULTS
         with open(pjoin(dirname(__file__), "sweep_results.txt"), 'a') as out:
-            out_tuple = ("MODEL: " + str(count), "base_model", comment, val_acc)
+            out_tuple = ("MODEL: " + str(count), "base_model", run_name, val_acc)
             base_line = str(out_tuple) + "\n"
             out.write(base_line)
 
-    return losses, accuracies, val_accuracies, swa_val_accuracies
+    return losses, accuracies, val_accuracies, ema_val_accuracies
 
 
 def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, swa=False):
