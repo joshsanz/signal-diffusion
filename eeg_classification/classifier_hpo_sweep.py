@@ -208,7 +208,8 @@ for params in product(epochs, transform_types, optimizers, base_learning_rates,
     torch.manual_seed(random_seed)
 
     # Data
-    real_train_loader, val_loader = dataloaders[TRANSFORM_TYPE]
+    real_train_loader= dataloaders[TRANSFORM_TYPE].real_train_loader
+    val_loader = dataloaders[TRANSFORM_TYPE].val_loader
 
     # Loss function
     criterion = LabelSmoothingCrossEntropy(epsilon=EPSILON)
