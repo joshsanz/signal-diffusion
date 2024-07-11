@@ -1,0 +1,24 @@
+architecture:
+  out_dim: 2
+  in_channels: 1
+
+training:
+  batch_size: 32
+  epochs: 20
+  lr: 0.01
+  optimizer: AdamW
+  scheduler: None
+  criterion: LabelSmoothingCrossEntropyLoss
+  label_smoothing: 0.3
+  weight_decay: 0.1
+  dropout: 0.2
+  clip_grad_norm: 1.0
+  ema: true
+
+data:
+  from_eeg_data: true
+  from_synth_dis: true
+  from_synth_sd: true
+  synthetic_dis_path: "/data/shared/signal-diffusion/generated_images_dis/"
+  synthetic_sd_path: "/data/shared/signal-diffusion/signal-diffusion/generated_images_sd/"
+  transform: trivial_augment_wide
