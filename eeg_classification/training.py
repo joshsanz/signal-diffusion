@@ -7,7 +7,6 @@ from typing import Optional
 # import sklearn.metrics
 
 from os.path import join as pjoin
-from os.path import dirname
 
 
 @dataclass
@@ -51,12 +50,12 @@ def train_seq(args, model, ema_model, train_data, val_data,
 
 
 def train_class(args, model, ema_model, train_data, val_data,
-                optimizer, scheduler, criterion, device, tblogger, run_name, i,
+                optimizer, scheduler, criterion, device, tblogger, run_name,
                 save_model=True):
     def no_permute(output):
         return output
     return _train(no_permute, args, model, ema_model, train_data, val_data,
-                  optimizer, scheduler, criterion, device, tblogger, run_name, i,
+                  optimizer, scheduler, criterion, device, tblogger, run_name,
                   save_model=save_model)
 
 
@@ -74,7 +73,7 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 # True training and evaluation functions
 def _train(output_permuter, args, model, ema_model, train_data, val_data, optimizer,
-           scheduler, criterion, device, tblogger, run_name, count, save_model=True):
+           scheduler, criterion, device, tblogger, run_name, save_model=True):
     global_step = 0
     losses = []
     accuracies = []
@@ -140,8 +139,8 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
                     torch.save(model.state_dict(), best_base_file)
 
             if ema_model:
-                _, val_ema_acc = _evaluate(output_permuter, ema_model, val_data, criterion, device,
-                                           tblogger, global_step, args.task, ema=True)
+                _, val_ema_acc = _evaluate(output_permuter, ema_model, val_data, criterion,
+                                           device, tblogger, global_step, args.task, ema=True)
                 ema_val_accuracies.append(val_ema_acc)
                 if val_ema_acc > best_ema_val_acc:
                     best_ema_val_acc = val_ema_acc
@@ -151,8 +150,10 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
             else:
                 ema_val_accuracies.append(0)
 
-        progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3), "VAcc": round(val_acc, 3)})
-        tblogger.add_scalar("Scheduling/LR", optimizer.param_groups[0]['lr'], global_step=global_step)
+        progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3),
+                              "VAcc": round(val_acc, 3)})
+        tblogger.add_scalar("Scheduling/LR", optimizer.param_groups[0]['lr'],
+                            global_step=global_step)
 
     # SWA batch norm
     if ema_model:
@@ -170,7 +171,8 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
     return losses, accuracies, val_accuracies, ema_val_accuracies
 
 
-def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger, step, task, ema=False):
+def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger,
+              step, task, ema=False):
     model.eval()
     eval_loss = 0
     eval_accuracy = 0

@@ -61,6 +61,8 @@ def disabled_safety_checker(images, clip_input):
 
 def main(args):
     print("Sample images from a fine-tuned stable diffusion.")
+    with open(os.path.join(args.output_dir, "run_args.txt"), "w") as f:
+        f.write(" ".join(sys.argv))
     # Setup PyTorch:
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
@@ -108,7 +110,7 @@ def main(args):
     # Write metadata file
     with open(f"{args.output_dir}/metadata.csv", "w") as f:
         writer = csv.writer(f)
-        writer.writerow(["filename", "class"])
+        writer.writerow(["file_name", "class"])
         for i in range(N):
             writer.writerow([filenames[i], classes[i]])
 
@@ -117,13 +119,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--image-size", type=int, choices=[32, 64, 256, 512], default=256)
     parser.add_argument("-c", "--num-classes", type=int, default=0)
-    parser.add_argument("--cfg-scale", type=float, default=1.5)
-    parser.add_argument("--num-sampling-steps", type=int, default=50)
+    parser.add_argument("-C", "--cfg-scale", type=float, default=1.5)
+    parser.add_argument("-S", "--num-sampling-steps", type=int, default=50)
     parser.add_argument("-n", "--num-images", type=int, default=8)
     parser.add_argument("-b", "--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--ckpt", type=str, default="/data/shared/signal-diffusion/stft-full.meta_set.3")
-    parser.add_argument("--output-dir", type=str, default="/data/shared/signal-diffusion/generated_images_sd")
+    parser.add_argument("-o", "--output-dir", type=str, default="/data/shared/signal-diffusion/generated_images_sd")
     args = parser.parse_args()
     assert args.num_classes in [0, 2], "Only 0 or 2 classes supported for now"
     os.makedirs(args.output_dir, exist_ok=True)

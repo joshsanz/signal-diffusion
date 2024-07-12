@@ -135,9 +135,12 @@ for transform_type in [None, "trivial_augment_wide"]:
     seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
     val_datasets = [parkinsons_val_dataset, seed_val_dataset]
 
-    math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train", transform=transform_fn)
-    parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=randtxfm)
-    seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train", transform=transform_fn)
+    math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train",
+                                          transform=transform_fn)
+    parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train",
+                                                      transform=transform_fn)
+    seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train",
+                                          transform=transform_fn)
     real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
 
     val_set = GeneralDataset(val_datasets, split='val')
@@ -152,7 +155,8 @@ for transform_type in [None, "trivial_augment_wide"]:
                                              persistent_workers=persistent)
     real_train_loader = torch.utils.data.DataLoader(real_train_set, batch_size=BATCH_SIZE,
                                                     num_workers=NUM_WORKERS, pin_memory=True,
-                                                    persistent_workers=persistent, sampler=train_samp)
+                                                    persistent_workers=persistent,
+                                                    sampler=train_samp)
     dataloaders[transform_type] = DataLoaders(real_train_loader, val_loader)
 
 # Define hyper paramters
@@ -208,7 +212,7 @@ for params in product(epochs, transform_types, optimizers, base_learning_rates,
     torch.manual_seed(random_seed)
 
     # Data
-    real_train_loader= dataloaders[TRANSFORM_TYPE].real_train_loader
+    real_train_loader = dataloaders[TRANSFORM_TYPE].real_train_loader
     val_loader = dataloaders[TRANSFORM_TYPE].val_loader
 
     # Loss function
@@ -227,7 +231,8 @@ for params in product(epochs, transform_types, optimizers, base_learning_rates,
         scheduler = scheduler(optimizer, exp_sched_gamma, verbose=False, last_epoch=-1)
     elif scheduler == torch.optim.lr_scheduler.CosineAnnealingWarmRestarts:
         scheduler = scheduler(optimizer, T_0=EPOCHS // 3, T_mult=1, eta_min=1e-5, last_epoch=-1)
-        warnings.warn("CosineAnnealingWarmRestarts is not used correctly in the training function")
+        warnings.warn(
+            "CosineAnnealingWarmRestarts is not used correctly in the training function")
 
     # EMA model
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(0.999))
@@ -245,7 +250,7 @@ for params in product(epochs, transform_types, optimizers, base_learning_rates,
     # Training loop
     losses, accs, val_accs, ema_val_accs = train_class(
         ARGS, model, ema_model, real_train_loader, val_loader,
-        optimizer, scheduler, criterion, device, tbsw, run_name, run,
+        optimizer, scheduler, criterion, device, tbsw, run_name,
         save_model=save_model
     )
     tbsw.add_hparams(dict(
@@ -258,13 +263,15 @@ for params in product(epochs, transform_types, optimizers, base_learning_rates,
         decay=optimizer.param_groups[0]['weight_decay'],
         pooling=POOLING,
         criterion=criterion.__class__.__name__,
-        label_smoothing=0 if not isinstance(criterion, LabelSmoothingCrossEntropy) else criterion.epsilon,
+        label_smoothing=(0 if not isinstance(criterion, LabelSmoothingCrossEntropy) else
+                         criterion.epsilon),
         transform=transform_type,
     ), {
         'hparams/val_acc': max(val_accs),
         'hparams/ema_val_acc': max(ema_val_accs),
-        'hparams/train_acc': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, accs, 0),  # Smoothed final estimate
-        'hparams/train_loss': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, losses, 0),  # Smoothed final estimate
+        # Smoothed final estimate
+        'hparams/train_acc': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, accs, 0),
+        'hparams/train_loss': reduce(lambda x1, x2: 0.99 * x1 + 0.01 * x2, losses, 0),
     })
     tbsw.flush()
     tbsw.close()
