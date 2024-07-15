@@ -28,6 +28,10 @@ from data_processing.general_dataset import GeneralPreprocessor, GeneralDataset,
 from training import train_class, TrainingConfig
 
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+
 class SummaryWriter(SummaryWriter):
     """Override SummaryWriter so it doesn't place hparams in a separate subdirectory."""
     def add_hparams(self, hparam_dict, metric_dict):
@@ -118,7 +122,8 @@ persistent = NUM_WORKERS > 0
 # Data augmentation
 randtxfm = transforms.Compose([
     transforms.TrivialAugmentWide(),
-    transforms.ToTensor(),
+    transforms.ToImage(),
+    transforms.ToDtype(torch.float32, scale=True),
     transforms.Normalize([0.5], [0.5]),
 ])
 

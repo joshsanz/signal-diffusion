@@ -92,8 +92,14 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
     for epoch in range(args.epochs):
         model.train()
 
-        for i, (src, trg) in enumerate(train_data):
-            # Send to device
+        for i, xy in enumerate(train_data):
+            # Extract and send to device
+            if isinstance(xy, list):
+                src, trg = xy
+            elif isinstance(xy, dict):
+                src, trg = xy['image'], xy['class']
+            else:
+                raise ValueError(f"Unknown data format {type(xy)}")
             src = src.to(device)
             trg = trg.to(device)
             # Run classifier & take step
@@ -178,9 +184,17 @@ def _evaluate(output_permuter, model, data_loader, criterion, device, tblogger,
     eval_accuracy = 0
     N = len(data_loader)
     with torch.no_grad():
-        for i, (src, trg) in enumerate(data_loader):
+        for i, xy in enumerate(data_loader):
+            # Extract and send to device
+            if isinstance(xy, list):
+                src, trg = xy
+            elif isinstance(xy, dict):
+                src, trg = xy['image'], xy['class']
+            else:
+                raise ValueError(f"Unknown data format {type(xy)}")
             src = src.to(device)
             trg = trg.to(device)
+            # Check output
             output = model(src, task=task)
             loss = criterion(output_permuter(output), trg)
             eval_loss += loss.item()

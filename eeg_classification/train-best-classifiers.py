@@ -1,11 +1,13 @@
 # Train the best classifier for each data source to test on the rest
 
 import argparse
+from copy import deepcopy
 from datasets import load_dataset
 import numpy as np
 from omegaconf import OmegaConf
 import os
 from os.path import join as pjoin
+import pandas as pd
 import shutil
 import sys
 import time
@@ -20,8 +22,11 @@ from cnn_models import CNNClassifierLight, LabelSmoothingCrossEntropy
 from data_processing.parkinsons import ParkinsonsDataset
 from data_processing.seed import SEEDDataset
 from data_processing.general_dataset import GeneralDataset, GeneralSampler
-from training import train_class, TrainingConfig
+from training import train_class, evaluate_class, TrainingConfig
 
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 opt_dict = {
     "adamw": torch.optim.AdamW,
@@ -58,6 +63,21 @@ def print_run_header(t0, run, num_runs):
 
 def load_datasets(cfg):
     all_datasets = []
+
+    if cfg.data.transform == "trivial_augment_wide":
+        transform_fn = transforms.Compose([
+            transforms.TrivialAugmentWide(),
+            transforms.ToImage(),
+            transforms.ToDtype(torch.float32, scale=True),
+            transforms.Normalize([0.5], [0.5]),
+        ])
+    else:
+        transform_fn = transforms.Compose([
+            transforms.ToImage(),
+            transforms.ToDtype(torch.float32, scale=True),
+            transforms.Normalize([0.5], [0.5]),
+        ])
+
     if cfg.data.from_eeg_data:
         # Load real datasets
         datadirs = {}
@@ -73,14 +93,6 @@ def load_datasets(cfg):
         datadirs['seed'] = f'{datahome}/seed/'
         datadirs['seed-stft'] = os.path.join(datadirs['seed'], "stfts")
 
-        if cfg.data.transform == "trivial_augment_wide":
-            transform_fn = transforms.Compose([
-                transforms.TrivialAugmentWide(),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ])
-        else:
-            transform_fn = None
         # Validation datasets
         # math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
         parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
@@ -115,8 +127,13 @@ def load_datasets(cfg):
         all_datasets.append(("real_eeg", train_loader, val_loader))
 
     # Synthetic datasets
+    def apply_transform(examples):
+        examples['image'] = [transform_fn(img.convert("L")) for img in examples['image']]
+        return examples
+
     if cfg.data.from_synth_dis:
         dis_data = load_dataset("imagefolder", data_dir=cfg.data.dis_data_dir)
+        dis_data = dis_data.with_transform(apply_transform)
         # TODO: check for unsplit data and split it here
         train_loader = torch.utils.data.DataLoader(
             dis_data["train"], batch_size=cfg.training.batch_size, shuffle=True)
@@ -126,6 +143,7 @@ def load_datasets(cfg):
 
     if cfg.data.from_synth_sd:
         sd_data = load_dataset("imagefolder", data_dir=cfg.data.sd_data_dir)
+        sd_data = sd_data.with_transform(apply_transform)
         # TODO: check for unsplit data and split it here
         train_loader = torch.utils.data.DataLoader(
             sd_data["train"], batch_size=cfg.training.batch_size, shuffle=True)
@@ -136,16 +154,7 @@ def load_datasets(cfg):
     return all_datasets
 
 
-def main(args):
-    os.makedirs(args.output_dir, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        warnings.warn("Running on CPU. This will be slow.")
-
-    cfg = OmegaConf.load(args.config)
-    with open(pjoin(args.output_dir, "config.yaml"), "w") as f:
-        OmegaConf.save(cfg, f)
-
+def train_models(args, cfg, device):
     all_datasets = load_datasets(cfg)
     criterion = LabelSmoothingCrossEntropy(cfg.training.label_smoothing)
     tconf = TrainingConfig(cfg.training.epochs, val_every_epochs=1)
@@ -169,7 +178,7 @@ def main(args):
 
         run_name = f"{datasource}_best"
         print("#" * 40)
-        print(f"Training on {datasource}\n")
+        print(f"* Training on {datasource}")
         _, accs, val_accs, ema_val_accs = train_class(
             tconf, model, ema_model, train_loader, val_loader, optimizer, None,
             criterion, device, dlogger, run_name, save_model=True
@@ -189,8 +198,63 @@ def main(args):
             shutil.move(f"models/last_ema_model-{run_name}.pt",
                         pjoin(args.output_dir, f"last_ema_model-{datasource}.pt"))
             print(f"EMA validation accuracy: {np.max(ema_val_accs) * 100:.2f}%")
-
         print()
+
+
+def evaluate_models(args, cfg, device):
+    cfg = deepcopy(cfg)
+    cfg.data.transform = "none"
+    criterion = LabelSmoothingCrossEntropy(cfg.training.label_smoothing)
+    dlogger = DummyLogger()
+    all_datasets = load_datasets(cfg)
+    datasources = [ds[0] for ds in all_datasets]
+    df = pd.DataFrame(columns=[datasources])
+    df = df.rename_axis("Train", axis=0)
+    df = df.rename_axis("Test", axis=1)
+    for dstrain in datasources:
+        print(f"Loading models trained on {dstrain}")
+        model = CNNClassifierLight(cfg.architecture.in_channels, cfg.architecture.out_dim,
+                                   dropout=cfg.training.dropout, pooling=cfg.architecture.pooling)
+        model.to(device)
+        model.load_state_dict(torch.load(pjoin(args.output_dir, f"best_model-{dstrain}.pt")))
+        model.eval()
+        if cfg.training.ema:
+            ema_model = deepcopy(model)
+            ema_model.to(device)
+            ema_model.load_state_dict(torch.load(pjoin(args.output_dir, f"best_ema_model-{dstrain}.pt")))
+            ema_model.eval()
+
+        for dseval, train_loader, val_loader in all_datasets:
+            print(f"Testing on {dseval}")
+            # Evaluate on larger train set for non-self datasets
+            loader = train_loader
+            if dstrain == dseval:
+                loader = val_loader
+            loss, acc = evaluate_class(model, loader, criterion, device, dlogger, 0, None)
+            print(f"Accuracy: {acc * 100:.2f}%")
+            df.loc[dstrain, dseval] = acc
+            if cfg.training.ema:
+                loss, acc = evaluate_class(ema_model, loader, criterion, device, dlogger, 0, None)
+                print(f"EMA Accuracy: {acc * 100:.2f}%")
+                df.loc[dstrain + " EMA", dseval] = acc
+    return df
+
+
+def main(args):
+    os.makedirs(args.output_dir, exist_ok=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        warnings.warn("Running on CPU. This will be slow.")
+    cfg = OmegaConf.load(args.config)
+
+    if not args.skip_training:
+        with open(pjoin(args.output_dir, "config.yaml"), "w") as f:
+            OmegaConf.save(cfg, f)
+        train_models(args, cfg, device)
+
+    df = evaluate_models(args, cfg, device)
+    df.to_csv(pjoin(args.output_dir, "accuracy.csv"))
+    print(df)
 
 
 def parse_args():
@@ -199,6 +263,8 @@ def parse_args():
     parser.add_argument("-c", "--config", type=str, default="best_classifier.yaml")
     parser.add_argument("-o", "--output-dir", type=str, default="bestmodels")
     parser.add_argument("-s", "--seed", type=int, default=42)
+    parser.add_argument("--skip-training", action="store_true",
+                        help="Skip training and only evaluate the models")
     return parser.parse_args()
 
 
