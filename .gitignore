@@ -137,8 +137,7 @@ data/
 *.pt
 *.png
 wandb/
-tensorboard_logs/
+tensorboard_logs*/
 *.pkl
 *.npy
 *.npz
-
