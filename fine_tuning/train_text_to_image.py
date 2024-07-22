@@ -65,6 +65,13 @@ def parse_args():
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+        "--vae_model",
+        type=str,
+        default=None,
+        required=False,
+        help="Path to pretrained VAE model if different from `pretrained_model_name_or_path`.",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -575,8 +582,9 @@ def get_dataset(accelerator, args, tokenizer, batch_size):
 
 def get_models(accelerator, args):
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",
-                                                    cache_dir=args.cache_dir)
+    noise_scheduler = DDIMScheduler.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="scheduler", cache_dir=args.cache_dir
+    )
     tokenizer = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision,
         cache_dir=args.cache_dir
@@ -585,8 +593,11 @@ def get_models(accelerator, args):
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision,
         cache_dir=args.cache_dir
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision,
-                                        cache_dir=args.cache_dir)
+    if args.vae_model is not None:
+        vae = AutoencoderKL.from_pretrained(args.vae_model, cache_dir=args.cache_dir)
+    else:
+        vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae",
+                                            revision=args.revision, cache_dir=args.cache_dir)
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision,
         cache_dir=args.cache_dir
@@ -594,7 +605,9 @@ def get_models(accelerator, args):
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
+    vae.eval()
     text_encoder.requires_grad_(False)
+    text_encoder.eval()
 
     # Create EMA for the unet.
     if args.use_ema:

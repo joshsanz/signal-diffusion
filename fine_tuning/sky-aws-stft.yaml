@@ -11,14 +11,12 @@ workdir: .
 
 file_mounts:
   /output-s3:
-    name: sdv1-5-finetune
+    source: s3://sdv1-5-finetune
     mode: MOUNT
-    store: s3 # Could be either of [s3, gcs]
 
   /data:
-    name: signal-diffusion-data
+    source: s3://signal-diffusion-data
     mode: MOUNT
-    store: s3
 
   ~/.netrc: ~/.netrc
 
@@ -46,29 +44,32 @@ run: |
   set -e
   export PATH=$PATH:/home/ubuntu/.local/bin
   echo "Hello, SkyPilot!"
-  export RUN_ID=meta_set.3
+  export RUN_ID=meta_set.sdxl_vae.1
   export MODEL_NAME="runwayml/stable-diffusion-v1-5"
+  export VAE_MODEL="stabilityai/sdxl-vae"
   export dataset_name="/data/reweighted_meta_dataset.log"
   export output_dir="/output-s3/stft-full.$RUN_ID"
   echo "Model $MODEL_NAME"
+  echo "VAE Model $VAE_MODEL"
   echo "Dataset $dataset_name"
   echo "Output location $output_dir"
   PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 accelerate launch --mixed_precision=no train_text_to_image.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
+    --vae_model=$VAE_MODEL \
     --train_data_dir="$dataset_name" \
     --enable_xformers_memory_efficient_attention \
     --resolution=256 --center_crop \
     --train_batch_size=4 \
     --gradient_accumulation_steps=32 \
     --gradient_checkpointing \
-    --max_train_steps=1000 \
+    --max_train_steps=2000 \
     --learning_rate=1e-5 \
     --optimizer=adamw \
-    --adam_weight_decay=3e-6 \
+    --adam_weight_decay=1e-6 \
     --max_grad_norm=1 \
     --allow_tf32 \
     --lr_scheduler="constant" --lr_warmup_steps=100 \
-    --checkpointing_steps=501 --checkpoints_total_limit=2 \
+    --checkpointing_steps=1001 --checkpoints_total_limit=2 \
     --output_dir="$output_dir" \
     --report_to=wandb \
     --validation_prompt="an EEG spectrogram for a 70 year old, healthy, female subject" \
