@@ -40,14 +40,13 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import AutoencoderKL, DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel, Mel
+from diffusers import AutoencoderKL, PNDMScheduler, StableDiffusionPipeline, UNet2DConditionModel, Mel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 # from diffusers.utils import check_min_version, deprecate
 from diffusers.utils import deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
-from dog import LDoG, DoG
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.15.0.dev0")
@@ -582,7 +581,7 @@ def get_dataset(accelerator, args, tokenizer, batch_size):
 
 def get_models(accelerator, args):
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDIMScheduler.from_pretrained(
+    noise_scheduler = PNDMScheduler.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="scheduler", cache_dir=args.cache_dir
     )
     tokenizer = CLIPTokenizer.from_pretrained(
@@ -653,10 +652,6 @@ def get_optimizer(accelerator, args, unet):
         optimizer_cls = bnb.optim.AdamW8bit
     elif args.optimizer.lower() == "adamw":
         optimizer_cls = torch.optim.AdamW
-    elif args.optimizer.lower() == "ldog":
-        optimizer_cls = LDoG
-        kwargs["lr"] = 1.0
-        kwargs.pop("betas")
     else:
         raise ValueError(f"Unknown optimizer {args.optimizer}")
 
@@ -669,10 +664,6 @@ def get_optimizer(accelerator, args, unet):
 
 
 def get_lr_scheduler(args, optimizer):
-    if isinstance(optimizer, DoG):
-        args.lr_scheduler = "constant"
-        args.lr_warmup_steps = 0
-
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
@@ -958,10 +949,6 @@ def main():
                         "grad_norm": grad_norm.item(),
                         "lr": lr_scheduler.get_last_lr()[0]
                     }
-                    if global_step % 20 == 0 and isinstance(optimizer.optimizer, DoG):
-                        log_dict["eta"] = wandb.Histogram(np.array(
-                            [eta.item() for eta in optimizer.param_groups[0]['eta']]
-                        ))
                     accelerator.log(log_dict, step=global_step)
                     train_loss = 0.0
                     grad_norm = 0.0
@@ -979,7 +966,7 @@ def main():
 
             # break  # DEBUG
             train_peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
-            accelerator.log({"train_peak_mem": train_peak_mem}, step=epoch)
+            accelerator.log({"train_peak_mem": train_peak_mem}, step=global_step)
 
             if accelerator.is_main_process:
                 if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
@@ -993,6 +980,9 @@ def main():
                     pipeline = StableDiffusionPipeline.from_pretrained(
                         args.pretrained_model_name_or_path,
                         unet=accelerator.unwrap_model(unet, keep_fp32_wrapper=True),
+                        vae=accelerator.unwrap_model(vae),
+                        text_encoder=accelerator.unwrap_model(text_encoder),
+                        tokenizer=tokenizer,
                         safety_checker=None, requires_safety_checker=False,
                         torch_dtype=weight_dtype,
                     )
@@ -1000,6 +990,8 @@ def main():
                     pipeline.set_progress_bar_config(disable=True)
                     # Need offload to prevent OOM on A10Gs
                     pipeline.enable_model_cpu_offload()
+                    if args.enable_xformers_memory_efficient_attention:
+                        pipeline.enable_xformers_memory_efficient_attention()
 
                     # run inference
                     generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
@@ -1034,7 +1026,7 @@ def main():
                                         wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
                                         for i, image in enumerate(images)
                                     ]
-                                }
+                                }, step=global_step
                             )
                             if args.audio:
                                 tracker.log(
@@ -1044,7 +1036,7 @@ def main():
                                                         sample_rate=args.audio_fs)
                                             for i, audio in enumerate(audios)
                                         ]
-                                    }
+                                    }, step=global_step
                                 )
 
                     # Need to remove offload hook on unet before further training/validation
@@ -1053,8 +1045,6 @@ def main():
 
                     del pipeline
                     torch.cuda.empty_cache()
-                    val_peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
-                    accelerator.log({"val_peak_mem": val_peak_mem}, step=epoch)
 
         # Create the pipeline using the trained modules and save it.
         accelerator.wait_for_everyone()
