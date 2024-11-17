@@ -130,7 +130,7 @@ class GeneralDataset(torch.utils.data.ConcatDataset):
         super().__init__(datasets)
 
         self.split = split
-        assert task in ["gender", "other"], "Invalid task {}: options are gender, other".format(task)
+        assert task in ["gender", "health", "other"], "Invalid task {}: options are gender, health, other".format(task)
         self.task = task
         if task == "other":
             raise NotImplementedError("'Other' task not implemented yet")

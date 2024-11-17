@@ -2,7 +2,6 @@ architecture:
   out_dim: 2
   in_channels: 1
   pooling: mean
-
 training:
   batch_size: 32
   epochs: 20
@@ -16,12 +15,10 @@ training:
   clip_grad_norm: 1.0
   ema: true
   ema_decay: 0.999
-
 data:
   from_eeg_data: true
   from_synth_dis: true
   from_synth_sd: true
-  dis_data_dir: "/data/shared/signal-diffusion/generated_images_dis-split/"
-  sd_data_dir: "/data/shared/signal-diffusion/generated_images_sd-split/"
+  dis_data_dir: /data/shared/signal-diffusion/generated_images_dis-split/
+  sd_data_dir: /data/shared/signal-diffusion/generated_images_sd-split/
   transform: trivial_augment_wide
-  task: gender

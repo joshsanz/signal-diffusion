@@ -123,7 +123,11 @@ class SEEDPreprocessor():
         captions = []
         # Load data file for each subject
         sub_file = pjoin(self.datadir, "EEG_raw", data_file)
-        raw = mne.io.read_raw_cnt(sub_file, preload=True)
+        try:
+            raw = mne.io.read_raw_cnt(sub_file, preload=True)
+        except IndexError as e:
+            print("Error reading file {} ({})".format(data_file, sub_file))
+            raise e
         raw_np = raw.get_data()
         for trial in range(self.n_trials):
             start_samp = self.start_second[session][trial] * self.orig_fs
@@ -260,8 +264,8 @@ class SEEDDataset(torch.utils.data.Dataset):
         self.dataname = 'seed'
         self.datadir = datadir
         self.split = split
-        assert task in ["gender", "emotion"], (
-            "Invalid task {} for SEEDDataset: choices are gender, emotion".format(self.task)
+        assert task in ["gender", "emotion", "health"], (
+            "Invalid task {} for SEEDDataset: choices are gender, emotion, health".format(self.task)
         )
         self.task = task
         assert os.path.isfile(pjoin(datadir, f"{split}-metadata.csv")), "No metadata file found for split {}".format(split)
@@ -284,8 +288,10 @@ class SEEDDataset(torch.utils.data.Dataset):
         gender = self.metadata.iloc[index]["gender"]
         if self.task == "gender":
             y = int(gender == "F")
-        else:
+        elif self.task == "emotion":
             y = emotion
+        else:
+            y = 0
         return im, y
 
     def caption(self, index):

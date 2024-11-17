@@ -95,16 +95,17 @@ def load_datasets(cfg):
 
         # Validation datasets
         # math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
-        parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
-        seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
+        parkinsons_val_dataset = ParkinsonsDataset(
+            datadirs['parkinsons-stft'], split="val", task=cfg.data.task)
+        seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val", task=cfg.data.task)
         val_datasets = [parkinsons_val_dataset, seed_val_dataset]
         # Train datasets
         # math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train",
         #                                       transform=transform_fn)
         parkinsons_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train",
-                                                     transform=transform_fn)
+                                                     transform=transform_fn, task=cfg.data.task)
         seed_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train",
-                                         transform=transform_fn)
+                                         transform=transform_fn, task=cfg.data.task)
         train_datasets = [parkinsons_train_dataset, seed_train_dataset]
 
         val_set = GeneralDataset(val_datasets, split='val')
@@ -129,6 +130,10 @@ def load_datasets(cfg):
     # Synthetic datasets
     def apply_transform(examples):
         examples['image'] = [transform_fn(img.convert("L")) for img in examples['image']]
+        if cfg.data.task == "gender":
+            examples['class'] = [0 if g == "M" else 1 for g in examples['gender']]
+        elif cfg.data.task == "health":
+            examples['class'] = [0 if h == "H" else 1 for h in examples['health']]
         return examples
 
     if cfg.data.from_synth_dis:
@@ -263,6 +268,7 @@ def parse_args():
     parser.add_argument("-c", "--config", type=str, default="best_classifier.yaml")
     parser.add_argument("-o", "--output-dir", type=str, default="bestmodels")
     parser.add_argument("-s", "--seed", type=int, default=42)
+    parser.add_argument("--task", type=str, options=["gender", "health"], default="gender")
     parser.add_argument("--skip-training", action="store_true",
                         help="Skip training and only evaluate the models")
     return parser.parse_args()

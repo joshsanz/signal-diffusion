@@ -16,10 +16,19 @@ sys.path.append("../")
 from data_processing.general_dataset import general_class_labels
 
 
-def class_to_text(class_id):
-    age = random.randint(18, 80)
-    mf = general_class_labels[class_id]
-    return f"an EEG spectrogram of a {age} year old, {mf} subject"
+def class_to_text(class_id, num_classes):
+    age = random.choice([19, 20, 21, 22, 23, 24, 52, 53, 54, 56, 57, 58, 60, 61, 62, 64, 65,
+                         66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
+                         83, 84, 85, 86])
+    mf = general_class_labels[class_id % 2]
+    if num_classes == 2:
+        text = f"an EEG spectrogram of a {age} year old, {mf} subject"
+    elif num_classes == 4:
+        health_text = "healthy" if class_id < 2 else "parkinsons disease diagnosed"
+        text = f"an EEG spectrogram of a {age} year old, {health_text}, {mf} subject"
+    else:
+        raise ValueError(f"Unsupported number of classes: {num_classes}")
+    return text
 
 
 def timefmt(t):
@@ -94,7 +103,7 @@ def main(args):
             texts = []
             for i in range(B):
                 class_id = random.randint(0, args.num_classes - 1)
-                texts.append(class_to_text(class_id))
+                texts.append(class_to_text(class_id, args.num_classes))
                 classes.append(class_id)
         else:
             texts = [""] * B
@@ -110,9 +119,12 @@ def main(args):
     # Write metadata file
     with open(f"{args.output_dir}/metadata.csv", "w") as f:
         writer = csv.writer(f)
-        writer.writerow(["file_name", "class"])
+        writer.writerow(["file_name", "class", "text", "gender", "health", "age"])
         for i in range(N):
-            writer.writerow([filenames[i], classes[i]])
+            age = texts[i].split("year")[0].split()[-1]
+            gender = "M" if "male" in texts[i] else "F"
+            health = "H" if "healthy" in texts[i] else "PD"
+            writer.writerow([filenames[i], classes[i], texts[i], gender, health, age])
 
 
 if __name__ == "__main__":
@@ -127,6 +139,6 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="/data/shared/signal-diffusion/stft-full.meta_set.3")
     parser.add_argument("-o", "--output-dir", type=str, default="/data/shared/signal-diffusion/generated_images_sd")
     args = parser.parse_args()
-    assert args.num_classes in [0, 2], "Only 0 or 2 classes supported for now"
+    assert args.num_classes in [0, 2, 4], "Only 0, 2, or 4 classes supported for now"
     os.makedirs(args.output_dir, exist_ok=True)
     main(args)
