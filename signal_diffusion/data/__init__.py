@@ -12,6 +12,12 @@ from .parkinsons import (
     ParkinsonsDataset,
     ParkinsonsPreprocessor,
 )
+from .seed import (
+    SEED_CONDITION_CLASSES,
+    SEED_LABELS,
+    SeedDataset,
+    SeedPreprocessor,
+)
 
 __all__ = [
     "BaseSpectrogramPreprocessor",
@@ -25,4 +31,8 @@ __all__ = [
     "ParkinsonsDataset",
     "PARKINSONS_LABELS",
     "PARKINSONS_CONDITION_CLASSES",
+    "SeedPreprocessor",
+    "SeedDataset",
+    "SEED_LABELS",
+    "SEED_CONDITION_CLASSES",
 ]
