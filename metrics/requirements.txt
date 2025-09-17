@@ -1,3 +1,4 @@
+# Legacy fallback for pipelines still using pip installs.
+# Prefer `uv sync --group metrics` with the lockfile.
 torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@a61422fb9bafcf94af51440ddad4bb11b091f7aa
 datasets[vision]
-

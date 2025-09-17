@@ -1,3 +1,5 @@
+# Legacy fallback for environments still using pip requirements.
+# Prefer `uv sync --group fine-tuning` from the new `pyproject.toml` and `uv.lock`.
 accelerate
 argh
 bidict
@@ -21,7 +23,7 @@ pillow>=9.1.0
 plotly
 pydub
 pymatreader
-pysoundfile
+soundfile
 scipy
 seaborn
 sox
