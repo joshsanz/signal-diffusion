@@ -4,6 +4,12 @@ The new classifier stack lives under `signal_diffusion.models` and is designed
 for multi-task EEG classification across any dataset that exposes a label
 registry. It provides:
 
+```bash
+uv sync --group classification
+```
+
+Run the examples below with `uv run` to ensure the synced environment is used.
+
 - reusable CNN/Transformer backbones that emit shared embeddings
 - a `MultiTaskClassifier` wrapper with one head per task
 - utilities to translate dataset label registries into classifier task specs
@@ -53,4 +59,3 @@ A starter configuration is provided at
 `configs/classification/baseline.toml`. It references the shared TOML settings,
 selects the Parkinsons dataset, and trains a lightweight CNN backbone on the
 `gender` and `health` tasks.
-

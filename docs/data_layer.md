@@ -4,6 +4,13 @@ The refactored data layer lives under the `signal_diffusion.data` package and
 exposes dataset-specific preprocessors and PyTorch-ready datasets that share a
 common scaffold.
 
+Install dependencies with the `classification` group before running the
+examples:
+
+```bash
+uv sync --group classification
+```
+
 ## Configuration
 
 Dataset locations are defined in TOML under `config/`. By default the project
@@ -77,4 +84,3 @@ Use the same pattern for the Parkinsons and SEED datasets, adjusting task names
 as needed.
 
 For classifiers, see [`docs/classifier_scaffolding.md`](./classifier_scaffolding.md).
-
