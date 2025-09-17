@@ -141,3 +141,17 @@ tensorboard_logs*/
 *.pkl
 *.npy
 *.npz
+
+# Coding agent files
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.gemini/
+.codex/
+REFACTOR.md
+
+
+# Allow new package data submodule
+!signal_diffusion/data/
+!signal_diffusion/data/**
