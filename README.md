@@ -1,5 +1,16 @@
 # Diffusion for Signals
 
+## Shared Data Layer
+
+Core dataset utilities now live under `signal_diffusion/`. Configuration is
+managed via TOML files in `config/`, loaded with
+`signal_diffusion.config.load_settings()`. Preprocessors and datasets for the
+Math, Parkinsons, and SEED EEG collections can be found under
+`signal_diffusion/data/`, with backwards-compatible shims remaining in
+`data_processing/` for older scripts.
+
+For a detailed overview see [`docs/data_layer.md`](./docs/data_layer.md).
+
 ## Riffusion Fine-Tuning
 See [`fine_tuning`](./fine_tuning)
 
