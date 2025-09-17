@@ -6,6 +6,12 @@ from .math import (
     MathDataset,
     MathPreprocessor,
 )
+from .parkinsons import (
+    PARKINSONS_CONDITION_CLASSES,
+    PARKINSONS_LABELS,
+    ParkinsonsDataset,
+    ParkinsonsPreprocessor,
+)
 
 __all__ = [
     "BaseSpectrogramPreprocessor",
@@ -15,4 +21,8 @@ __all__ = [
     "MathDataset",
     "MATH_LABELS",
     "MATH_CONDITION_CLASSES",
+    "ParkinsonsPreprocessor",
+    "ParkinsonsDataset",
+    "PARKINSONS_LABELS",
+    "PARKINSONS_CONDITION_CLASSES",
 ]
