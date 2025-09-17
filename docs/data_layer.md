@@ -44,6 +44,7 @@ Dataset-specific preprocessors subclass the base class and implement
 | ------- | ------------ | ------------- | ----- |
 | Math | `signal_diffusion.data.math.MathPreprocessor` | `signal_diffusion.data.math.MathDataset` | gender, math_activity, math_condition |
 | Parkinsons | `signal_diffusion.data.parkinsons.ParkinsonsPreprocessor` | `signal_diffusion.data.parkinsons.ParkinsonsDataset` | gender, health, parkinsons_condition |
+| MIT (CHB-MIT) | `signal_diffusion.data.mit.MITPreprocessor` | `signal_diffusion.data.mit.MITDataset` | gender, seizure, mit_condition |
 | SEED | `signal_diffusion.data.seed.SeedPreprocessor` | `signal_diffusion.data.seed.SeedDataset` | emotion, gender, seed_condition |
 
 Tasks are looked up through dataset-specific label registries (e.g.

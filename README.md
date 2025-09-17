@@ -5,7 +5,7 @@
 Core dataset utilities now live under `signal_diffusion/`. Configuration is
 managed via TOML files in `config/`, loaded with
 `signal_diffusion.config.load_settings()`. Preprocessors and datasets for the
-Math, Parkinsons, and SEED EEG collections can be found under
+Math, Parkinsons, SEED, and CHB-MIT EEG collections can be found under
 `signal_diffusion/data/`, with backwards-compatible shims remaining in
 `data_processing/` for older scripts.
 
