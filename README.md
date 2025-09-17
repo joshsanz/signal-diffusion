@@ -17,4 +17,5 @@ See [`fine_tuning`](./fine_tuning)
 Managing and running training jobs is easiest with [SkyPilot](https://skypilot.readthedocs.io/en/latest/index.html), or you can look at the `sky-*.yaml` config files to see setup and run commands.
 
 ## EEG Classifier
+New multi-task scaffolding lives under `signal_diffusion/` (see [`docs/classifier_scaffolding.md`](./docs/classifier_scaffolding.md)).
 See [`transformer_classification`](./transformer_classification)

@@ -75,3 +75,6 @@ print(example["targets"])
 
 Use the same pattern for the Parkinsons and SEED datasets, adjusting task names
 as needed.
+
+For classifiers, see [`docs/classifier_scaffolding.md`](./classifier_scaffolding.md).
+

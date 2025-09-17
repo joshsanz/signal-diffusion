@@ -1,0 +1,31 @@
+# Example configuration for multi-task classifier training.
+
+[settings]
+# Path to the TOML settings file describing dataset locations.
+config = "config/default.toml"
+
+[dataset]
+name = "parkinsons"
+train_split = "train"
+val_split = "val"
+tasks = ["gender", "health"]
+batch_size = 32
+num_workers = 4
+
+[model]
+backbone = "cnn_light"
+input_channels = 1
+embedding_dim = 256
+dropout = 0.3
+
+[training]
+epochs = 25
+optimizer = "adamw"
+learning_rate = 3e-4
+weight_decay = 1e-4
+clip_grad_norm = 1.0
+
+[training.task_weights]
+gender = 1.0
+health = 1.0
+
