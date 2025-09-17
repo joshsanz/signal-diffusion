@@ -215,6 +215,7 @@ class BaseSpectrogramPreprocessor(ABC):
         image.save(output_path)
 
     def _write_metadata_files(self, metadata_by_split: Mapping[str, Sequence[MetadataRecord]]) -> None:
+        all_records: list[MetadataRecord] = []
         for split, records in metadata_by_split.items():
             if not records:
                 continue
@@ -225,6 +226,16 @@ class BaseSpectrogramPreprocessor(ABC):
                 writer = csv.DictWriter(handle, fieldnames=fieldnames)
                 writer.writeheader()
                 for record in records:
+                    writer.writerow(record.as_row())
+            all_records.extend(records)
+
+        if all_records:
+            fieldnames = self._collect_fieldnames(all_records)
+            aggregated = self.dataset_settings.output / "metadata.csv"
+            with aggregated.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                for record in all_records:
                     writer.writerow(record.as_row())
 
     def _collect_fieldnames(self, records: Sequence[MetadataRecord]) -> list[str]:
