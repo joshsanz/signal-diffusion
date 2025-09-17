@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signal-diffusion"
+version = "0.1.0"
+description = "EEG spectrogram diffusion, classification, and evaluation tooling."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=1.5",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "torchvision>=0.15",
+    "datasets[vision]>=2.16",
+    "librosa>=0.10",
+    "mne>=1.5",
+    "omegaconf>=2.3",
+    "pillow>=9.5",
+    "tqdm>=4.65",
+    "typer>=0.9",
+]
+
+[project.optional-dependencies]
+classification = [
+    "matplotlib>=3.7",
+    "plotly>=5.18",
+    "seaborn>=0.12",
+]
+"fine-tuning" = [
+    "accelerate>=0.24",
+    "argh>=0.26",
+    "bidict>=0.22",
+    "dacite>=1.8",
+    "datasets[vision,audio]>=2.16",
+    "demucs>=4.0",
+    "diffusers>=0.14.0",
+    "flask>=2.2",
+    "flask-cors>=3.0",
+    "ftfy>=6.1",
+    "imageio>=2.31",
+    "Jinja2>=3.1",
+    "matplotlib>=3.7",
+    "plotly>=5.18",
+    "pymatreader>=0.0.31",
+    "pydub>=0.25",
+    "pysoundfile>=0.12",
+    "seaborn>=0.12",
+    "sox>=1.4",
+    "streamlit>=1.10.0",
+    "tensorboard==2.12.2",
+    "transformers>=4.25.1",
+    "triton>=2.0.0",
+    "wandb>=0.15",
+    "xformers>=0.0.21",
+]
+metrics = [
+    "torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@a61422fb9bafcf94af51440ddad4bb11b091f7aa",
+]
+notebooks = [
+    "ipykernel>=6.29",
+    "jupyterlab>=4.1",
+    "matplotlib>=3.7",
+    "plotly>=5.18",
+    "seaborn>=0.12",
+]
+serving = [
+    "flask>=2.2",
+    "flask-cors>=3.0",
+    "streamlit>=1.10.0",
+]
+"fine-tuning-lambda" = [
+    "accelerate>=0.24",
+    "argh>=0.26",
+    "dacite>=1.8",
+    "datasets[vision]>=2.16",
+    "demucs>=4.0",
+    "diffusers>=0.14.0",
+    "flask>=2.2",
+    "flask-cors>=3.0",
+    "ftfy>=6.1",
+    "imageio>=2.31",
+    "Jinja2>=3.1",
+    "matplotlib>=3.7",
+    "pydub>=0.25",
+    "pysoundfile>=0.12",
+    "sox>=1.4",
+    "streamlit>=1.10.0",
+    "tensorboard==2.12.2",
+    "torch==2.0.1",
+    "torchaudio==2.0.2",
+    "torchvision==0.15.2",
+    "transformers>=4.25.1",
+    "triton>=2.0.0",
+    "wandb>=0.15",
+    "xformers==0.0.21",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.3",
+    "ruff>=0.6.0",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+]
