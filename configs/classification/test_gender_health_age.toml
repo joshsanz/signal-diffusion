@@ -26,7 +26,6 @@ weight_decay = 1e-4
 clip_grad_norm = 1.0
 log_every_batches = 10
 tensorboard = true
-log_dir = "runs/tensorboard/test"
 eval_strategy = "epoch"
 checkpoint_every = 0
 
