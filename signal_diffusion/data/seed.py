@@ -45,7 +45,6 @@ SEED_CONDITION_CLASSES = {
     9: "happy_female",
 }
 
-
 TRIAL_EMOTIONS = {
     0: [4, 1, 3, 2, 0, 4, 1, 3, 2, 0, 4, 1, 3, 2, 0],
     1: [2, 1, 3, 0, 4, 4, 0, 3, 2, 1, 3, 4, 1, 2, 0],
@@ -83,6 +82,23 @@ def _encode_condition(row: Mapping[str, object]) -> int:
     return emotion * 2 + gender
 
 
+def _encode_age(row: Mapping[str, object]) -> float:
+    value = row.get("age", row.get("Age"))
+    if value is None:
+        raise ValueError("Missing age value in metadata")
+    try:
+        age = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid age value {value!r}") from exc
+    if age < 0:
+        raise ValueError(f"Age must be non-negative, received {age}")
+    return age
+
+
+def _encode_health(_: Mapping[str, object]) -> int:
+    return 0
+
+
 SEED_LABELS = LabelRegistry()
 SEED_LABELS.register(
     LabelSpec(
@@ -90,6 +106,14 @@ SEED_LABELS.register(
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+    )
+)
+SEED_LABELS.register(
+    LabelSpec(
+        name="health",
+        num_classes=2,
+        encoder=_encode_health,
+        description="0: healthy, 1: ill",
     )
 )
 SEED_LABELS.register(
@@ -106,6 +130,14 @@ SEED_LABELS.register(
         num_classes=10,
         encoder=_encode_condition,
         description="Combined emotion/gender class",
+    )
+)
+SEED_LABELS.register(
+    LabelSpec(
+        name="age",
+        encoder=_encode_age,
+        description="Participant age in years",
+        task_type="regression",
     )
 )
 
@@ -222,6 +254,7 @@ class SeedPreprocessor(BaseSpectrogramPreprocessor):
                         "session": session_index,
                         "trial": trial_index,
                         "gender": info.gender,
+                        "health": "healthy",
                         "age": info.age,
                         "emotion_id": emotion_id,
                         "emotion": emotion_id,
@@ -340,4 +373,3 @@ class SeedDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(SEED_LABELS.keys())
-

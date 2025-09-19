@@ -22,8 +22,9 @@ class TaskSpec:
     """Represents a classifier head to train."""
 
     name: str
-    num_classes: int
+    output_dim: int
     weight: float = 1.0
+    task_type: str = "classification"
 
 
 @dataclass(slots=True)
@@ -65,7 +66,7 @@ class MultiTaskClassifier(nn.Module):
             raise AttributeError("Backbone must expose 'embedding_dim' attribute")
         embedding_dim = getattr(backbone, "embedding_dim")
         heads = {
-            task.name: nn.Linear(embedding_dim, task.num_classes) for task in self.tasks
+            task.name: nn.Linear(embedding_dim, task.output_dim) for task in self.tasks
         }
         self.heads = nn.ModuleDict(heads)
 
@@ -130,6 +131,11 @@ def tasks_from_registry(registry: LabelRegistry, task_names: Iterable[str]) -> l
     specs: list[TaskSpec] = []
     for name in task_names:
         spec = registry[name]
-        specs.append(TaskSpec(name=name, num_classes=spec.num_classes))
+        if spec.task_type == "classification":
+            if spec.num_classes is None:
+                raise ValueError(f"Label '{name}' must define num_classes for classification tasks")
+            output_dim = int(spec.num_classes)
+        else:
+            output_dim = 1
+        specs.append(TaskSpec(name=name, output_dim=output_dim, task_type=spec.task_type))
     return specs
-

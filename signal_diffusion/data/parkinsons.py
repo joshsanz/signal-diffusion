@@ -44,6 +44,19 @@ def _encode_condition(row: Mapping[str, object]) -> int:
     return health * 2 + gender
 
 
+def _encode_age(row: Mapping[str, object]) -> float:
+    value = row.get("age", row.get("AGE"))
+    if value is None:
+        raise ValueError("Missing age value in metadata")
+    try:
+        age = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid age value {value!r}") from exc
+    if age < 0:
+        raise ValueError(f"Age must be non-negative, received {age}")
+    return age
+
+
 PARKINSONS_CONDITION_CLASSES = {
     0: "healthy_male",
     1: "healthy_female",
@@ -75,6 +88,14 @@ PARKINSONS_LABELS.register(
         num_classes=4,
         encoder=_encode_condition,
         description="Combined health/gender label",
+    )
+)
+PARKINSONS_LABELS.register(
+    LabelSpec(
+        name="age",
+        encoder=_encode_age,
+        description="Participant age in years",
+        task_type="regression",
     )
 )
 
@@ -295,4 +316,3 @@ class ParkinsonsDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(PARKINSONS_LABELS.keys())
-

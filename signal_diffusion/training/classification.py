@@ -16,7 +16,7 @@ import typer
 
 from signal_diffusion.classification import build_dataset, build_task_specs
 from signal_diffusion.config import load_settings
-from signal_diffusion.models import ClassifierConfig, build_classifier
+from signal_diffusion.models import ClassifierConfig, TaskSpec, build_classifier
 
 
 class EvaluationManager:
@@ -223,7 +223,7 @@ class EpochMetrics:
     train_losses: dict[str, float]
     val_loss: float | None
     val_losses: dict[str, float | None]
-    train_accuracy: dict[str, float]
+    train_accuracy: dict[str, float | None]
     val_accuracy: dict[str, float | None]
     lr: float
 
@@ -319,6 +319,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
     tasks = dataset_cfg.tasks
     task_specs = build_task_specs(dataset_cfg.name, tasks)
+    task_lookup = {spec.name: spec for spec in task_specs}
     classifier_config = ClassifierConfig(
         backbone=config.model.backbone,
         input_channels=config.model.input_channels,
@@ -370,7 +371,13 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
     optimizer = _build_optimizer(model, training_cfg)
     scaler = torch.cuda.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
-    criteria = {name: nn.CrossEntropyLoss() for name in tasks}
+    criteria: dict[str, nn.Module] = {}
+    for name in tasks:
+        spec = task_lookup[name]
+        if spec.task_type == "classification":
+            criteria[name] = nn.CrossEntropyLoss()
+        else:
+            criteria[name] = nn.MSELoss()
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
 
     def run_validation() -> dict[str, Any]:
@@ -379,6 +386,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             data_loader=val_loader,
             criteria=criteria,
             task_weights=task_weights,
+            task_specs=task_lookup,
             device=device,
             optimizer=None,
             scaler=None,
@@ -402,6 +410,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             data_loader=train_loader,
             criteria=criteria,
             task_weights=task_weights,
+            task_specs=task_lookup,
             device=device,
             optimizer=optimizer,
             scaler=scaler,
@@ -417,11 +426,17 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
         eval_outputs = eval_manager.drain_new_results() if eval_manager else []
         for eval_output in eval_outputs:
-            mean_eval_acc = sum(eval_output["accuracy"].values()) / len(tasks)
+            accuracy_values = [value for value in eval_output["accuracy"].values() if value is not None]
+            if accuracy_values:
+                mean_eval_acc = sum(accuracy_values) / len(accuracy_values)
+                mean_eval_display = f"{mean_eval_acc:.4f}"
+            else:
+                mean_eval_acc = -eval_output["loss"]
+                mean_eval_display = "n/a"
             step_info = eval_output.get("_global_step")
             print(
                 f"[eval] step={step_info} val_loss={eval_output['loss']:.4f} "
-                f"val_acc_mean={mean_eval_acc:.4f}"
+                f"val_acc_mean={mean_eval_display}"
             )
             if metrics_logger is not None:
                 step_for_log = int(step_info) if step_info is not None else global_step
@@ -435,16 +450,20 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         else:
             latest_val = eval_manager.latest_result if eval_manager else None
         train_losses = {name: float(train_result["losses"][name]) for name in tasks}
-        train_accuracy = {name: float(train_result["accuracy"][name]) for name in tasks}
+        train_accuracy: dict[str, float | None] = {}
+        for name in tasks:
+            value = train_result["accuracy"].get(name)
+            train_accuracy[name] = float(value) if value is not None else None
 
         if latest_val is not None:
             val_loss: float | None = float(latest_val["loss"])
             val_losses: dict[str, float | None] = {
                 name: float(latest_val["losses"][name]) for name in tasks
             }
-            val_accuracy: dict[str, float | None] = {
-                name: float(latest_val["accuracy"][name]) for name in tasks
-            }
+            val_accuracy: dict[str, float | None] = {}
+            for name in tasks:
+                value = latest_val["accuracy"].get(name)
+                val_accuracy[name] = float(value) if value is not None else None
         else:
             val_loss = None
             val_losses = {name: None for name in tasks}
@@ -473,7 +492,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             f"val_acc_mean={mean_val_display}"
         )
         for task_name in tasks:
-            train_acc_display = f"{train_accuracy[task_name]:.4f}"
+            train_value = train_accuracy[task_name]
+            train_acc_display = f"{train_value:.4f}" if train_value is not None else "n/a"
             val_value = val_accuracy[task_name]
             val_acc_display = f"{val_value:.4f}" if val_value is not None else "n/a"
             print(
@@ -547,6 +567,7 @@ def _run_epoch(
     data_loader: DataLoader,
     criteria: Mapping[str, nn.Module],
     task_weights: Mapping[str, float],
+    task_specs: Mapping[str, TaskSpec],
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     scaler: torch.cuda.amp.GradScaler | None,
@@ -567,16 +588,25 @@ def _run_epoch(
 
     total_loss = 0.0
     total_examples = 0
-    task_correct = {name: 0 for name in task_weights}
-    task_counts = {name: 0 for name in task_weights}
     task_loss_sums = {name: 0.0 for name in task_weights}
+    task_counts = {name: 0 for name in task_weights}
+    classification_stats = {
+        name: {"correct": 0, "total": 0}
+        for name, spec in task_specs.items()
+        if spec.task_type == "classification"
+    }
 
     for batch_idx, batch in enumerate(data_loader, start=1):
         images = batch["image"].to(device)
-        targets = {
-            name: _to_device_tensor(batch["targets"][name], device)
-            for name in task_weights
-        }
+        targets = {}
+        for name in task_weights:
+            tensor = _to_device_tensor(batch["targets"][name], device)
+            spec = task_specs[name]
+            if spec.task_type == "classification":
+                tensor = tensor.long()
+            else:
+                tensor = tensor.float()
+            targets[name] = tensor
         batch_size = images.shape[0]
 
         if train:
@@ -585,7 +615,13 @@ def _run_epoch(
         with torch.set_grad_enabled(train):
             with torch.cuda.amp.autocast(enabled=scaler is not None and scaler.is_enabled()):
                 outputs = model(images)
-                loss, per_task_batch = _compute_loss(outputs, targets, criteria, task_weights)
+                loss, per_task_batch = _compute_loss(
+                    outputs,
+                    targets,
+                    criteria,
+                    task_weights,
+                    task_specs,
+                )
 
         if train:
             if scaler is not None and scaler.is_enabled():
@@ -611,12 +647,18 @@ def _run_epoch(
         batch_loss_value = float(loss.detach().item())
         total_loss += batch_loss_value * batch_size
         total_examples += batch_size
+        for name in task_counts:
+            task_counts[name] += batch_size
 
         for name, logits in outputs.items():
+            spec = task_specs[name]
+            if spec.task_type != "classification":
+                continue
             preds = logits.argmax(dim=1)
             correct = (preds == targets[name]).sum().item()
-            task_correct[name] += correct
-            task_counts[name] += batch_size
+            stats = classification_stats[name]
+            stats["correct"] += correct
+            stats["total"] += batch_size
 
         for name, task_loss_tensor in per_task_batch.items():
             loss_value = float(task_loss_tensor.detach().item())
@@ -624,7 +666,15 @@ def _run_epoch(
 
         if log_every > 0 and batch_idx % log_every == 0:
             mean_loss = total_loss / total_examples if total_examples else 0.0
-            mean_acc = sum(task_correct[n] / max(task_counts[n], 1) for n in task_correct) / len(task_correct)
+            classification_values = [
+                stats["correct"] / max(stats["total"], 1)
+                for stats in classification_stats.values()
+            ]
+            mean_acc = (
+                sum(classification_values) / len(classification_values)
+                if classification_values
+                else 0.0
+            )
             phase = "train" if train else "eval"
             print(
                 f"[{phase}] step {batch_idx}/{len(data_loader)} loss={mean_loss:.4f} "
@@ -637,10 +687,14 @@ def _run_epoch(
             model.train()
 
     mean_loss = total_loss / max(total_examples, 1)
-    accuracy = {
-        name: task_correct[name] / max(task_counts[name], 1)
-        for name in task_correct
-    }
+    accuracy: dict[str, float | None] = {}
+    for name in task_weights:
+        spec = task_specs[name]
+        if spec.task_type == "classification":
+            stats = classification_stats[name]
+            accuracy[name] = stats["correct"] / max(stats["total"], 1)
+        else:
+            accuracy[name] = None
     per_task_mean = {
         name: (task_loss_sums[name] / max(task_counts[name], 1)) if task_counts[name] else 0.0
         for name in task_loss_sums
@@ -655,13 +709,19 @@ def _compute_loss(
     targets: Mapping[str, torch.Tensor],
     criteria: Mapping[str, nn.Module],
     task_weights: Mapping[str, float],
+    task_specs: Mapping[str, TaskSpec],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     loss_tensor: torch.Tensor | None = None
     per_task_losses: dict[str, torch.Tensor] = {}
     for name, weight in task_weights.items():
         logits = outputs[name]
         target = targets[name]
+        spec = task_specs[name]
         criterion = criteria[name]
+        if spec.task_type == "regression":
+            target = target.to(dtype=logits.dtype)
+            if target.dim() == logits.dim() - 1:
+                target = target.unsqueeze(-1)
         task_loss = criterion(logits, target)
         per_task_losses[name] = task_loss
         weighted = task_loss * weight

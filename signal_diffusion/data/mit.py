@@ -55,6 +55,10 @@ def _encode_condition(row: Mapping[str, object]) -> int:
     return seizure * 2 + gender
 
 
+def _encode_health(_: Mapping[str, object]) -> int:
+    return 0
+
+
 MIT_LABELS = LabelRegistry()
 MIT_LABELS.register(
     LabelSpec(
@@ -62,6 +66,14 @@ MIT_LABELS.register(
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+    )
+)
+MIT_LABELS.register(
+    LabelSpec(
+        name="health",
+        num_classes=2,
+        encoder=_encode_health,
+        description="0: healthy, 1: ill",
     )
 )
 MIT_LABELS.register(
@@ -186,6 +198,7 @@ class MITPreprocessor(BaseSpectrogramPreprocessor):
                     "subject": subject_id,
                     "recording": recording_path.stem,
                     "gender": info.gender,
+                    "health": "healthy",
                     "age": info.age if info.age is not None else "",
                     "seizure": int(active_seizure),
                     "fs": self.fs,
@@ -369,4 +382,3 @@ class MITDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(MIT_LABELS.keys())
-
