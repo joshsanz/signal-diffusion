@@ -63,6 +63,95 @@ class EvaluationManager:
         self._pending.append(result)
 
 
+class MetricsLogger:
+    """Log training metrics to TensorBoard and/or Weights & Biases."""
+
+    def __init__(
+        self,
+        *,
+        tasks: Iterable[str],
+        training_cfg: TrainingConfig,
+        run_dir: Path,
+    ) -> None:
+        self.tasks = tuple(tasks)
+        self._tensorboard = None
+        self._wandb_run = None
+
+        if training_cfg.tensorboard:
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise RuntimeError(
+                    "TensorBoard logging requested but 'torch.utils.tensorboard' is unavailable"
+                ) from exc
+            log_dir = training_cfg.log_dir or (run_dir / "tensorboard")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self._tensorboard = SummaryWriter(log_dir=str(log_dir))
+
+        if training_cfg.wandb_project:
+            try:
+                import wandb  # type: ignore
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise RuntimeError("Weights & Biases logging requested but 'wandb' is not installed") from exc
+            init_kwargs: dict[str, Any] = {
+                "project": training_cfg.wandb_project,
+                "dir": str(run_dir),
+            }
+            if training_cfg.wandb_run_name:
+                init_kwargs["name"] = training_cfg.wandb_run_name
+            if training_cfg.wandb_entity:
+                init_kwargs["entity"] = training_cfg.wandb_entity
+            if training_cfg.wandb_tags:
+                init_kwargs["tags"] = list(training_cfg.wandb_tags)
+            self._wandb_run = wandb.init(**init_kwargs)
+
+    def log(self, phase: str, step: int, metrics: Mapping[str, Any], *, epoch: int | None = None) -> None:
+        scalars: dict[str, float] = {}
+        loss = metrics.get("loss")
+        if loss is not None:
+            scalars[f"{phase}/loss"] = float(loss)
+        for name, value in metrics.get("losses", {}).items():
+            if value is None:
+                continue
+            scalars[f"{phase}/loss/{name}"] = float(value)
+        for name, value in metrics.get("accuracy", {}).items():
+            if value is None:
+                continue
+            scalars[f"{phase}/accuracy/{name}"] = float(value)
+        if epoch is not None:
+            scalars[f"{phase}/epoch"] = float(epoch)
+
+        if not scalars:
+            return
+
+        if self._tensorboard is not None:
+            for key, value in scalars.items():
+                self._tensorboard.add_scalar(key, value, step)
+
+        if self._wandb_run is not None:
+            self._wandb_run.log(scalars, step=step)
+
+    def close(self) -> None:
+        if self._tensorboard is not None:
+            self._tensorboard.flush()
+            self._tensorboard.close()
+        if self._wandb_run is not None:
+            try:
+                self._wandb_run.finish()
+            except AttributeError:  # pragma: no cover - older wandb versions
+                pass
+
+
+def _create_metrics_logger(
+    training_cfg: TrainingConfig,
+    tasks: Iterable[str],
+    run_dir: Path,
+) -> MetricsLogger | None:
+    if not training_cfg.tensorboard and not training_cfg.wandb_project:
+        return None
+    return MetricsLogger(tasks=tasks, training_cfg=training_cfg, run_dir=run_dir)
+
+
 @dataclass(slots=True)
 class DatasetConfig:
     """Configuration for dataset loading."""
@@ -103,6 +192,12 @@ class TrainingConfig:
     eval_strategy: str = "epoch"
     eval_steps: int | None = None
     output_dir: Path | None = None
+    log_dir: Path | None = None
+    tensorboard: bool = False
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
+    wandb_entity: str | None = None
+    wandb_tags: tuple[str, ...] = ()
     checkpoint_every: int = 0
     task_weights: dict[str, float] = field(default_factory=dict)
     use_amp: bool = False
@@ -125,7 +220,9 @@ class EpochMetrics:
 
     epoch: int
     train_loss: float
+    train_losses: dict[str, float]
     val_loss: float | None
+    val_losses: dict[str, float | None]
     train_accuracy: dict[str, float]
     val_accuracy: dict[str, float | None]
     lr: float
@@ -191,6 +288,12 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         eval_strategy=str(training_section.get("eval_strategy", "epoch")).lower(),
         eval_steps=_optional_int(training_section.get("eval_steps")),
         output_dir=_optional_path(training_section.get("output_dir"), base_dir),
+        log_dir=_optional_path(training_section.get("log_dir"), base_dir),
+        tensorboard=bool(training_section.get("tensorboard", False)),
+        wandb_project=training_section.get("wandb_project"),
+        wandb_run_name=training_section.get("wandb_run_name"),
+        wandb_entity=training_section.get("wandb_entity"),
+        wandb_tags=tuple(training_section.get("wandb_tags", ())),
         checkpoint_every=int(training_section.get("checkpoint_every", 0)),
         task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
         use_amp=bool(training_section.get("use_amp", False)),
@@ -286,6 +389,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         return result
 
     eval_manager = _create_evaluation_manager(training_cfg, run_validation)
+    metrics_logger = _create_metrics_logger(training_cfg, tasks, run_dir)
 
     history: list[EpochMetrics] = []
     best_metric = float("-inf")
@@ -308,6 +412,9 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             eval_manager=eval_manager,
         )
 
+        if metrics_logger is not None:
+            metrics_logger.log("train", global_step, train_result, epoch=epoch)
+
         eval_outputs = eval_manager.drain_new_results() if eval_manager else []
         for eval_output in eval_outputs:
             mean_eval_acc = sum(eval_output["accuracy"].values()) / len(tasks)
@@ -316,26 +423,41 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
                 f"[eval] step={step_info} val_loss={eval_output['loss']:.4f} "
                 f"val_acc_mean={mean_eval_acc:.4f}"
             )
+            if metrics_logger is not None:
+                step_for_log = int(step_info) if step_info is not None else global_step
+                metrics_logger.log("val", step_for_log, eval_output, epoch=epoch)
             if mean_eval_acc > best_metric:
                 best_metric = mean_eval_acc
                 torch.save(model.state_dict(), best_checkpoint)
 
-        latest_val = eval_manager.latest_result if eval_manager else None
+        if eval_outputs:
+            latest_val = eval_outputs[-1]
+        else:
+            latest_val = eval_manager.latest_result if eval_manager else None
+        train_losses = {name: float(train_result["losses"][name]) for name in tasks}
+        train_accuracy = {name: float(train_result["accuracy"][name]) for name in tasks}
+
         if latest_val is not None:
             val_loss: float | None = float(latest_val["loss"])
+            val_losses: dict[str, float | None] = {
+                name: float(latest_val["losses"][name]) for name in tasks
+            }
             val_accuracy: dict[str, float | None] = {
                 name: float(latest_val["accuracy"][name]) for name in tasks
             }
         else:
             val_loss = None
+            val_losses = {name: None for name in tasks}
             val_accuracy = {name: None for name in tasks}
 
         lr = optimizer.param_groups[0].get("lr", training_cfg.learning_rate)
         epoch_metrics = EpochMetrics(
             epoch=epoch,
             train_loss=train_result["loss"],
+            train_losses=train_losses,
             val_loss=val_loss,
-            train_accuracy=train_result["accuracy"],
+            val_losses=val_losses,
+            train_accuracy=train_accuracy,
             val_accuracy=val_accuracy,
             lr=lr,
         )
@@ -351,12 +473,21 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             f"val_acc_mean={mean_val_display}"
         )
         for task_name in tasks:
-            train_acc_display = f"{train_result['accuracy'][task_name]:.4f}"
+            train_acc_display = f"{train_accuracy[task_name]:.4f}"
             val_value = val_accuracy[task_name]
             val_acc_display = f"{val_value:.4f}" if val_value is not None else "n/a"
             print(
                 f"  - {task_name}: train_acc={train_acc_display} val_acc={val_acc_display}"
             )
+
+        train_loss_line = ", ".join(f"{name}: {train_losses[name]:.4f}" for name in tasks)
+        val_loss_entries = []
+        for name in tasks:
+            loss_value = val_losses[name]
+            val_loss_entries.append(f"{name}: {loss_value:.4f}" if loss_value is not None else f"{name}: n/a")
+        val_loss_line = ", ".join(val_loss_entries)
+        print(f"    train_losses: {train_loss_line}")
+        print(f"    val_losses: {val_loss_line}")
 
         if training_cfg.checkpoint_every and epoch % training_cfg.checkpoint_every == 0:
             torch.save(model.state_dict(), checkpoints_dir / f"epoch-{epoch:03d}.pt")
@@ -369,6 +500,9 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
     if best_metric == float("-inf") or not best_checkpoint.exists():
         best_checkpoint = last_checkpoint
+
+    if metrics_logger is not None:
+        metrics_logger.close()
 
     summary = TrainingSummary(run_dir=run_dir, best_checkpoint=best_checkpoint, history=history)
     _write_summary(summary, run_dir / "summary.json")
@@ -435,6 +569,7 @@ def _run_epoch(
     total_examples = 0
     task_correct = {name: 0 for name in task_weights}
     task_counts = {name: 0 for name in task_weights}
+    task_loss_sums = {name: 0.0 for name in task_weights}
 
     for batch_idx, batch in enumerate(data_loader, start=1):
         images = batch["image"].to(device)
@@ -450,7 +585,7 @@ def _run_epoch(
         with torch.set_grad_enabled(train):
             with torch.cuda.amp.autocast(enabled=scaler is not None and scaler.is_enabled()):
                 outputs = model(images)
-                loss = _compute_loss(outputs, targets, criteria, task_weights)
+                loss, per_task_batch = _compute_loss(outputs, targets, criteria, task_weights)
 
         if train:
             if scaler is not None and scaler.is_enabled():
@@ -473,7 +608,8 @@ def _run_epoch(
             if triggered:
                 model.train()
 
-        total_loss += loss.item() * batch_size
+        batch_loss_value = float(loss.detach().item())
+        total_loss += batch_loss_value * batch_size
         total_examples += batch_size
 
         for name, logits in outputs.items():
@@ -481,6 +617,10 @@ def _run_epoch(
             correct = (preds == targets[name]).sum().item()
             task_correct[name] += correct
             task_counts[name] += batch_size
+
+        for name, task_loss_tensor in per_task_batch.items():
+            loss_value = float(task_loss_tensor.detach().item())
+            task_loss_sums[name] += loss_value * batch_size
 
         if log_every > 0 and batch_idx % log_every == 0:
             mean_loss = total_loss / total_examples if total_examples else 0.0
@@ -501,8 +641,13 @@ def _run_epoch(
         name: task_correct[name] / max(task_counts[name], 1)
         for name in task_correct
     }
-    metrics = {"loss": mean_loss, "accuracy": accuracy}
+    per_task_mean = {
+        name: (task_loss_sums[name] / max(task_counts[name], 1)) if task_counts[name] else 0.0
+        for name in task_loss_sums
+    }
+    metrics = {"loss": mean_loss, "accuracy": accuracy, "losses": per_task_mean}
     return metrics, (global_step if train else None)
+
 
 
 def _compute_loss(
@@ -510,20 +655,24 @@ def _compute_loss(
     targets: Mapping[str, torch.Tensor],
     criteria: Mapping[str, nn.Module],
     task_weights: Mapping[str, float],
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     loss_tensor: torch.Tensor | None = None
+    per_task_losses: dict[str, torch.Tensor] = {}
     for name, weight in task_weights.items():
         logits = outputs[name]
         target = targets[name]
         criterion = criteria[name]
         task_loss = criterion(logits, target)
+        per_task_losses[name] = task_loss
         weighted = task_loss * weight
         if loss_tensor is None:
             loss_tensor = weighted
         else:
             loss_tensor = loss_tensor + weighted
-    assert loss_tensor is not None, "At least one task required"
-    return loss_tensor
+    if loss_tensor is None:
+        raise ValueError("At least one task required")
+    return loss_tensor, per_task_losses
+
 
 
 def _build_optimizer(model: nn.Module, training_cfg: TrainingConfig) -> torch.optim.Optimizer:
@@ -571,12 +720,22 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
     run_dir = base / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    dataset_dict = asdict(config.dataset)
+    dataset_dict["tasks"] = list(dataset_dict.get("tasks", ()))
+    model_dict = asdict(config.model)
+    training_dict = asdict(config.training)
+    for key in ("output_dir", "log_dir"):
+        if training_dict.get(key) is not None:
+            training_dict[key] = str(training_dict[key])
+    if training_dict.get("wandb_tags") is not None:
+        training_dict["wandb_tags"] = list(training_dict["wandb_tags"])
+
     config_copy = {
         "config_path": str(config.path),
         "settings_path": str(config.settings_path),
-        "dataset": asdict(config.dataset),
-        "model": asdict(config.model),
-        "training": asdict(config.training),
+        "dataset": dataset_dict,
+        "model": model_dict,
+        "training": training_dict,
     }
     with (run_dir / "config_resolved.json").open("w", encoding="utf-8") as handle:
         json.dump(config_copy, handle, indent=2)
@@ -619,7 +778,9 @@ def _save_history(history: list[EpochMetrics], path: Path) -> None:
         {
             "epoch": item.epoch,
             "train_loss": item.train_loss,
+            "train_losses": item.train_losses,
             "val_loss": item.val_loss,
+            "val_losses": item.val_losses,
             "train_accuracy": item.train_accuracy,
             "val_accuracy": item.val_accuracy,
             "lr": item.lr,

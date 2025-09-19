@@ -19,6 +19,10 @@ embedding_dim = 256
 dropout = 0.3
 
 [training]
+tensorboard = false
+log_dir = "runs/tensorboard"
+# wandb_project = "your-project-name"
+# wandb_run_name = "baseline"
 epochs = 25
 optimizer = "adamw"
 learning_rate = 3e-4
