@@ -64,7 +64,7 @@ See [`docs/data_layer.md`](./docs/data_layer.md) for in-depth guidance on prepro
 The multi-task classifier factory, model backbones, and dataset helpers live in `signal_diffusion/`.
 
 - [`docs/classifier_scaffolding.md`](./docs/classifier_scaffolding.md) explains how to assemble new models and register additional targets.
-- Baseline configs are stored in `configs/classification/`.
+- Baseline configs are stored in `config/classification/`.
 
 ## Diffusion & Fine-Tuning
 

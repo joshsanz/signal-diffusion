@@ -56,7 +56,7 @@ Samples expose `sample["targets"]` as a dictionary mapping task names to label
 indices, making it straightforward to compute multi-task losses.
 
 A starter configuration is provided at
-`configs/classification/baseline.toml`. It references the shared TOML settings,
+`config/classification/baseline.toml`. It references the shared TOML settings,
 selects the Parkinsons dataset, and trains a lightweight CNN backbone on the
 `gender` and `health` tasks.
 
@@ -66,14 +66,14 @@ Launch experiments via the Typer CLI exposed by the training module. The
 example below writes checkpoints and metrics into `runs/` by default:
 
 ```bash
-uv run python -m signal_diffusion.training.classification train configs/classification/baseline.toml --output-dir runs
+uv run python -m signal_diffusion.training.classification train config/classification/baseline.toml --output-dir runs
 ```
 
 The CLI resolves dataset paths from the referenced TOML settings file, creates
 task-specific checkpoints under `runs/<dataset>-<backbone>-<tasks>-<timestamp>/`,
 and records per-epoch metrics in `history.json`. Override hyperparameters by
 editing the configuration or adding additional files under
-`configs/classification/`.
+`config/classification/`.
 
 
 Set `[training.eval_strategy]` to control validation cadence (`epoch`, `steps`, or `none`). When using the `steps` strategy, provide `eval_steps` to specify how many optimizer updates should occur between evaluations.

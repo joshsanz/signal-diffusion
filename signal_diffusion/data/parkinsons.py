@@ -119,7 +119,7 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         *,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
     ) -> None:
         super().__init__(settings, dataset_name="parkinsons")

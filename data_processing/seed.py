@@ -49,7 +49,7 @@ class SEEDPreprocessor(_SeedPreprocessor):
         datadir: str | Path,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
     ) -> None:
         self.datadir = Path(datadir)
@@ -211,4 +211,3 @@ def _encode_condition(row):
     gender = 1 if str(row["gender"]).strip().upper().startswith("F") else 0
     emotion = _encode_emotion(row)
     return emotion * 2 + gender
-

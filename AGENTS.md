@@ -25,7 +25,7 @@
 Follow PEP 8 with 4-space indentation, group imports as stdlib/third-party/local, and prefer f-strings with explicit type hints in shared utilities. Use snake_case for files, variables, and functions; keep modules focused on a single responsibility. Parameterize data paths via CLI flags or config objects—avoid hard-coded absolute locations.
 
 ## Testing Guidelines
-No formal test suite exists yet; run smoke checks with short training loops (e.g., `--max_epochs 1`) to validate pipelines. When adding preprocessing logic, exercise it on a small dataset slice and capture observations in logs or TensorBoard. Document manual validation steps alongside code changes.
+No formal test suite exists yet; run sanity checks with short training loops (e.g., `--max_epochs 1`) to validate pipelines. When adding preprocessing logic, exercise it on a small dataset slice and capture observations in logs or TensorBoard. Document manual validation steps alongside code changes.
 
 ## Commit & Pull Request Guidelines
 Use short, lower-case, imperative commit messages (e.g., `dataset utils`). Reference affected datasets/configs and record exact command lines executed. Pull requests should explain experiment intent, link relevant issues, note external requirements (SkyPilot, CUDA versions), and include representative plots or screenshots when available.

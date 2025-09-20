@@ -74,7 +74,7 @@ class CacheDict(OrderedDict):
 class GeneralPreprocessor:
     # 0 = Male, 1 = Female
     # Originally 250, changed to 125
-    def __init__(self, datadirs, nsamps, ovr_perc=0, fs=125, bin_spacing="linear"):
+    def __init__(self, datadirs, nsamps, ovr_perc=0., fs=125., bin_spacing="log"):
         self.datadirs = datadirs
         self.nsamps = nsamps
         self.ovr_perc = ovr_perc

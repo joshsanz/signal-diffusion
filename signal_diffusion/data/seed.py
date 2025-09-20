@@ -150,7 +150,7 @@ class SeedSubjectInfo:
     age: int
 
 
-class SeedPreprocessor(BaseSpectrogramPreprocessor):
+class SEEDPreprocessor(BaseSpectrogramPreprocessor):
     """Preprocess SEED EEG recordings into spectrogram datasets."""
 
     DEFAULT_RESOLUTION = 512
@@ -161,7 +161,7 @@ class SeedPreprocessor(BaseSpectrogramPreprocessor):
         *,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
     ) -> None:
         super().__init__(settings, dataset_name="seed")
@@ -317,7 +317,7 @@ class SeedPreprocessor(BaseSpectrogramPreprocessor):
         return sessions
 
 
-class SeedDataset:
+class SEEDDataset:
     """Torch-compatible dataset for SEED spectrograms."""
 
     def __init__(

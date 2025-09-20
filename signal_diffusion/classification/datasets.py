@@ -10,13 +10,13 @@ from signal_diffusion.data import (
     MathDataset,
     MITDataset,
     ParkinsonsDataset,
-    SeedDataset,
+    SEEDDataset,
 )
 
 _DATASET_CLS: Mapping[str, type] = {
     "math": MathDataset,
     "parkinsons": ParkinsonsDataset,
-    "seed": SeedDataset,
+    "seed": SEEDDataset,
     "mit": MITDataset,
 }
 

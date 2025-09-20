@@ -133,7 +133,6 @@ dmypy.json
 
 # Data dirs
 test/
-data/
 *.pt
 *.png
 wandb/
@@ -151,7 +150,3 @@ GEMINI.md
 .codex/
 REFACTOR.md
 
-
-# Allow new package data submodule
-!signal_diffusion/data/
-!signal_diffusion/data/**

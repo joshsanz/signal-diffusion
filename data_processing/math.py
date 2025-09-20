@@ -42,7 +42,7 @@ class MathPreprocessor(_MathPreprocessor):
         datadir: str | Path,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
         include_math_trials: bool = False,
     ) -> None:
@@ -130,4 +130,3 @@ class MathDataset(_MathDataset):
     def caption(self, index: int) -> str:
         row = self.metadata.iloc[index]
         return row.get("caption") or row.get("text", "")
-

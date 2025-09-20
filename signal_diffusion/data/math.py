@@ -96,7 +96,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         *,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
         include_math_trials: bool = False,
     ) -> None:
@@ -118,9 +118,9 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         self.fs = self.orig_fs / self.decimation
 
         self.states: Sequence[int] = (1, 2) if include_math_trials else (1,)
+        self._subject_ids: Sequence[str] | None = None
         self.channel_indices = self._determine_channel_indices()
         self.n_channels = len(self.channel_indices)
-        self._subject_ids: Sequence[str] | None = None
 
     # ------------------------------------------------------------------
     # BaseSpectrogramPreprocessor hooks
@@ -316,4 +316,3 @@ class MathDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(MATH_LABELS.keys())
-

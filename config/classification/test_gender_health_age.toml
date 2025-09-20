@@ -1,7 +1,8 @@
 # Lightweight config for verifying multi-task classifiers.
 
 [settings]
-config = "config/default.toml"
+# Resolve relative to repository root so smoke script can run anywhere
+config = "../../config/default.toml"
 
 [dataset]
 name = "parkinsons"

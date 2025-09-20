@@ -1,0 +1,31 @@
+# Default configuration for the Signal Diffusion project.
+# Override these values by setting the SIGNAL_DIFFUSION_CONFIG environment variable
+# to point at another TOML file or by providing custom paths when loading settings.
+
+[data]
+root = "~/data/signal-diffusion"
+output_root = "~/data/signal-diffusion/processed"
+
+[datasets.math]
+root = "eeg_math"
+output = "eeg_math/stfts"
+
+[datasets.parkinsons]
+root = "parkinsons"
+output = "parkinsons/stfts"
+
+[datasets.seed]
+root = "seed"
+output = "seed/stfts"
+
+[datasets.mit]
+root = "mit"
+output = "mit/stfts"
+
+[datasets.oklahoma]
+root = "oklahoma"
+output = "oklahoma/stfts"
+
+[datasets.longitudinal]
+root = "longitudinal"
+output = "longitudinal/stfts"

@@ -61,7 +61,7 @@ class ParkinsonsPreprocessor(_ParkinsonsPreprocessor):
         datadir: str | Path,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 250,
+        fs: float = 250,
         bin_spacing: str = "linear",
     ) -> None:
         self.datadir = Path(datadir)
@@ -211,4 +211,3 @@ class ParkinsonsSampler(torch.utils.data.Sampler):
         output_weights = [new_label_weights[label] for label in labels]
         norm = sum(output_weights)
         return [weight / norm for weight in output_weights]
-

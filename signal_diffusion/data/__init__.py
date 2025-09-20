@@ -21,8 +21,8 @@ from .parkinsons import (
 from .seed import (
     SEED_CONDITION_CLASSES,
     SEED_LABELS,
-    SeedDataset,
-    SeedPreprocessor,
+    SEEDDataset,
+    SEEDPreprocessor,
 )
 
 __all__ = [
@@ -41,8 +41,8 @@ __all__ = [
     "ParkinsonsDataset",
     "PARKINSONS_LABELS",
     "PARKINSONS_CONDITION_CLASSES",
-    "SeedPreprocessor",
-    "SeedDataset",
+    "SEEDPreprocessor",
+    "SEEDDataset",
     "SEED_LABELS",
     "SEED_CONDITION_CLASSES",
 ]

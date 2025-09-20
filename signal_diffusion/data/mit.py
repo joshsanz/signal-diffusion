@@ -105,7 +105,7 @@ class MITPreprocessor(BaseSpectrogramPreprocessor):
         *,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 256,
+        fs: float = 256,
         bin_spacing: str = "linear",
     ) -> None:
         super().__init__(settings, dataset_name="mit")

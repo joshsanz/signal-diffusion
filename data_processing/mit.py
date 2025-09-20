@@ -46,7 +46,7 @@ class MITPreprocessor(_MITPreprocessor):
         datadir: str | Path,
         nsamps: int,
         ovr_perc: float = 0.0,
-        fs: int = 256,
+        fs: float = 256,
         bin_spacing: str = "linear",
     ) -> None:
         self.datadir = Path(datadir)
@@ -190,4 +190,3 @@ class MITSampler(torch.utils.data.Sampler[int]):
             weights.append(1.0 / max(freq, 1e-8))
         weight_sum = sum(weights)
         return [w / weight_sum for w in weights]
-

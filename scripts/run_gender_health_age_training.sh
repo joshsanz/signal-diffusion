@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
-CONFIG_PATH="${REPO_ROOT}/configs/classification/test_gender_health_age.toml"
+CONFIG_PATH="${REPO_ROOT}/config/classification/test_gender_health_age.toml"
 
 if [[ ! -f "${CONFIG_PATH}" ]]; then
   echo "Config not found at ${CONFIG_PATH}" >&2
@@ -11,9 +11,9 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
 fi
 
 if command -v uv >/dev/null 2>&1; then
-  TRAINER=(uv run python -m signal_diffusion.training.classification train)
+  TRAINER=(uv run python -m signal_diffusion.training.classification)
 elif command -v python3 >/dev/null 2>&1; then
-  TRAINER=(python3 -m signal_diffusion.training.classification train)
+  TRAINER=(python3 -m signal_diffusion.training.classification)
 else
   echo "Unable to locate 'uv' or 'python3' to launch training" >&2
   exit 1
@@ -29,7 +29,7 @@ run_training() {
 
   echo "=== Training ${dataset} classifier (config: ${config}) ==="
   mkdir -p "${out_dir}"
-  "${TRAINER[@]}" "${config}" --output-dir "${out_dir}"
+  "${TRAINER[@]}" --output-dir "${out_dir}" "${config}"
 }
 
 run_training "parkinsons" "${CONFIG_PATH}" "${OUTPUT_ROOT}/parkinsons"
