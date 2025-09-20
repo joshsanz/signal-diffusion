@@ -14,7 +14,7 @@ from scipy.signal import decimate
 from torchvision import transforms
 
 from common.multichannel_spectrograms import multichannel_spectrogram
-from data_processing.channel_map import mit_channels
+from signal_diffusion.data.channel_maps import mit_channels
 
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
