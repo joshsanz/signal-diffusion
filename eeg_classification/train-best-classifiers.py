@@ -16,13 +16,10 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import torchvision.transforms.v2 as transforms
 import warnings
 
-sys.path.append("../")
 from cnn_models import CNNClassifierLight, LabelSmoothingCrossEntropy
-# from data_processing.math import MathDataset
-from data_processing.parkinsons import ParkinsonsDataset
-from data_processing.seed import SEEDDataset
-from data_processing.general_dataset import GeneralDataset, GeneralSampler
 from training import train_class, evaluate_class, TrainingConfig
+from signal_diffusion.config import load_settings
+from signal_diffusion.data.meta import MetaDataset, MetaSampler
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -63,7 +60,11 @@ def print_run_header(t0, run, num_runs):
 
 def load_datasets(cfg):
     all_datasets = []
-
+    base_transform = transforms.Compose([
+        transforms.ToImage(),
+        transforms.ToDtype(torch.float32, scale=True),
+        transforms.Normalize([0.5], [0.5]),
+    ])
     if cfg.data.transform == "trivial_augment_wide":
         transform_fn = transforms.Compose([
             transforms.TrivialAugmentWide(),
@@ -72,58 +73,56 @@ def load_datasets(cfg):
             transforms.Normalize([0.5], [0.5]),
         ])
     else:
-        transform_fn = transforms.Compose([
-            transforms.ToImage(),
-            transforms.ToDtype(torch.float32, scale=True),
-            transforms.Normalize([0.5], [0.5]),
-        ])
+        transform_fn = base_transform
+    train_transform = transform_fn
+    val_transform = base_transform
 
-    if cfg.data.from_eeg_data:
-        # Load real datasets
-        datadirs = {}
-        datahome = '/data/shared/signal-diffusion'
-        # datahome = '/mnt/d/data/signal-diffusion'
-        # Math dataset
-        datadirs['math'] = f'{datahome}/eeg_math'
-        datadirs['math-stft'] = os.path.join(datadirs['math'], 'stfts')
-        # Parkinsons dataset
-        datadirs['parkinsons'] = f'{datahome}/parkinsons/'
-        datadirs['parkinsons-stft'] = os.path.join(datadirs['parkinsons'], 'stfts')
-        # SEED dataset
-        datadirs['seed'] = f'{datahome}/seed/'
-        datadirs['seed-stft'] = os.path.join(datadirs['seed'], "stfts")
+    if getattr(cfg.data, "from_eeg_data", False):
+        settings = load_settings()
+        dataset_names = getattr(cfg.data, "datasets", None)
+        if dataset_names is None:
+            dataset_names = ("parkinsons", "seed")
+        else:
+            dataset_names = tuple(dataset_names)
 
-        # Validation datasets
-        # math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
-        parkinsons_val_dataset = ParkinsonsDataset(
-            datadirs['parkinsons-stft'], split="val", task=cfg.data.task)
-        seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val", task=cfg.data.task)
-        val_datasets = [parkinsons_val_dataset, seed_val_dataset]
-        # Train datasets
-        # math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train",
-        #                                       transform=transform_fn)
-        parkinsons_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train",
-                                                     transform=transform_fn, task=cfg.data.task)
-        seed_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train",
-                                         transform=transform_fn, task=cfg.data.task)
-        train_datasets = [parkinsons_train_dataset, seed_train_dataset]
+        tasks = (cfg.data.task,)
+        train_dataset = MetaDataset(
+            settings,
+            dataset_names,
+            split="train",
+            tasks=tasks,
+            transform=train_transform,
+            target_format="tuple",
+        )
+        val_dataset = MetaDataset(
+            settings,
+            dataset_names,
+            split="val",
+            tasks=tasks,
+            transform=val_transform,
+            target_format="tuple",
+        )
 
-        val_set = GeneralDataset(val_datasets, split='val')
-        train_set = GeneralDataset(train_datasets, split='train')
+        train_sampler = MetaSampler(train_dataset, num_samples=len(train_dataset))
 
-        # Sampler for balanced training data
-        train_samp = GeneralSampler(train_datasets, cfg.training.batch_size, split='train')
-
-        # Dataloaders
         num_workers = 4
         persistent = num_workers > 0
+        use_pin_memory = torch.cuda.is_available()
         val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=cfg.training.batch_size, shuffle=True,
-            num_workers=num_workers, pin_memory=True, persistent_workers=True
+            val_dataset,
+            batch_size=cfg.training.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory,
+            persistent_workers=persistent,
         )
         train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=cfg.training.batch_size, num_workers=num_workers,
-            pin_memory=True, persistent_workers=persistent, sampler=train_samp
+            train_dataset,
+            batch_size=cfg.training.batch_size,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory,
+            persistent_workers=persistent,
+            sampler=train_sampler,
         )
         all_datasets.append(("real_eeg", train_loader, val_loader))
 

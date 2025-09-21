@@ -350,19 +350,21 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         target_format="dict",
     )
 
+    use_pin_memory = dataset_cfg.pin_memory and torch.cuda.is_available()
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=dataset_cfg.batch_size,
         shuffle=dataset_cfg.shuffle,
         num_workers=dataset_cfg.num_workers,
-        pin_memory=dataset_cfg.pin_memory,
+        pin_memory=use_pin_memory,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=dataset_cfg.batch_size,
         shuffle=False,
         num_workers=dataset_cfg.num_workers,
-        pin_memory=dataset_cfg.pin_memory,
+        pin_memory=use_pin_memory,
     )
 
     run_dir = _prepare_run_dir(config)

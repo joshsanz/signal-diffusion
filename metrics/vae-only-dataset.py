@@ -36,9 +36,15 @@ def main(args):
                            features=Features({"image": Image(mode="RGB")})
                            ).with_format("torch")
     dataset = dataset.with_transform(transform_fn)
+    use_pin_memory = torch.cuda.is_available()
     dataloader = torch.utils.data.DataLoader(
-        dataset['train'], batch_size=args.batch_size, shuffle=False,
-        collate_fn=collate_fn, pin_memory=True, num_workers=4)
+        dataset['train'],
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        pin_memory=use_pin_memory,
+        num_workers=4,
+    )
 
     if "vae" in args.model:
         vae = AutoencoderKL.from_pretrained(args.model).to(device)

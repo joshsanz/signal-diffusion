@@ -11,20 +11,16 @@ import warnings
 
 import torch
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter as TBSummaryWriter
 from torch.utils.tensorboard.summary import hparams
 import torchvision.transforms.v2 as transforms
 from itertools import product
 
-sys.path.append("../")
-
 from cnn_models import CNNClassifierLight, LabelSmoothingCrossEntropy
 # from cnn_models import EfficientNet, ShuffleNet, ResNet, CNNClassifier
-from data_processing.math import MathDataset
-from data_processing.parkinsons import ParkinsonsDataset
-from data_processing.seed import SEEDDataset
-from data_processing.general_dataset import GeneralPreprocessor, GeneralDataset, GeneralSampler
-# from data_processing.general_dataset import general_class_labels, general_dataset_map
+from signal_diffusion.config import load_settings
+from signal_diffusion.data.meta import MetaDataset, MetaPreprocessor, MetaSampler
+# Legacy general dataset helpers are replaced by Meta* equivalents
 from training import train_class, TrainingConfig
 
 
@@ -32,7 +28,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 
-class SummaryWriter(SummaryWriter):
+class SummaryWriter(TBSummaryWriter):
     """Override SummaryWriter so it doesn't place hparams in a separate subdirectory."""
     def add_hparams(self, hparam_dict, metric_dict):
         torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
@@ -82,28 +78,19 @@ random_seed = 205  # 205 Gave a good split for training
 np.random.seed(random_seed)
 torch.manual_seed(random_seed)
 
-# Datapaths
-datadirs = {}
-datahome = '/data/shared/signal-diffusion'
-# datahome = '/mnt/d/data/signal-diffusion'
-
-# Math dataset
-datadirs['math'] = f'{datahome}/eeg_math'
-datadirs['math-stft'] = os.path.join(datadirs['math'], 'stfts')
-
-# Parkinsons dataset
-datadirs['parkinsons'] = f'{datahome}/parkinsons/'
-datadirs['parkinsons-stft'] = os.path.join(datadirs['parkinsons'], 'stfts')
-
-# SEED dataset
-datadirs['seed'] = f'{datahome}/seed/'
-datadirs['seed-stft'] = os.path.join(datadirs['seed'], "stfts")
-
-# # Data Preprocessing (run once)
+# Dataset configuration
+settings = load_settings()
+dataset_names = ("parkinsons", "seed")
 
 nsamps = 2000
 
-preprocessor = GeneralPreprocessor(datadirs, nsamps, ovr_perc=0.5, fs=125)
+preprocessor = MetaPreprocessor(
+    settings,
+    dataset_names,
+    nsamps=nsamps,
+    ovr_perc=0.5,
+    fs=125,
+)
 # preprocessor.preprocess(resolution=256, train_frac=0.8, val_frac=0.2, test_frac=0.0)
 
 # # Train on Real Data
@@ -127,7 +114,7 @@ randtxfm = transforms.Compose([
     transforms.Normalize([0.5], [0.5]),
 ])
 
-# Datasets, excluding math
+# Datasets built from the refactored data layer
 dataloaders = dict()
 for transform_type in [None, "trivial_augment_wide"]:
     if transform_type == "trivial_augment_wide":
@@ -135,33 +122,41 @@ for transform_type in [None, "trivial_augment_wide"]:
     else:
         transform_fn = None
 
-    math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
-    parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
-    seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
-    val_datasets = [parkinsons_val_dataset, seed_val_dataset]
+    train_dataset = MetaDataset(
+        settings,
+        dataset_names,
+        split="train",
+        tasks=("gender",),
+        transform=transform_fn,
+        target_format="tuple",
+    )
+    val_dataset = MetaDataset(
+        settings,
+        dataset_names,
+        split="val",
+        tasks=("gender",),
+        target_format="tuple",
+    )
 
-    math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train",
-                                          transform=transform_fn)
-    parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train",
-                                                      transform=transform_fn)
-    seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train",
-                                          transform=transform_fn)
-    real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
+    train_samp = MetaSampler(train_dataset, num_samples=len(train_dataset))
 
-    val_set = GeneralDataset(val_datasets, split='val')
-    real_train_set = GeneralDataset(real_train_datasets, split='train')
-
-    # Sampler for balanced training data
-    train_samp = GeneralSampler(real_train_datasets, BATCH_SIZE, split='train')
-
-    # Dataloaders
-    val_loader = torch.utils.data.DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=SHUFFLE,
-                                             num_workers=NUM_WORKERS, pin_memory=True,
-                                             persistent_workers=persistent)
-    real_train_loader = torch.utils.data.DataLoader(real_train_set, batch_size=BATCH_SIZE,
-                                                    num_workers=NUM_WORKERS, pin_memory=True,
-                                                    persistent_workers=persistent,
-                                                    sampler=train_samp)
+    use_pin_memory = torch.cuda.is_available()
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=SHUFFLE,
+        num_workers=NUM_WORKERS,
+        pin_memory=use_pin_memory,
+        persistent_workers=persistent,
+    )
+    real_train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        pin_memory=use_pin_memory,
+        persistent_workers=persistent,
+        sampler=train_samp,
+    )
     dataloaders[transform_type] = DataLoaders(real_train_loader, val_loader)
 
 # Define hyper paramters

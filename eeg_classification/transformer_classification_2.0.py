@@ -89,20 +89,36 @@ N_TOKENS = 128
 CONTEXT_SAMPS = 20
 N_SAMPS = CONTEXT_SAMPS * N_TOKENS
 persistent = NUM_WORKERS > 0
+use_pin_memory = torch.cuda.is_available()
 
 # Datasets
 train_set = MathDataset(math_data_path + "/train", CONTEXT_SAMPS)
 val_set = MathDataset(math_data_path + "/val", CONTEXT_SAMPS)
 test_set = MathDataset(math_data_path + "/test", CONTEXT_SAMPS)
-train_loader = torch.utils.data.DataLoader(train_set, batch_size=BATCH_SIZE, 
-                                           shuffle=SHUFFLE, num_workers=NUM_WORKERS,
-                                           pin_memory=True, persistent_workers=persistent)
-val_loader = torch.utils.data.DataLoader(val_set, batch_size=BATCH_SIZE, 
-                                         shuffle=SHUFFLE, num_workers=NUM_WORKERS,
-                                         pin_memory=True, persistent_workers=persistent)
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE, 
-                                          shuffle=SHUFFLE, num_workers=NUM_WORKERS,
-                                          pin_memory=True, persistent_workers=persistent)
+train_loader = torch.utils.data.DataLoader(
+    train_set,
+    batch_size=BATCH_SIZE,
+    shuffle=SHUFFLE,
+    num_workers=NUM_WORKERS,
+    pin_memory=use_pin_memory,
+    persistent_workers=persistent,
+)
+val_loader = torch.utils.data.DataLoader(
+    val_set,
+    batch_size=BATCH_SIZE,
+    shuffle=SHUFFLE,
+    num_workers=NUM_WORKERS,
+    pin_memory=use_pin_memory,
+    persistent_workers=persistent,
+)
+test_loader = torch.utils.data.DataLoader(
+    test_set,
+    batch_size=BATCH_SIZE,
+    shuffle=SHUFFLE,
+    num_workers=NUM_WORKERS,
+    pin_memory=use_pin_memory,
+    persistent_workers=persistent,
+)
 
 # In[ ]:
 
@@ -119,7 +135,7 @@ BATCH_FIRST = True # True: (batch, seq, feature). False: (seq, batch, feature)
 WEIGHT_DECAY = 0.0001
 
 # CUDA for PyTorch
-use_cuda = torch.cuda.is_available()
+use_cuda = use_pin_memory
 device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
@@ -195,4 +211,3 @@ for (opt, decay, restart, max_eta, decouple) in itertools.product(
     os.makedirs("models", exist_ok=True)
     shutil.copyfile("best_model.pt", f"models/best_model-{comment}.pt")
     shutil.copyfile("last_model.pt", f"models/last_model-{comment}.pt")
-

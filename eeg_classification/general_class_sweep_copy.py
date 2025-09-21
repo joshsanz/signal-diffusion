@@ -2,7 +2,7 @@
 # ## Imports and Setup
 
 # %% [markdown]
-# 
+#
 
 # %%
 # Imports for Tensor
@@ -28,35 +28,19 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import dataset
 from torchvision import transforms
-import torchcontrib
-from torchcontrib.optim import SWA
+from torch.optim.swa_utils import AveragedModel, SWALR
 
 
 from diffusers import StableDiffusionPipeline
 from datasets import load_dataset
 
-#sys.path.append("../")
-#sys.path.append("/home/abastani/signal-diffusion/common")
-#sys.path.append("/home/abastani/signal-diffusion/data_processing")
-
-sys.path.insert(0, '/home/abastani/signal-diffusion/')
-
-
-
-
-print("THI: ", sys.path)
-
 
 # %%
-from common.dog import DoG, LDoG, PDoG
 from cnn_models import model_size
 from cnn_models import CNNClassifier, CNNClassifierLight, LabelSmoothingCrossEntropy
 from cnn_models import EfficientNet, ShuffleNet, ResNet
-from data_processing.math import MathDataset
-from data_processing.parkinsons import ParkinsonsDataset
-from data_processing.seed import SEEDDataset
-from data_processing.general_dataset import GeneralPreprocessor, GeneralDataset, GeneralSampler
-from data_processing.general_dataset import general_class_labels, general_dataset_map
+from signal_diffusion.config import load_settings
+from signal_diffusion.data.meta import MetaDataset, MetaPreprocessor, MetaSampler
 from training import train_class, evaluate_class, TrainingConfig
 from visualization import *
 
@@ -66,30 +50,24 @@ np.random.seed(random_seed)
 torch.manual_seed(random_seed)
 
 # %%
-# Datapaths
-datadirs = {}
-datahome = '/data/shared/signal-diffusion'
-# datahome = '/mnt/d/data/signal-diffusion'
-
-# Math dataset
-datadirs['math'] = f'{datahome}/eeg_math'
-datadirs['math-stft'] = os.path.join(datadirs['math'], 'stfts')
-
-# Parkinsons dataset
-datadirs['parkinsons'] = f'{datahome}/parkinsons/'
-datadirs['parkinsons-stft'] = os.path.join(datadirs['parkinsons'], 'stfts')
-
-#SEED dataset
-datadirs['seed'] = f'{datahome}/seed/'
-datadirs['seed-stft'] = os.path.join(datadirs['seed'], "stfts")
+# Dataset configuration comes from the project settings so paths stay centralised
+settings = load_settings()
+dataset_names = ("parkinsons", "seed")
 
 # %% [markdown]
 # # Data Preprocessing (run once)
 
 # %%
 nsamps = 2000
-
-preprocessor = GeneralPreprocessor(datadirs, nsamps, ovr_perc=0.5, fs=125) 
+# MetaPreprocessor wraps the individual dataset preprocessors using the shared
+# signal_diffusion.data layer
+preprocessor = MetaPreprocessor(
+    settings,
+    dataset_names,
+    nsamps=nsamps,
+    ovr_perc=0.5,
+    fs=125,
+)
 #preprocessor.preprocess(resolution=256, train_frac=0.8, val_frac=0.2, test_frac=0.0)
 
 # %% [markdown]
@@ -107,6 +85,7 @@ N_TOKENS = 128
 RESOLUTION = 256
 HOP_LENGTH = 80
 persistent = NUM_WORKERS > 0
+use_pin_memory = torch.cuda.is_available()
 
 # Data augmentation
 randtxfm = transforms.Compose([
@@ -117,31 +96,47 @@ randtxfm = transforms.Compose([
 
 # %%
 # Datasets, excluding math
-math_val_dataset = MathDataset(datadirs['math-stft'], split="val")
-parkinsons_val_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="val")
-seed_val_dataset = SEEDDataset(datadirs['seed-stft'], split="val")
-val_datasets = [parkinsons_val_dataset, seed_val_dataset]
+train_tasks = ("health",)
 
-math_real_train_dataset = MathDataset(datadirs['math-stft'], split="train")
-parkinsons_real_train_dataset = ParkinsonsDataset(datadirs['parkinsons-stft'], split="train", transform=None)
-seed_real_train_dataset = SEEDDataset(datadirs['seed-stft'], split="train")
-real_train_datasets = [parkinsons_real_train_dataset, seed_real_train_dataset]
-
-
-val_set = GeneralDataset(val_datasets, split='val')
-real_train_set = GeneralDataset(real_train_datasets, split='train')
+# MetaDataset surfaces the spectrogram samples straight from the consolidated
+# data registry. For this sweep we pair Parkinsons and SEED recordings.
+real_train_set = MetaDataset(
+    settings,
+    dataset_names,
+    split="train",
+    tasks=train_tasks,
+    transform=randtxfm,
+    target_format="tuple",
+)
+val_set = MetaDataset(
+    settings,
+    dataset_names,
+    split="val",
+    tasks=train_tasks,
+    target_format="tuple",
+)
 
 # Sampler for balanced training data
-train_samp = GeneralSampler(real_train_datasets, BATCH_SIZE, split='train')
+train_samp = MetaSampler(real_train_set, num_samples=len(real_train_set))
 
 # %%
 # Dataloaders
-val_loader = torch.utils.data.DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=SHUFFLE,
-                                         num_workers=NUM_WORKERS, pin_memory=True, 
-                                         persistent_workers=persistent)
-real_train_loader = torch.utils.data.DataLoader(real_train_set, batch_size=BATCH_SIZE, 
-                                                num_workers=NUM_WORKERS, pin_memory=True, 
-                                                persistent_workers=persistent, sampler=train_samp)
+val_loader = torch.utils.data.DataLoader(
+    val_set,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=NUM_WORKERS,
+    pin_memory=use_pin_memory,
+    persistent_workers=persistent,
+)
+real_train_loader = torch.utils.data.DataLoader(
+    real_train_set,
+    batch_size=BATCH_SIZE,
+    num_workers=NUM_WORKERS,
+    pin_memory=use_pin_memory,
+    persistent_workers=persistent,
+    sampler=train_samp,
+)
 
 # %%
 # Define hyper paramters
@@ -155,7 +150,7 @@ BATCH_FIRST = True # True: (batch, seq, feature). False: (seq, batch, feature)
 #SWA_START = 15
 
 # CUDA for PyTorch
-use_cuda = torch.cuda.is_available()
+use_cuda = use_pin_memory
 device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.backends.cudnn.benchmark = True
 
@@ -193,7 +188,7 @@ for epoch in epochs:
                                 random_seed = 205 #205 Gave a good split for training
                                 np.random.seed(random_seed)
                                 torch.manual_seed(random_seed)
-                            
+
                                 # Loss function
                                 criterion = LabelSmoothingCrossEntropy(epsilon=EPSILON)
 
@@ -202,7 +197,7 @@ for epoch in epochs:
 
                                 # Create model instance
                                 model = CNNClassifierLight(1, OUTPUT_DIM, dropout=DROPOUT,pooling="max")
-                                model = model.to(device) 
+                                model = model.to(device)
 
                                 if opt == torch.optim.AdamW:
                                     optimizer = opt(model.parameters(), lr=BASE_LEARNING_RATE, weight_decay=decay)
@@ -219,8 +214,8 @@ for epoch in epochs:
 
                                 # SWA model instance
                                 if SWA_START < EPOCHS:
-                                    swa_model = torch.optim.swa_utils.AveragedModel(model)
-                                    swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=SWA_LEARNING_RATE)
+                                    swa_model = AveragedModel(model)
+                                    swa_scheduler = SWALR(optimizer, swa_lr=SWA_LEARNING_RATE)
                                 else:
                                     swa_model = None
                                     swa_scheduler = None
@@ -233,8 +228,8 @@ for epoch in epochs:
                                 if isinstance(optimizer, DoG):
                                     postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
                                 comment = f"cnnclass_{model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
-                                tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" + 
-                                                    datetime.now().isoformat(sep='_'), 
+                                tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" +
+                                                    datetime.now().isoformat(sep='_'),
                                                     comment=comment)
                                 print("#" * 80)
                                 print("Training", comment)
@@ -243,14 +238,14 @@ for epoch in epochs:
                                 losses, accs, val_accs, swa_model = train_class(
                                     ARGS, model, swa_model,
                                     real_train_loader, val_loader,
-                                    optimizer, scheduler, swa_scheduler, 
+                                    optimizer, scheduler, swa_scheduler,
                                     criterion, device, tbsw, best_swa_models_dict,
                                     best_models_dict, comment
                                 )
 
                                 # load best model and evaluate on test set
                                 #model.load_state_dict(torch.load(f'best_model.pt'))
-                                # test_loss, test_acc = evaluate_class(model, test_loader, criterion, device, 
+                                # test_loss, test_acc = evaluate_class(model, test_loader, criterion, device,
                                 #                                      tbsw, ARGS.epochs * len(real_train_loader) + 1)
                                 # print(f'Test loss={test_loss:.3f}; test accuracy={test_acc:.3f}')
 
@@ -270,7 +265,7 @@ base_keys.sort()
 base_keys = base_keys[:30]
 
 
-with open("/home/abastani/signal-diffusion/eeg_classification/sweep_results.txt", 'w') as out:
+with open("sweep_results.txt", 'w') as out:
     for i in range(2):
         swa_line = "swa_val: " + str(swa_keys[i]) + "model comment: " + str(best_swa_models_dict[swa_keys[i]]) + "\n"
         out.write(swa_line)
