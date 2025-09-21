@@ -3,6 +3,7 @@ import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.patches as mpatches
 from pathlib import Path
 
 from signal_diffusion.config import load_settings
@@ -126,6 +127,62 @@ def plot_raw_counts(df, category, output_dir):
     plt.savefig(output_dir / f"{category}_raw_counts.png")
     plt.close()
 
+def plot_subject_prevalence(df, output_dir):
+    """Plots the prevalence of subjects, broken down by gender and dataset."""
+    plt.figure(figsize=(12, 8))
+
+    # Group by dataset, subject, and gender to get counts
+    subject_gender_counts = df.groupby(['dataset', 'subject', 'gender']).size().reset_index(name='count')
+    # Sort by dataset and then by gender
+    subject_gender_counts = subject_gender_counts.sort_values(by=['dataset', 'gender'])
+
+    # Prepare data for pie chart
+    data = []
+    labels = []
+    colors = []
+
+    # Define a color palette for datasets and genders
+    # Using seaborn's palette for consistency
+    dataset_names = df['dataset'].unique()
+    gender_names = df['gender'].unique()
+
+    # Create a color map for each dataset-gender combination
+    # This is a simplified approach compared to the original's fixed colors
+    # For better visual distinction, we might need a more robust color assignment
+    color_palette = sns.color_palette("Paired", len(dataset_names) * len(gender_names))
+    color_map = {}
+    color_idx = 0
+    for ds in dataset_names:
+        for g in gender_names:
+            color_map[(ds, g)] = color_palette[color_idx]
+            color_idx += 1
+
+    for _, row in subject_gender_counts.iterrows():
+        data.append(row['count'])
+        labels.append(f"{row['subject']} ({row['gender']})")
+        colors.append(color_map[(row['dataset'], row['gender'])])
+
+    # Creating plot
+    fig, ax = plt.subplots(figsize=(10, 7))
+    wp = {'linewidth': 1, 'edgecolor': "black"}
+    tp = {'fontsize': 8} # Increased font size for better readability
+
+    patches, texts = ax.pie(data, labels=labels, colors=colors, textprops=tp, wedgeprops=wp, startangle=90)
+
+    # Create Legend
+    legend_patches = []
+    for ds in dataset_names:
+        for g in gender_names:
+            if (ds, g) in color_map: # Only add if combination exists
+                legend_patches.append(mpatches.Patch(color=color_map[(ds, g)], label=f"{ds} - {g}"))
+
+    plt.legend(handles=legend_patches, loc='center left', bbox_to_anchor=(1, 0.5), fontsize=10)
+
+    ax.set_title("Subject Prevalence by Dataset and Gender")
+    plt.tight_layout()
+    plt.savefig(output_dir / "subject_prevalence.png")
+    plt.close()
+
 def main():
     """Main function to run the analysis."""
     parser = argparse.ArgumentParser()
@@ -146,6 +203,7 @@ def main():
     plot_raw_counts(metadata_df, "health", output_dir)
     plot_distribution(metadata_df, "age", output_dir)
     plot_raw_counts(metadata_df, "age", output_dir)
+    plot_subject_prevalence(metadata_df, output_dir)
 
 
 if __name__ == "__main__":
