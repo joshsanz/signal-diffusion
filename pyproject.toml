@@ -19,7 +19,6 @@ dependencies = [
     "datasets[vision]",
     "librosa",
     "mne",
-    "omegaconf",
     "pillow",
     "tqdm",
     "typer",
@@ -27,6 +26,9 @@ dependencies = [
     "seaborn",
     "accelerate",
     "tensorboard",
+    "notebook>=7.4.5",
+    "diffusers>=0.35.1",
+    "ipywidgets>=8.1.7",
 ]
 
 [project.optional-dependencies]
@@ -98,4 +100,4 @@ docs = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["signal_diffusion*", "common*", "data_processing*"]
+include = ["signal_diffusion*", "common*"]
