@@ -50,14 +50,14 @@ Each dataset receives a `root` (raw inputs) and `output` (preprocessed spectrogr
 
 ## Shared Data Layer
 
-Core dataset utilities now live in `signal_diffusion/data/` with backwards-compatible shims under `data_processing/`. The shared base handles train/val/test splitting, metadata emission, and spectrogram persistence for:
+Core dataset utilities live in `signal_diffusion/data/`. The shared base handles train/val/test splitting, metadata emission, and spectrogram persistence for:
 
 - Math dataset
 - Parkinsons dataset
 - SEED dataset
 - CHB-MIT (MIT) dataset
 
-See [`docs/data_layer.md`](./docs/data_layer.md) for in-depth guidance on preprocessors, dataset classes, and label registries.
+See [`docs/data_layer.md`](./docs/data_layer.md) for in-depth guidance on preprocessors, dataset classes, label registries, and the meta-dataset helpers that combine multiple sources.
 
 ## EEG Classifier Stack
 

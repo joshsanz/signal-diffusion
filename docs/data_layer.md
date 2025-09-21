@@ -52,18 +52,14 @@ Dataset-specific preprocessors subclass the base class and implement
 | Math | `signal_diffusion.data.math.MathPreprocessor` | `signal_diffusion.data.math.MathDataset` | gender, math_activity, math_condition |
 | Parkinsons | `signal_diffusion.data.parkinsons.ParkinsonsPreprocessor` | `signal_diffusion.data.parkinsons.ParkinsonsDataset` | gender, health, parkinsons_condition |
 | MIT (CHB-MIT) | `signal_diffusion.data.mit.MITPreprocessor` | `signal_diffusion.data.mit.MITDataset` | gender, seizure, mit_condition |
-| SEED | `signal_diffusion.data.seed.SeedPreprocessor` | `signal_diffusion.data.seed.SeedDataset` | emotion, gender, seed_condition |
+| SEED | `signal_diffusion.data.seed.SEEDPreprocessor` | `signal_diffusion.data.seed.SEEDDataset` | emotion, gender, seed_condition |
 
 Tasks are looked up through dataset-specific label registries (e.g.
-`signal_diffusion.data.math.MATH_LABELS`). These registries are used by the new
-classifier scaffolding and by the updated shims under `data_processing/`.
-
-## Legacy Compatibility
-
-The historical entry points (`data_processing/math.py`,
-`data_processing/parkinsons.py`, `data_processing/seed.py`) now wrap the new
-implementations. Existing scripts that import those modules continue to receive
-Tuples `(tensor, label)` and class-based samplers without modification.
+`signal_diffusion.data.math.MATH_LABELS`). They feed into the classifier
+scaffolding and the meta-dataset utilities under
+`signal_diffusion.data.meta`, which expose `MetaPreprocessor`, `MetaDataset`,
+and `MetaSampler` alongside backwards-compatible aliases named
+`GeneralPreprocessor`, `GeneralDataset`, and `GeneralSampler`.
 
 ## Getting Started
 
