@@ -31,36 +31,60 @@ def load_metadata(settings, dataset_names):
             dataset_class = dataset_classes[name]
             df = dataset_class(settings, split="train").metadata
             df["dataset"] = name
+            # Ensure 'health' column exists for all datasets
+            if "health" not in df.columns:
+                df["health"] = "healthy" # Use "healthy" as a placeholder for datasets without health info
             all_dfs.append(df)
         except FileNotFoundError:
             print(f"Warning: {name.capitalize()} dataset metadata not found. Skipping.")
         except Exception as e:
             print(f"Error loading {name.capitalize()} dataset: {e}. Skipping.")
 
-    if not all_dfs:
-        raise RuntimeError("No dataset metadata found. Cannot proceed.")
-    return pd.concat(all_dfs)
+    combined_df = pd.concat(all_dfs)
+    # TODO: This is a hack to standardize 'health' labels.
+    # The ParkinsonsDataset metadata logic should be modified to
+    # produce 'healthy' and 'parkinsons' directly when generating metadata.
+    combined_df["health"] = combined_df["health"].replace({"Control": "healthy", "PD": "parkinsons"})
+    return combined_df
 
 
 def plot_distribution(df, category, output_dir):
     """Plots the distribution of samples for a given category and calculates resampling weights."""
     plt.figure(figsize=(10, 6))
-    counts = df[category].value_counts()
-    normalized_counts = counts / len(df)
-    weights = 1 / normalized_counts
 
-    ax = sns.barplot(x=normalized_counts.index, y=normalized_counts.values)
+    if category == "dataset":
+        counts = df[category].value_counts()
+        normalized_counts = counts / len(df)
+        weights = 1 / normalized_counts
 
-    for i, p in enumerate(ax.patches):
-        label = normalized_counts.index[i]
-        weight = weights[label]
-        ax.annotate(f"Weight: {weight:.2f}", (p.get_x() + p.get_width() / 2., p.get_height()),
-                    ha='center', va='center', fontsize=10, color='black', xytext=(0, 5),
-                    textcoords='offset points')
+        ax = sns.barplot(x=normalized_counts.index, y=normalized_counts.values)
 
-    plt.title(f"Normalized Sample Distribution by {category.capitalize()}")
+        for i, p in enumerate(ax.patches):
+            label = normalized_counts.index[i]
+            weight = weights[label]
+            ax.annotate(f"Weight: {weight:.2f}", (p.get_x() + p.get_width() / 2., p.get_height()),
+                        ha='center', va='center', fontsize=10, color='black', xytext=(0, 5),
+                        textcoords='offset points')
+        plt.title(f"Normalized Sample Distribution by {category.capitalize()}")
+        plt.ylabel("Normalized Count")
+    else:
+        # For other categories, plot stacked normalized distribution by dataset
+        # Calculate overall weights based on the category distribution
+        overall_counts = df[category].value_counts()
+        overall_normalized_counts = overall_counts / len(df)
+        weights = 1 / overall_normalized_counts # Keep weights for potential future use or just for understanding
+
+        ax = sns.histplot(data=df, x=category, hue="dataset", multiple="stack", stat="proportion", common_norm=True)
+
+        # The stacked bars visually represent the contribution of each subdataset.
+        # Annotating individual proportions on stacked bars can be very cluttered.
+        # The overall weight for the category value is still relevant, but hard to place cleanly on histplot.
+        # For now, we rely on the visual representation and the title.
+
+        plt.title(f"Normalized Sample Distribution by {category.capitalize()} (Stacked by Dataset)")
+        plt.ylabel("Proportion of Total Samples")
+
     plt.xlabel(category.capitalize())
-    plt.ylabel("Normalized Count")
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.savefig(output_dir / f"{category}_distribution.png")
@@ -70,18 +94,33 @@ def plot_distribution(df, category, output_dir):
 def plot_raw_counts(df, category, output_dir):
     """Plots the raw number of samples for a given category."""
     plt.figure(figsize=(10, 6))
-    counts = df[category].value_counts()
 
-    ax = sns.barplot(x=counts.index, y=counts.values)
+    if category == "dataset":
+        counts = df[category].value_counts()
+        ax = sns.barplot(x=counts.index, y=counts.values)
 
-    for p in ax.patches:
-        ax.annotate(f"{int(p.get_height())}", (p.get_x() + p.get_width() / 2., p.get_height()),
-                    ha='center', va='center', fontsize=10, color='black', xytext=(0, 5),
-                    textcoords='offset points')
+        for p in ax.patches:
+            ax.annotate(f"{int(p.get_height())}", (p.get_x() + p.get_width() / 2., p.get_height()),
+                        ha='center', va='center', fontsize=10, color='black', xytext=(0, 5),
+                        textcoords='offset points')
+        plt.title(f"Raw Sample Counts by {category.capitalize()}")
+        plt.ylabel("Raw Count")
+    else:
+        # For other categories, plot stacked raw counts by dataset
+        ax = sns.histplot(data=df, x=category, hue="dataset", multiple="stack", stat="count")
 
-    plt.title(f"Raw Sample Counts by {category.capitalize()}")
+        # Annotate each segment of the stacked bar
+        for container in ax.containers:
+            for p in container.patches:
+                height = p.get_height()
+                if height > 0: # Only annotate if there's a segment
+                    ax.annotate(f'{int(height)}', (p.get_x() + p.get_width() / 2., p.get_y() + height / 2.),
+                                ha='center', va='center', fontsize=8, color='white')
+
+        plt.title(f"Raw Sample Counts by {category.capitalize()} (Stacked by Dataset)")
+        plt.ylabel("Count")
+
     plt.xlabel(category.capitalize())
-    plt.ylabel("Raw Count")
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.savefig(output_dir / f"{category}_raw_counts.png")
