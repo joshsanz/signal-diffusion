@@ -135,9 +135,13 @@ BATCH_FIRST = True # True: (batch, seq, feature). False: (seq, batch, feature)
 WEIGHT_DECAY = 0.0001
 
 # CUDA for PyTorch
-use_cuda = use_pin_memory
-device = torch.device("cuda:0" if use_cuda else "cpu")
-torch.backends.cudnn.benchmark = True
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
+torch.backends.cudnn.benchmark = device.type == "cuda"
 
 # In[ ]:
 

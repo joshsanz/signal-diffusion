@@ -5,8 +5,19 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.patches as mpatches
 from IPython.display import Image, display
-import os
+from pathlib import Path
+
 import pandas as pd
+
+from signal_diffusion.data.math import MATH_LABELS
+from signal_diffusion.data.parkinsons import PARKINSONS_LABELS
+from signal_diffusion.data.seed import SEED_LABELS
+
+LABEL_REGISTRIES = {
+    "math": MATH_LABELS,
+    "parkinsons": PARKINSONS_LABELS,
+    "seed": SEED_LABELS,
+}
 
 
 def class_confusion(model, data_loader, class_map, device='cpu', fig=None, task=None):
@@ -233,29 +244,59 @@ def roc(model, data_loader, device='cpu', fig=None, label=None, task=None):
     return fig, prob_detection, prob_false_alarm
 
 
-def display_stft(datadir, dataset, sub_ind=0, spec_ind=0):
+def display_stft(settings, dataset, sub_ind=0, spec_ind=0):
+    """Render an STFT image along with decoded metadata for the selection."""
+
+    dataset = dataset.lower()
+    if dataset not in LABEL_REGISTRIES:
+        raise ValueError(f"Unsupported dataset '{dataset}'. Expected one of: {sorted(LABEL_REGISTRIES)}")
+
+    dataset_cfg = settings.dataset(dataset)
+    stft_root = dataset_cfg.output
+
     if sub_ind != 0:
         sub_ind -= 1
 
-    sub_ind_str = str(sub_ind)
-    spec_ind = str(spec_ind)
-    if dataset == 'math':
-        num_zeros = (2 - len(sub_ind_str)) * '0'
-        sub_ind_str = num_zeros + sub_ind_str
-        image_path = os.path.join(datadir, "eeg_math/stfts/sub" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
-        sub_info = pd.read_csv(os.path.join(datadir, "eeg_math/subject-info.csv"))
+    spec_ind_str = str(spec_ind).strip()
 
-    elif dataset == 'parkinsons':
+    metadata_path = stft_root / "metadata.csv"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+    metadata_df = pd.read_csv(metadata_path)
 
-        num_zeros = (3 - len(str(sub_ind_str))) * '0'
-        sub_ind_str = num_zeros + sub_ind_str
-        image_path = os.path.join(datadir, "parkinsons/stfts/sub-" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
-        sub_info = pd.read_csv(os.path.join(datadir, "parkinsons/participants.tsv"), sep="\t")
+    if dataset == "math":
+        subject_fragment = f"sub{sub_ind:02d}"
+    elif dataset == "parkinsons":
+        subject_fragment = f"sub-{sub_ind:03d}"
+    else:  # seed
+        subject_fragment = f"sub-{sub_ind:02d}"
 
-    elif dataset == 'seed':
-        image_path = os.path.join(datadir, "seed/stfts/sub-" + sub_ind_str + "/spectrogram-" + spec_ind + ".png")
-        sub_info = pd.read_csv(os.path.join(datadir, "seed/participants_info.csv"))
+    target_suffix = f"{subject_fragment}/spectrogram-{spec_ind_str}.png"
+    matches = metadata_df[metadata_df["file_name"].str.endswith(target_suffix)]
+    if matches.empty:
+        subject_mask = metadata_df["file_name"].str.contains(subject_fragment)
+        spectrogram_mask = metadata_df["file_name"].str.contains(f"spectrogram-{spec_ind_str}")
+        matches = metadata_df[subject_mask & spectrogram_mask]
+    if matches.empty:
+        raise FileNotFoundError(f"No metadata entry found for '{target_suffix}' in {metadata_path}")
 
-    sub_info = sub_info.iloc[sub_ind, :]
-    print(sub_info)
-    display(Image(filename=image_path))
+    metadata_row = matches.iloc[0].copy()
+    image_path = stft_root / metadata_row["file_name"]
+    if not image_path.exists():
+        raise FileNotFoundError(f"Spectrogram not found at {image_path}")
+
+    registry = LABEL_REGISTRIES[dataset]
+    decoded_labels: dict[str, object] = {}
+    for label_name, spec in registry.items():
+        if spec.task_type != "classification" or label_name not in metadata_row:
+            continue
+        try:
+            decoded_labels[label_name] = spec.decode(metadata_row[label_name])
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    for label_name, decoded_value in decoded_labels.items():
+        metadata_row[f"{label_name}_label"] = decoded_value
+
+    print(metadata_row)
+    display(Image(filename=str(image_path)))

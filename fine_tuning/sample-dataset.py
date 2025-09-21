@@ -13,14 +13,14 @@ from diffusers import StableDiffusionPipeline
 from diffusers import DDIMScheduler
 
 sys.path.append("../")
-from data_processing.general_dataset import general_class_labels
+from signal_diffusion.data.meta import GENDER_CLASS_LABELS
 
 
 def class_to_text(class_id, num_classes):
     age = random.choice([19, 20, 21, 22, 23, 24, 52, 53, 54, 56, 57, 58, 60, 61, 62, 64, 65,
                          66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
                          83, 84, 85, 86])
-    mf = general_class_labels[class_id % 2]
+    mf = GENDER_CLASS_LABELS[class_id % 2]
     if num_classes == 2:
         text = f"an EEG spectrogram of a {age} year old, {mf} subject"
     elif num_classes == 4:
@@ -75,7 +75,12 @@ def main(args):
     # Setup PyTorch:
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     if device == "cpu":
         print("Warning: running on CPU. This will be slow.")
 

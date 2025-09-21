@@ -16,6 +16,8 @@ class TrainingConfig:
     val_every_epochs: int = 1
     clip_grad_norm: float = 1.0
     task: Optional[str] = None
+    opt_restart_every: Optional[int] = None
+    swa_start: Optional[int] = None
 
 
 def linear_combination(x, y, epsilon):
@@ -46,16 +48,17 @@ def train_seq(args, model, ema_model, train_data, val_data,
     def do_permute(output):
         return output.permute(0, 2, 1)
     return _train(do_permute, args, model, ema_model, train_data, val_data,
-                  optimizer, scheduler, criterion, device, tblogger)
+                  optimizer, scheduler, None, criterion, device, tblogger)
 
 
 def train_class(args, model, ema_model, train_data, val_data,
                 optimizer, scheduler, criterion, device, tblogger, run_name,
-                save_model=True):
+                save_model=True, **kwargs):
+    swa_scheduler = kwargs.get("swa_scheduler")
     def no_permute(output):
         return output
     return _train(no_permute, args, model, ema_model, train_data, val_data,
-                  optimizer, scheduler, criterion, device, tblogger, run_name,
+                  optimizer, scheduler, swa_scheduler, criterion, device, tblogger, run_name,
                   save_model=save_model)
 
 
@@ -73,7 +76,9 @@ def evaluate_class(model, iterator, criterion, device, tblogger, step, task):
 
 # True training and evaluation functions
 def _train(output_permuter, args, model, ema_model, train_data, val_data, optimizer,
-           scheduler, criterion, device, tblogger, run_name, save_model=True):
+           scheduler, swa_scheduler=None, criterion=None, device=None, tblogger=None, run_name=None, save_model=True):
+    if criterion is None or device is None or tblogger is None or run_name is None:
+        raise ValueError("criterion, device, tblogger, and run_name must be provided")
     global_step = 0
     losses = []
     accuracies = []
@@ -123,14 +128,20 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
             tblogger.add_scalar("Accuracy/train", accuracy.item(), global_step=global_step)
             tblogger.add_scalar("Grads/norm", grad_norm.item(), global_step=global_step)
             # Update progress bar
-            progress.set_postfix({"loss": round(running_loss, 5), "acc": round(running_acc, 3)})
+            progress.set_postfix({
+                "loss": round(running_loss, 5),
+                "acc": round(running_acc, 3),
+                "val_acc": round(val_acc, 3),
+            })
             progress.update(1)
             global_step += 1
 
         # END OF EPOCH
         # Take scheduler step
-        if scheduler:
+        if scheduler and (args.swa_start is None or epoch < args.swa_start):
             scheduler.step()
+        elif swa_scheduler and args.swa_start is not None and epoch >= args.swa_start:
+            swa_scheduler.step()
         lrs.append(optimizer.param_groups[0]['lr'])
 
         # Validate
@@ -156,8 +167,11 @@ def _train(output_permuter, args, model, ema_model, train_data, val_data, optimi
             else:
                 ema_val_accuracies.append(0)
 
-        progress.set_postfix({"Epoch": epoch + 1, "TAcc": round(running_acc, 3),
-                              "VAcc": round(val_acc, 3)})
+        progress.set_postfix({
+            "Epoch": epoch + 1,
+            "TAcc": round(running_acc, 3),
+            "VAcc": round(val_acc, 3),
+        })
         tblogger.add_scalar("Scheduling/LR", optimizer.param_groups[0]['lr'],
                             global_step=global_step)
 

@@ -17,7 +17,12 @@ torch.backends.cudnn.allow_tf32 = True
 
 def main(args):
     os.makedirs(args.output, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     transform = v2.Compose([
         v2.Resize((args.image_size, args.image_size)),
         v2.ToImage(),

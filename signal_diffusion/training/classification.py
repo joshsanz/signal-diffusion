@@ -331,8 +331,14 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     )
     model = build_classifier(classifier_config)
 
-    device_str = training_cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device_str)
+    if training_cfg.device:
+        device = torch.device(training_cfg.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     model.to(device)
 
     train_dataset = build_dataset(

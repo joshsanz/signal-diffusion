@@ -43,7 +43,13 @@ pipe = StableDiffusionPipeline.from_pretrained(
     safety_checker=lambda images, **kwargs: (images, False),  # Disable safety checker - spectrograms won't be NSFW
     torch_dtype=torch.float16
 )
-pipe.to("cuda")
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+pipe.to(device)
 
 prompts = [args.prompt] * args.num_images
 images = [pipe(prompts[i], num_inference_steps=args.steps, guidance_scale=7.5,).images[0]
@@ -53,7 +59,7 @@ images = [pipe(prompts[i], num_inference_steps=args.steps, guidance_scale=7.5,).
 if args.comparison is not None:
     torch.manual_seed(args.seed)
     pipe = StableDiffusionPipeline.from_pretrained(os.path.expanduser(args.comparison), torch_dtype=torch.float16)
-    pipe.to("cuda")
+    pipe.to(device)
     comparisons = [pipe(prompts[i], num_inference_steps=args.steps, guidance_scale=7.5,).images[0]
                    for i in range(args.num_images)]
     images.extend(comparisons)

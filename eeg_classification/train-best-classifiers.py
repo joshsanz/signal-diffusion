@@ -246,7 +246,12 @@ def evaluate_models(args, cfg, device):
 
 def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     if device == "cpu":
         warnings.warn("Running on CPU. This will be slow.")
     cfg = OmegaConf.load(args.config)

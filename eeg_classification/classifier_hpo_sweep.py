@@ -165,9 +165,13 @@ OUTPUT_DIM = 2
 BATCH_FIRST = True  # True: (batch, seq, feature). False: (seq, batch, feature)
 
 # CUDA for PyTorch
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
-torch.backends.cudnn.benchmark = True
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
+torch.backends.cudnn.benchmark = device.type == "cuda"
 
 # Tune primary model first, thn weight averaging model; Done
 # Label smoothing don't need every .1 -> .3, .5, .9, 0; Done

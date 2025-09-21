@@ -69,7 +69,8 @@ def encode_sample(vae, sample):
     else:
         images = ((img_tensor + 1.) / 2).permute(0, 3, 2, 1).numpy()
         images = numpy_to_pil(images)
-    latents = vae.encode(img_tensor.to('cuda')).latent_dist.mode()
+    vae_device = next(vae.parameters()).device
+    latents = vae.encode(img_tensor.to(vae_device)).latent_dist.mode()
     return images, latents
 
 
