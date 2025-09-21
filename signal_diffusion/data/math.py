@@ -52,12 +52,27 @@ def _encode_condition(row: Mapping[str, object]) -> int:
 
 
 MATH_LABELS = LabelRegistry()
+
+
+def _decode_gender(value: object) -> str:
+    return GENDER_NAMES[int(value)]
+
+
+def _decode_math_activity(value: object) -> str:
+    return MATH_ACTIVITY_NAMES[int(value)]
+
+
+def _decode_math_condition(value: object) -> str:
+    return MATH_CONDITION_CLASSES[int(value)]
+
+
 MATH_LABELS.register(
     LabelSpec(
         name="gender",
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+        decoder=_decode_gender,
     )
 )
 MATH_LABELS.register(
@@ -66,6 +81,7 @@ MATH_LABELS.register(
         num_classes=2,
         encoder=_encode_math_activity,
         description="0: background, 1: doing math",
+        decoder=_decode_math_activity,
     )
 )
 MATH_LABELS.register(
@@ -74,6 +90,7 @@ MATH_LABELS.register(
         num_classes=4,
         encoder=_encode_condition,
         description="Combined math/gender classes",
+        decoder=_decode_math_condition,
     )
 )
 
@@ -97,7 +114,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         nsamps: int,
         ovr_perc: float = 0.0,
         fs: float = 250,
-        bin_spacing: str = "linear",
+        bin_spacing: str = "log",
         include_math_trials: bool = False,
     ) -> None:
         super().__init__(settings, dataset_name="math")

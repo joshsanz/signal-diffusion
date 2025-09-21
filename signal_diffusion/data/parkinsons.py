@@ -11,6 +11,7 @@ import math as pymath
 import mne
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
@@ -64,14 +65,32 @@ PARKINSONS_CONDITION_CLASSES = {
     3: "parkinsons_female",
 }
 
+# Backwards-compatible aliases for notebook imports.
+health_class_labels = HEALTH_LABELS
+
 
 PARKINSONS_LABELS = LabelRegistry()
+
+
+def _decode_gender(value: object) -> str:
+    return GENDER_LABELS[int(value)]
+
+
+def _decode_health(value: object) -> str:
+    return HEALTH_LABELS[int(value)]
+
+
+def _decode_condition(value: object) -> str:
+    return PARKINSONS_CONDITION_CLASSES[int(value)]
+
+
 PARKINSONS_LABELS.register(
     LabelSpec(
         name="gender",
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+        decoder=_decode_gender,
     )
 )
 PARKINSONS_LABELS.register(
@@ -80,6 +99,7 @@ PARKINSONS_LABELS.register(
         num_classes=2,
         encoder=_encode_health,
         description="0: healthy, 1: parkinsons",
+        decoder=_decode_health,
     )
 )
 PARKINSONS_LABELS.register(
@@ -88,6 +108,7 @@ PARKINSONS_LABELS.register(
         num_classes=4,
         encoder=_encode_condition,
         description="Combined health/gender label",
+        decoder=_decode_condition,
     )
 )
 PARKINSONS_LABELS.register(
@@ -120,7 +141,7 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         nsamps: int,
         ovr_perc: float = 0.0,
         fs: float = 250,
-        bin_spacing: str = "linear",
+        bin_spacing: str = "log",
     ) -> None:
         super().__init__(settings, dataset_name="parkinsons")
         self.nsamps = nsamps
@@ -268,7 +289,7 @@ class ParkinsonsDataset:
         settings: Settings,
         *,
         split: str = "train",
-        tasks: Sequence[str] = ("gender",),
+        tasks: Sequence[str] = ("health",),
         transform=None,
         target_format: str = "dict",
     ) -> None:
@@ -316,3 +337,102 @@ class ParkinsonsDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(PARKINSONS_LABELS.keys())
+
+
+def _load_metadata_frame(datadir: str | Path, split: str) -> pd.DataFrame:
+    base = Path(datadir)
+    metadata_path = base / f"{split}-metadata.csv"
+    if not metadata_path.exists():
+        metadata_path = base / "stfts" / f"{split}-metadata.csv"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing metadata file for split '{split}': {metadata_path}")
+    return pd.read_csv(metadata_path)
+
+
+class HealthSampler(torch.utils.data.Sampler[int]):
+    """Weighted sampler balancing the Parkinsons health label."""
+
+    def __init__(
+        self,
+        datadir: str | Path,
+        num_samples: int,
+        split: str = "train",
+        replacement: bool = True,
+        generator=None,
+    ) -> None:
+        self.metadata = _load_metadata_frame(datadir, split)
+        self.weights = torch.as_tensor(self._generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __iter__(self):
+        draws = self.num_samples if self.replacement else len(self.metadata)
+        rand_tensor = torch.multinomial(self.weights, draws, self.replacement, generator=self.generator)
+        yield from rand_tensor.tolist()
+
+    @staticmethod
+    def _generate_weights(metadata: pd.DataFrame) -> list[float]:
+        labels = metadata.apply(_encode_health, axis=1).tolist()
+        total = len(labels)
+        if total == 0:
+            return []
+        counts = [labels.count(i) for i in range(2)]
+        if sum(counts) == 0:
+            return [1 / total] * total
+        # Larger weight for minority class
+        norm = sum(counts)
+        label_weights = [count / norm for count in counts]
+        rankings = {idx: sum(weight < label_weights[idx] for weight in label_weights) for idx in range(2)}
+        ordered = sorted(label_weights, reverse=True)
+        remapped = [ordered[rankings[idx]] for idx in range(2)]
+        output = [remapped[label] for label in labels]
+        normaliser = sum(output)
+        return [weight / normaliser for weight in output]
+
+
+class ParkinsonsSampler(torch.utils.data.Sampler[int]):
+    """Weighted sampler balancing combined health/gender condition labels."""
+
+    def __init__(
+        self,
+        datadir: str | Path,
+        num_samples: int,
+        split: str = "train",
+        replacement: bool = True,
+        generator=None,
+    ) -> None:
+        self.metadata = _load_metadata_frame(datadir, split)
+        self.weights = torch.as_tensor(self._generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __iter__(self):
+        draws = self.num_samples if self.replacement else len(self.metadata)
+        rand_tensor = torch.multinomial(self.weights, draws, self.replacement, generator=self.generator)
+        yield from rand_tensor.tolist()
+
+    @staticmethod
+    def _generate_weights(metadata: pd.DataFrame) -> list[float]:
+        labels = metadata.apply(_encode_condition, axis=1).tolist()
+        total = len(labels)
+        if total == 0:
+            return []
+        counts = [labels.count(i) for i in range(4)]
+        if sum(counts) == 0:
+            return [1 / total] * total
+        norm = sum(counts)
+        label_weights = [count / norm for count in counts]
+        rankings = {idx: sum(weight < label_weights[idx] for weight in label_weights) for idx in range(4)}
+        ordered = sorted(label_weights, reverse=True)
+        remapped = [ordered[rankings[idx]] for idx in range(4)]
+        output = [remapped[label] for label in labels]
+        normaliser = sum(output)
+        return [weight / normaliser for weight in output]

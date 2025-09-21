@@ -59,13 +59,42 @@ def _encode_health(_: Mapping[str, object]) -> int:
     return 0
 
 
+GENDER_NAMES = {0: "male", 1: "female"}
+HEALTH_NAMES = {0: "healthy", 1: "ill"}
+SEIZURE_NAMES = {0: "non_seizure", 1: "seizure"}
+MIT_CONDITION_CLASSES = {
+    0: "non_seizure_male",
+    1: "non_seizure_female",
+    2: "seizure_male",
+    3: "seizure_female",
+}
+
 MIT_LABELS = LabelRegistry()
+
+
+def _decode_gender(value: object) -> str:
+    return GENDER_NAMES[int(value)]
+
+
+def _decode_health(value: object) -> str:
+    return HEALTH_NAMES[int(value)]
+
+
+def _decode_seizure(value: object) -> str:
+    return SEIZURE_NAMES[int(value)]
+
+
+def _decode_condition(value: object) -> str:
+    return MIT_CONDITION_CLASSES[int(value)]
+
+
 MIT_LABELS.register(
     LabelSpec(
         name="gender",
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+        decoder=_decode_gender,
     )
 )
 MIT_LABELS.register(
@@ -74,6 +103,7 @@ MIT_LABELS.register(
         num_classes=2,
         encoder=_encode_health,
         description="0: healthy, 1: ill",
+        decoder=_decode_health,
     )
 )
 MIT_LABELS.register(
@@ -82,6 +112,7 @@ MIT_LABELS.register(
         num_classes=2,
         encoder=_encode_seizure,
         description="0: non-seizure chunk, 1: seizure chunk",
+        decoder=_decode_seizure,
     )
 )
 MIT_LABELS.register(
@@ -90,6 +121,7 @@ MIT_LABELS.register(
         num_classes=4,
         encoder=_encode_condition,
         description="Combined gender/seizure class",
+        decoder=_decode_condition,
     )
 )
 
@@ -106,7 +138,7 @@ class MITPreprocessor(BaseSpectrogramPreprocessor):
         nsamps: int,
         ovr_perc: float = 0.0,
         fs: float = 256,
-        bin_spacing: str = "linear",
+        bin_spacing: str = "log",
     ) -> None:
         super().__init__(settings, dataset_name="mit")
         self.nsamps = nsamps

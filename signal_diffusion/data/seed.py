@@ -10,6 +10,7 @@ import math as pymath
 import mne
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 from scipy.signal import decimate
 from torchvision import transforms
@@ -32,6 +33,7 @@ EMOTION_MAP = {
 }
 
 EMOTION_NAMES = {v: k for k, v in EMOTION_MAP.items()}
+GENDER_NAMES = {0: "male", 1: "female"}
 SEED_CONDITION_CLASSES = {
     0: "disgust_male",
     1: "disgust_female",
@@ -62,6 +64,8 @@ END_SECOND = {
     1: [267, 488, 614, 773, 967, 1059, 1331, 1622, 1777, 1908, 2153, 2302, 2428, 2709, 2817],
     2: [321, 418, 643, 764, 877, 1147, 1284, 1418, 1679, 1996, 2275, 2425, 2664, 2857, 3066],
 }
+
+emotion_class_labels = {idx: EMOTION_NAMES[idx] for idx in sorted(EMOTION_NAMES)}
 
 
 def _encode_gender(row: Mapping[str, object]) -> int:
@@ -100,12 +104,31 @@ def _encode_health(_: Mapping[str, object]) -> int:
 
 
 SEED_LABELS = LabelRegistry()
+
+
+def _decode_gender(value: object) -> str:
+    return GENDER_NAMES[int(value)]
+
+
+def _decode_health(value: object) -> str:
+    return "healthy" if int(value) == 0 else "ill"
+
+
+def _decode_emotion(value: object) -> str:
+    return EMOTION_NAMES[int(value)]
+
+
+def _decode_condition(value: object) -> str:
+    return SEED_CONDITION_CLASSES[int(value)]
+
+
 SEED_LABELS.register(
     LabelSpec(
         name="gender",
         num_classes=2,
         encoder=_encode_gender,
         description="0: male, 1: female",
+        decoder=_decode_gender,
     )
 )
 SEED_LABELS.register(
@@ -114,6 +137,7 @@ SEED_LABELS.register(
         num_classes=2,
         encoder=_encode_health,
         description="0: healthy, 1: ill",
+        decoder=_decode_health,
     )
 )
 SEED_LABELS.register(
@@ -122,6 +146,7 @@ SEED_LABELS.register(
         num_classes=5,
         encoder=_encode_emotion,
         description="Emotion class index",
+        decoder=_decode_emotion,
     )
 )
 SEED_LABELS.register(
@@ -130,6 +155,7 @@ SEED_LABELS.register(
         num_classes=10,
         encoder=_encode_condition,
         description="Combined emotion/gender class",
+        decoder=_decode_condition,
     )
 )
 SEED_LABELS.register(
@@ -162,7 +188,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         nsamps: int,
         ovr_perc: float = 0.0,
         fs: float = 250,
-        bin_spacing: str = "linear",
+        bin_spacing: str = "log",
     ) -> None:
         super().__init__(settings, dataset_name="seed")
         self.nsamps = nsamps
@@ -373,3 +399,62 @@ class SEEDDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(SEED_LABELS.keys())
+
+
+def _load_metadata_frame(datadir: str | Path, split: str) -> pd.DataFrame:
+    base = Path(datadir)
+    metadata_path = base / f"{split}-metadata.csv"
+    if not metadata_path.exists():
+        metadata_path = base / "stfts" / f"{split}-metadata.csv"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing metadata file for split '{split}': {metadata_path}")
+    return pd.read_csv(metadata_path)
+
+
+class EmotionSampler(torch.utils.data.Sampler[int]):
+    """Weighted sampler balancing SEED gender distribution.
+
+    Retains the historical class name for notebook compatibility while the
+    weighting strategy now targets the gender label, matching the broader
+    data layer convention.
+    """
+
+    def __init__(
+        self,
+        datadir: str | Path,
+        num_samples: int,
+        split: str = "train",
+        replacement: bool = True,
+        generator=None,
+    ) -> None:
+        self.metadata = _load_metadata_frame(datadir, split)
+        self.weights = torch.as_tensor(self._generate_weights(self.metadata), dtype=torch.double)
+        self.num_samples = num_samples
+        self.replacement = replacement
+        self.generator = generator
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __iter__(self):
+        draws = self.num_samples if self.replacement else len(self.metadata)
+        rand_tensor = torch.multinomial(self.weights, draws, self.replacement, generator=self.generator)
+        yield from rand_tensor.tolist()
+
+    @staticmethod
+    def _generate_weights(metadata: pd.DataFrame) -> list[float]:
+        labels = metadata.apply(_encode_gender, axis=1).tolist()
+        total = len(labels)
+        if total == 0:
+            return []
+        counts = [labels.count(i) for i in range(2)]
+        if sum(counts) == 0:
+            return [1 / total] * total
+        norm = sum(counts)
+        label_weights = [count / norm for count in counts]
+        rankings = {idx: sum(weight < label_weights[idx] for weight in label_weights) for idx in range(2)}
+        ordered = sorted(label_weights, reverse=True)
+        remapped = [ordered[rankings[idx]] for idx in range(2)]
+        output = [remapped[label] for label in labels]
+        normaliser = sum(output)
+        return [weight / normaliser for weight in output]
