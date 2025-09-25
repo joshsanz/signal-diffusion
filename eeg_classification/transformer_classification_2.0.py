@@ -149,7 +149,6 @@ opt_options = [torch.optim.AdamW]
 decay_options = [0.0001, 0.001]
 
 for opt, decay in itertools.product(opt_options, decay_options):
-    restart = 0
 
     # Create model instance
     model = TransformerClassifier(INPUT_DIM, OUTPUT_DIM, HID_DIM, N_LAYERS, N_HEADS, FF_DIM, DROPOUT, BATCH_FIRST)
@@ -158,11 +157,10 @@ for opt, decay in itertools.product(opt_options, decay_options):
     optimizer = opt(model.parameters(), lr=1e-3, weight_decay=decay)
 
     # Create training configuration
-    ARGS = TrainingConfig(epochs=300, val_every_epochs=10, opt_restart_every=restart)
+    ARGS = TrainingConfig(epochs=300, val_every_epochs=10)
 
     # Log statistics
-    postfix = f"_restart{restart}" if restart else ""
-    comment = f"txfmclass_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}"
+    comment = f"txfmclass_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}"
     tbsw = SummaryWriter(log_dir="./tensorboard_logs/" + comment + "-" + datetime.now().isoformat(sep='_'), 
                          comment=comment)
     print("#" * 80)

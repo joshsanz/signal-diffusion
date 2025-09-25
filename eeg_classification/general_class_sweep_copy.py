@@ -197,7 +197,7 @@ for epoch in epochs:
                                 criterion = LabelSmoothingCrossEntropy(epsilon=EPSILON)
 
                                 # Optimizer
-                                opt, decay, restart, max_eta, decouple = (optimizer, L2_REG_DECAY, 0, None, True)
+                                opt = optimizer
 
                                 # Create model instance
                                 model = CNNClassifierLight(1, OUTPUT_DIM, dropout=DROPOUT,pooling="max")
@@ -225,7 +225,7 @@ for epoch in epochs:
                                     swa_scheduler = None
 
                                 # Create training configuration
-                                ARGS = TrainingConfig(epochs=EPOCHS, val_every_epochs=1, opt_restart_every=restart, swa_start=SWA_START)
+                                ARGS = TrainingConfig(epochs=EPOCHS, val_every_epochs=1, swa_start=SWA_START)
 
                                 # Log statistics
                                 postfix = ""
