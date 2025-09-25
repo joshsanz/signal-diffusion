@@ -13,9 +13,9 @@ fi
 if command -v uv >/dev/null 2>&1; then
   TRAINER=(uv run python -m signal_diffusion.training.classification)
 elif command -v python3 >/dev/null 2>&1; then
-  TRAINER=(python3 -m signal_diffusion.training.classification)
+  TRAINER=(python -m signal_diffusion.training.classification)
 else
-  echo "Unable to locate 'uv' or 'python3' to launch training" >&2
+  echo "Unable to locate 'uv' or 'python' to launch training" >&2
   exit 1
 fi
 

@@ -241,7 +241,7 @@ class TrainingSummary:
 def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
     """Load a TOML configuration file describing a classification experiment."""
 
-    config_path = Path(path).resolve()
+    config_path = Path(path).expanduser().resolve()
     with config_path.open("rb") as handle:
         data = tomllib.load(handle)
 
@@ -380,7 +380,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     optimizer = _build_optimizer(model, training_cfg)
-    scaler = torch.cuda.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
+    scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
     criteria: dict[str, nn.Module] = {}
     for name in tasks:
         spec = task_lookup[name]
@@ -585,7 +585,7 @@ def _run_epoch(
     task_specs: Mapping[str, TaskSpec],
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
-    scaler: torch.cuda.amp.GradScaler | None,
+    scaler: torch.amp.GradScaler | None,
     clip_grad: float | None,
     log_every: int,
     train: bool,
@@ -631,7 +631,7 @@ def _run_epoch(
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(train):
-            with torch.cuda.amp.autocast(enabled=scaler is not None and scaler.is_enabled()):
+            with torch.amp.autocast(device_type=device.type, enabled=scaler is not None and scaler.is_enabled()):
                 outputs = model(images)
                 loss, per_task_batch = _compute_loss(
                     outputs,
@@ -840,9 +840,10 @@ def _resolve_path(value: Any, base_dir: Path) -> Path:
         path = value
     else:
         path = Path(str(value))
+    path = path.expanduser()
     if not path.is_absolute():
-        path = (base_dir / path).resolve()
-    return path
+        path = base_dir / path
+    return path.resolve()
 
 
 def _require(section: Mapping[str, Any], key: str) -> Any:

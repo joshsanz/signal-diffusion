@@ -5,6 +5,7 @@
 [data]
 root = "~/data/signal-diffusion"
 output_root = "~/data/signal-diffusion/processed"
+max_sampling_weight = 5.0
 
 [datasets.math]
 root = "eeg_math"

@@ -36,6 +36,7 @@ class Settings:
     config_path: Path
     data_root: Path
     output_root: Path
+    max_sampling_weight: float | None
     datasets: dict[str, DatasetSettings] = field(default_factory=dict)
 
     def dataset(self, name: str) -> DatasetSettings:
@@ -56,6 +57,7 @@ class Settings:
         data_section = mapping.get("data", {})
         data_root = _expand_root(data_section.get("root", "."), base=config_dir)
         output_root = _expand_root(data_section.get("output_root", data_root), base=config_dir)
+        max_sampling_weight = data_section.get("max_sampling_weight", None)
 
         datasets_section = mapping.get("datasets", {})
         datasets: dict[str, DatasetSettings] = {}
@@ -84,6 +86,7 @@ class Settings:
             config_path=config_path,
             data_root=data_root,
             output_root=output_root,
+            max_sampling_weight=max_sampling_weight,
             datasets=datasets,
         )
 
@@ -153,4 +156,3 @@ def _expand_dataset_path(
         else:
             path = (default_base / path).resolve()
     return path
-

@@ -170,9 +170,42 @@ class MetaSampler(WeightedRandomSampler):
         super().__init__(weights, num_samples, replacement=replacement, generator=generator)
 
     def _generate_weights(self) -> torch.Tensor:
+        """
+        Assigns weights to samples to balance sampling across datasets and genders.
+
+        The weighting scheme is designed to counteract imbalances where one dataset or
+        one gender is over-represented. It does this by giving higher weights to
+        samples from smaller datasets and under-represented gender classes.
+
+        The process is as follows:
+        1.  Calculate Proportions:
+            -   Gender proportions (`gend_weights`): The ratio of female vs. male
+                samples across the entire meta-dataset.
+            -   Dataset proportions (`dataset_weights`): The ratio of samples from
+                each dataset relative to the total number of samples.
+
+        2.  Combine and Score:
+            -   For each dataset, a combined score is created by summing its own
+                proportion with the gender proportions. This score reflects the
+                dataset's "dominance" in terms of both size and gender balance.
+
+        3.  Rank and Invert Weights:
+            -   Datasets are ranked based on this dominance score.
+            -   The weights are then inverted based on this ranking. The most
+                dominant dataset (highest rank) receives the initial weights
+                calculated for the least dominant one, and so on. This inversion
+                is the key to re-balancing.
+
+        4.  Assign and Normalize:
+            -   Each sample is assigned a final weight based on its dataset and gender
+                according to the inverted weights.
+            -   All weights are normalized to sum to 1, creating a probability
+                distribution for the sampler.
+        """
         if not self.dataset.datasets:
             return torch.empty(0)
 
+        # If gender is not a task, use uniform weighting.
         if "gender" not in self.dataset.label_registry:
             total = sum(len(ds) for ds in self.dataset.datasets)
             if total == 0:
@@ -181,6 +214,7 @@ class MetaSampler(WeightedRandomSampler):
 
         gender_spec = self.dataset.label_registry["gender"]
 
+        # Collect metadata and encode gender for each dataset.
         metadatas: list[pd.DataFrame] = []
         encoded_genders: list[np.ndarray] = []
         for ds in self.dataset.datasets:
@@ -195,8 +229,8 @@ class MetaSampler(WeightedRandomSampler):
             encoded_series = metadata.apply(lambda row: gender_spec.encode(row), axis=1).astype(int)
             encoded_genders.append(encoded_series.to_numpy())
 
+        # Calculate total sample counts and gender counts across all datasets.
         totals, female, male = [], 0, 0
-
         for encoded in encoded_genders:
             totals.append(len(encoded))
             female += int((encoded == 1).sum())
@@ -206,9 +240,12 @@ class MetaSampler(WeightedRandomSampler):
         if total_samps == 0:
             return torch.empty(0)
 
+        # Proportions of each gender across the entire meta-dataset.
         gend_weights = [female / total_samps, male / total_samps]
+        # Proportions of each dataset relative to the total size.
         dataset_weights = [total / total_samps for total in totals]
 
+        # Combine dataset and gender weights to create a dominance score.
         summed_weights = []
         weights = []
         for dw in dataset_weights:
@@ -218,6 +255,7 @@ class MetaSampler(WeightedRandomSampler):
             summed_weights.append(sum(data_gender_w))
             weights.append(data_gender_w)
 
+        # Rank datasets based on their dominance score.
         rankings = {}
         for label in range(len(metadatas)):
             label_weight = summed_weights[label]
@@ -227,9 +265,23 @@ class MetaSampler(WeightedRandomSampler):
                     rank += 1
             rankings[label] = rank
 
+        # Invert the weights based on rank to favor under-represented datasets.
+        # The highest-ranked (most dominant) dataset gets the lowest-ranked weights.
         new_label_weights = [weights[(len(metadatas) - 1) - rankings[i]] for i in range(len(metadatas))]
+
+        # If a maximum weight is specified, cap the weights after inversion.
+        max_weight = self.dataset.settings.max_sampling_weight
+        if max_weight is not None:
+            logger.debug(f"Capping sample weights to a maximum of {max_weight}")
+            max_weight = float(max_weight)
+            capped_weights = []
+            for weight_pair in new_label_weights:
+                capped_weights.append([min(w, max_weight) for w in weight_pair])
+            new_label_weights = capped_weights
+
         output_weights = []
 
+        # Assign the new inverted weights to each sample based on its gender.
         for i, encoded in enumerate(encoded_genders):
             # Default to 0 weight if new_label_weights is not long enough
             female_weight = new_label_weights[i][0] if i < len(new_label_weights) and len(new_label_weights[i]) > 0 else 0
@@ -241,6 +293,7 @@ class MetaSampler(WeightedRandomSampler):
         if not output_weights:
             return torch.empty(0)
 
+        # Normalize the final weights to create a probability distribution.
         norm_fact = sum(output_weights)
         if norm_fact == 0:
             return torch.ones(len(output_weights)) / len(output_weights)
