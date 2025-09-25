@@ -6,7 +6,9 @@ from pathlib import Path
 
 from signal_diffusion.config import load_settings
 from signal_diffusion.data.meta import MetaPreprocessor
-from signal_diffusion.log_setup import logger
+from signal_diffusion.log_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def main():

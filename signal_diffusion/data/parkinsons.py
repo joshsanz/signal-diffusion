@@ -23,7 +23,9 @@ from signal_diffusion.data.channel_maps import parkinsons_channels
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
-from signal_diffusion.log_setup import logger
+from signal_diffusion.log_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 mne.set_log_level("WARNING")

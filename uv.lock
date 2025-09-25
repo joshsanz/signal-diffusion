@@ -1767,12 +1767,11 @@ wheels = [
 
 [[package]]
 name = "mne"
-version = "1.10.1"
+version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "decorator" },
     { name = "jinja2" },
-    { name = "lazy-loader" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "packaging" },
@@ -1780,9 +1779,9 @@ dependencies = [
     { name = "scipy" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/41/be419cfb7894b2f4c984164773a4f47c5ae54248ab605bddd637db509630/mne-1.10.1.tar.gz", hash = "sha256:a93e3d772d551e43ec5ddcd3495fffe0f98e3e384045bcd96497636e86a32a0b", size = 7123187, upload-time = "2025-08-11T14:17:41.53Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/b0/e37dec4d25a418d66a3a24ce17d582fada0a17321a7800a7893c8f3767cc/mne-1.5.1.tar.gz", hash = "sha256:557569058e38698e57749048ec1b8678c99e6b7583d3ae31c356463ff83ca734", size = 7800068, upload-time = "2023-09-06T17:48:51.395Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/3e/a0cf12b0ff97693431ccf54b865260df7e40bbd9dee8759129ea8beb8013/mne-1.10.1-py3-none-any.whl", hash = "sha256:8dbb9b0f08dd014c04478e78faab771258a78409a9fefa06a4bf5e1a350ff33d", size = 7416534, upload-time = "2025-08-11T14:17:38.664Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/72/7d8ce176e042580a6261c7af0af6d4bbd3b495d304d8c73a229365f52ede/mne-1.5.1-py3-none-any.whl", hash = "sha256:cc40888cc7d55f220fd51c7ba90de5f742dd00c150ac70d6a00787dfca226b53", size = 7672350, upload-time = "2023-09-06T17:48:48.616Z" },
 ]
 
 [[package]]
@@ -3275,7 +3274,7 @@ requires-dist = [
     { name = "librosa" },
     { name = "matplotlib" },
     { name = "matplotlib", marker = "extra == 'fine-tuning'", specifier = ">=3.7" },
-    { name = "mne" },
+    { name = "mne", specifier = "<1.6" },
     { name = "notebook", specifier = ">=7.4.5" },
     { name = "numpy" },
     { name = "pandas" },

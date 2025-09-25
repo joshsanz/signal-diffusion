@@ -18,7 +18,7 @@ dependencies = [
     "torchvision",
     "datasets[vision]",
     "librosa",
-    "mne",
+    "mne<1.6",
     "pillow",
     "tqdm",
     "typer",

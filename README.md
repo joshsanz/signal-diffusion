@@ -85,3 +85,8 @@ Metrics tooling is moving into `signal_diffusion/metrics`. Install the metrics g
 uv sync --group metrics
 uv run python metrics/calculate-metrics.py --help
 ```
+
+## Data Peculiarities
+
+File `7_1_20180411.cnt` in the SEED V dataset has a broken header which causes errors in versions of `mne` newer than ~1.6. Something about the number of samples or size of data block is corrupted, breaking data size (bytes) inference or number of samples inference depending on the version.
+

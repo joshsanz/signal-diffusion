@@ -22,7 +22,9 @@ from signal_diffusion.data.channel_maps import seed_channels
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
-from signal_diffusion.log_setup import logger
+from signal_diffusion.log_setup import get_logger
+
+logger = get_logger(__name__)
 
 mne.set_log_level("WARNING")
 
@@ -237,7 +239,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         info = self._subject_metadata(subject_id)
         for session_index, cnt_path in self.session_files.get(subject_id, []):
             logger.debug(f"Loading data from {cnt_path}")
-            raw = mne.io.read_raw_cnt(cnt_path, preload=True, verbose="ERROR")
+            raw = mne.io.read_raw_cnt(cnt_path, preload=True, verbose="WARNING")
             data = raw.get_data()[self.channel_indices, :]
             if self.decimation > 1:
                 data = decimate(data, self.decimation, axis=1, zero_phase=True)

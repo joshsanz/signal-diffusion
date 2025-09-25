@@ -12,7 +12,9 @@ from torch.utils.data import ConcatDataset, WeightedRandomSampler
 
 from signal_diffusion.config import Settings
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
-from signal_diffusion.log_setup import logger
+from signal_diffusion.log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Meta-level label specifications
