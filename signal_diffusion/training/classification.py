@@ -202,6 +202,7 @@ class TrainingConfig:
     checkpoint_every: int = 0
     task_weights: dict[str, float] = field(default_factory=dict)
     use_amp: bool = False
+    metrics_summary_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -236,6 +237,9 @@ class TrainingSummary:
     run_dir: Path
     best_checkpoint: Path
     history: list[EpochMetrics]
+    best_metric: float | None
+    best_epoch: int | None
+    best_global_step: int | None
 
 
 def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
@@ -299,6 +303,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         checkpoint_every=int(training_section.get("checkpoint_every", 0)),
         task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
         use_amp=bool(training_section.get("use_amp", False)),
+        metrics_summary_path=_optional_path(training_section.get("metrics_summary_path"), base_dir),
     )
 
     _validate_eval_config(training)
@@ -412,6 +417,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     history: list[EpochMetrics] = []
     best_metric = float("-inf")
     best_checkpoint = checkpoints_dir / "best.pt"
+    best_epoch: int | None = None
+    best_metric_step: int | None = None
     global_step = 0
 
     for epoch in range(1, training_cfg.epochs + 1):
@@ -458,6 +465,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
                 metrics_logger.log("val", step_for_log, eval_output, epoch=epoch)
             if mean_eval_acc > best_metric:
                 best_metric = mean_eval_acc
+                best_epoch = epoch
+                best_metric_step = int(step_info) if step_info is not None else global_step
                 torch.save(model.state_dict(), best_checkpoint)
 
         if eval_outputs:
@@ -539,8 +548,18 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     if metrics_logger is not None:
         metrics_logger.close()
 
-    summary = TrainingSummary(run_dir=run_dir, best_checkpoint=best_checkpoint, history=history)
+    resolved_best_metric = None if best_metric == float("-inf") else float(best_metric)
+    summary = TrainingSummary(
+        run_dir=run_dir,
+        best_checkpoint=best_checkpoint,
+        history=history,
+        best_metric=resolved_best_metric,
+        best_epoch=best_epoch,
+        best_global_step=best_metric_step,
+    )
     _write_summary(summary, run_dir / "summary.json")
+    if training_cfg.metrics_summary_path is not None:
+        _export_metrics_summary(summary, training_cfg.metrics_summary_path)
     return summary
 
 
@@ -802,7 +821,7 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
     dataset_dict["tasks"] = list(dataset_dict.get("tasks", ()))
     model_dict = asdict(config.model)
     training_dict = asdict(config.training)
-    for key in ("output_dir", "log_dir"):
+    for key in ("output_dir", "log_dir", "metrics_summary_path"):
         if training_dict.get(key) is not None:
             training_dict[key] = str(training_dict[key])
     if training_dict.get("wandb_tags") is not None:
@@ -875,21 +894,101 @@ def _write_summary(summary: TrainingSummary, path: Path) -> None:
         "run_dir": str(summary.run_dir),
         "best_checkpoint": str(summary.best_checkpoint),
         "history_file": str(summary.run_dir / "history.json"),
+        "best_metric": summary.best_metric,
+        "best_epoch": summary.best_epoch,
+        "best_global_step": summary.best_global_step,
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
+
+
+def _export_metrics_summary(summary: TrainingSummary, path: Path) -> None:
+    payload = _build_metrics_summary(summary)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
+    history = summary.history
+    per_task_best_loss: dict[str, dict[str, float | int]] = {}
+    per_task_best_accuracy: dict[str, dict[str, float | int]] = {}
+
+    for epoch_metrics in history:
+        for task_name, loss in epoch_metrics.val_losses.items():
+            if loss is None:
+                continue
+            best_entry = per_task_best_loss.get(task_name)
+            if best_entry is None or loss < best_entry["loss"]:
+                per_task_best_loss[task_name] = {"loss": float(loss), "epoch": epoch_metrics.epoch}
+        for task_name, accuracy in epoch_metrics.val_accuracy.items():
+            if accuracy is None:
+                continue
+            best_entry = per_task_best_accuracy.get(task_name)
+            if best_entry is None or accuracy > best_entry["accuracy"]:
+                per_task_best_accuracy[task_name] = {
+                    "accuracy": float(accuracy),
+                    "epoch": epoch_metrics.epoch,
+                }
+
+    payload: dict[str, Any] = {
+        "run_dir": str(summary.run_dir),
+        "best_checkpoint": str(summary.best_checkpoint),
+        "history_file": str(summary.run_dir / "history.json"),
+        "epochs_completed": len(history),
+        "best_metric": summary.best_metric,
+        "best_epoch": summary.best_epoch,
+        "best_global_step": summary.best_global_step,
+        "per_task_best": {
+            "accuracy": per_task_best_accuracy,
+            "loss": per_task_best_loss,
+        },
+    }
+
+    if history:
+        final = history[-1]
+        payload["final_epoch"] = {
+            "epoch": final.epoch,
+            "train_loss": float(final.train_loss),
+            "val_loss": float(final.val_loss) if final.val_loss is not None else None,
+            "train_losses": {name: float(value) for name, value in final.train_losses.items()},
+            "val_losses": {
+                name: (float(value) if value is not None else None)
+                for name, value in final.val_losses.items()
+            },
+            "train_accuracy": {
+                name: (float(value) if value is not None else None)
+                for name, value in final.train_accuracy.items()
+            },
+            "val_accuracy": {
+                name: (float(value) if value is not None else None)
+                for name, value in final.val_accuracy.items()
+            },
+            "lr": float(final.lr),
+        }
+    return payload
 
 
 app = typer.Typer(help="Classification training utilities for Signal Diffusion")
 
 
 @app.command()
-def train(config: Path, output_dir: Path | None = typer.Option(None, help="Override output directory")) -> None:
+def train(
+    config: Path,
+    output_dir: Path | None = typer.Option(None, help="Override output directory"),
+    metrics_summary_path: Path | None = typer.Option(
+        None,
+        "--metrics-summary-path",
+        help="Optional path to write a summary of key metrics as JSON.",
+    ),
+) -> None:
     """Train a classifier experiment from a TOML configuration."""
 
     experiment = load_experiment_config(config)
     if output_dir is not None:
         experiment.training.output_dir = output_dir.resolve()
+    if metrics_summary_path is not None:
+        experiment.training.metrics_summary_path = metrics_summary_path.resolve()
     summary = train_from_config(experiment)
     print(f"Training complete. Best checkpoint saved at {summary.best_checkpoint}")
 
