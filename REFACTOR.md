@@ -68,6 +68,8 @@ After each step, gather changes into a git commit to separate them and enable ea
 - [x] Metrics logging with per-task losses (TensorBoard & W&B)
 - [x] Enabled continuous age targets with healthy labels across classifiers and added a gender/health/age smoke config + script
 - [x] Removed DoG optimizer artifacts from training and diffusion utilities
+- [x] Added structured metrics summary export plus configurable best-checkpoint retention for classifier runs
+- [x] Removed legacy optimizer restart tuning from historical EEG notebooks and helpers
 ## Next Steps
 - Begin refactoring diffusion utilities into the shared training module
 - Run the new smoke script once dataset paths are configured to validate regression logging
