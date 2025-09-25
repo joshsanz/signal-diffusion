@@ -24,6 +24,7 @@ log_dir = "runs/tensorboard"
 # wandb_project = "your-project-name"
 # wandb_run_name = "baseline"
 epochs = 25
+max_steps = -1
 optimizer = "adamw"
 learning_rate = 3e-4
 weight_decay = 1e-4
@@ -32,4 +33,3 @@ clip_grad_norm = 1.0
 [training.task_weights]
 gender = 1.0
 health = 1.0
-

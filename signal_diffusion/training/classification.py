@@ -183,6 +183,7 @@ class TrainingConfig:
     """Optimisation and runtime configuration."""
 
     epochs: int = 25
+    max_steps: int = -1
     optimizer: str = "adamw"
     learning_rate: float = 3e-4
     weight_decay: float = 1e-4
@@ -279,6 +280,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
     training_section = data.get("training", {})
     training = TrainingConfig(
         epochs=int(training_section.get("epochs", 25)),
+        max_steps=int(training_section.get("max_steps", -1)),
         optimizer=str(training_section.get("optimizer", "adamw")).lower(),
         learning_rate=float(training_section.get("learning_rate", 3e-4)),
         weight_decay=float(training_section.get("weight_decay", 1e-4)),
@@ -413,6 +415,9 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     global_step = 0
 
     for epoch in range(1, training_cfg.epochs + 1):
+        if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
+            break
+
         train_result, global_step = _run_epoch(
             model,
             data_loader=train_loader,
@@ -427,7 +432,9 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             train=True,
             global_step=global_step,
             eval_manager=eval_manager,
+            max_steps=training_cfg.max_steps,
         )
+
 
         if metrics_logger is not None:
             metrics_logger.log("train", global_step, train_result, epoch=epoch)
@@ -584,12 +591,13 @@ def _run_epoch(
     train: bool,
     global_step: int | None = None,
     eval_manager: EvaluationManager | None = None,
+    max_steps: int = -1,
 ) -> tuple[dict[str, Any], int | None]:
+    if global_step is None:
+        global_step = 0
     if train:
         if optimizer is None:
             raise ValueError("Optimizer must be provided when train=True")
-        if global_step is None:
-            global_step = 0
         model.train()
     else:
         model.eval()
@@ -605,6 +613,8 @@ def _run_epoch(
     }
 
     for batch_idx, batch in enumerate(data_loader, start=1):
+        if max_steps > 0 and global_step >= max_steps:
+            break
         images = batch["image"].to(device)
         targets = {}
         for name in task_weights:

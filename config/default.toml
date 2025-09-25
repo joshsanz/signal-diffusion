@@ -3,8 +3,8 @@
 # to point at another TOML file or by providing custom paths when loading settings.
 
 [data]
-root = "/data/shared/signal-diffusion"
-output_root = "/data/shared/signal-diffusion/processed"
+root = "/data/data/signal-diffusion"
+output_root = "/data/data/signal-diffusion/processed"
 
 [datasets.math]
 root = "eeg_math"
