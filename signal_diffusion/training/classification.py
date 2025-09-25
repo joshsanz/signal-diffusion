@@ -203,6 +203,7 @@ class TrainingConfig:
     task_weights: dict[str, float] = field(default_factory=dict)
     use_amp: bool = False
     metrics_summary_path: Path | None = None
+    max_best_checkpoints: int = 1
 
 
 @dataclass(slots=True)
@@ -240,6 +241,17 @@ class TrainingSummary:
     best_metric: float | None
     best_epoch: int | None
     best_global_step: int | None
+    top_checkpoints: list["CheckpointRecord"]
+
+
+@dataclass(slots=True)
+class CheckpointRecord:
+    """Metadata describing a saved checkpoint."""
+
+    path: Path
+    metric: float
+    epoch: int
+    global_step: int
 
 
 def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
@@ -304,9 +316,12 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
         use_amp=bool(training_section.get("use_amp", False)),
         metrics_summary_path=_optional_path(training_section.get("metrics_summary_path"), base_dir),
+        max_best_checkpoints=int(training_section.get("max_best_checkpoints", 1)),
     )
 
     _validate_eval_config(training)
+    if training.max_best_checkpoints < 1:
+        raise ValueError("[training] max_best_checkpoints must be >= 1")
 
     return ClassificationExperimentConfig(
         path=config_path,
@@ -419,6 +434,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     best_checkpoint = checkpoints_dir / "best.pt"
     best_epoch: int | None = None
     best_metric_step: int | None = None
+    best_records: list[CheckpointRecord] = []
+    max_best_checkpoints = training_cfg.max_best_checkpoints
     global_step = 0
 
     for epoch in range(1, training_cfg.epochs + 1):
@@ -456,18 +473,58 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
                 mean_eval_acc = -eval_output["loss"]
                 mean_eval_display = "n/a"
             step_info = eval_output.get("_global_step")
+            step_for_log = int(step_info) if step_info is not None else global_step
             print(
                 f"[eval] step={step_info} val_loss={eval_output['loss']:.4f} "
                 f"val_acc_mean={mean_eval_display}"
             )
             if metrics_logger is not None:
-                step_for_log = int(step_info) if step_info is not None else global_step
                 metrics_logger.log("val", step_for_log, eval_output, epoch=epoch)
+
+            state_dict: dict[str, torch.Tensor] | None = None
+            if max_best_checkpoints > 0:
+                record = CheckpointRecord(
+                    path=checkpoints_dir / f"best-epoch{epoch:03d}-step{step_for_log:08d}.pt",
+                    metric=float(mean_eval_acc),
+                    epoch=epoch,
+                    global_step=step_for_log,
+                )
+                insert_index: int | None = None
+                for idx, existing in enumerate(best_records):
+                    if record.metric > existing.metric:
+                        insert_index = idx
+                        break
+                if insert_index is None:
+                    best_records.append(record)
+                else:
+                    best_records.insert(insert_index, record)
+
+                if len(best_records) > max_best_checkpoints:
+                    trimmed = best_records[max_best_checkpoints:]
+                    del best_records[max_best_checkpoints:]
+                else:
+                    trimmed = []
+
+                if record in best_records:
+                    if not record.path.exists():
+                        state_dict = model.state_dict()
+                        torch.save(state_dict, record.path)
+                else:
+                    record = None
+
+                for trimmed_record in trimmed:
+                    if trimmed_record.path.exists():
+                        trimmed_record.path.unlink(missing_ok=True)
+            else:
+                record = None
+
             if mean_eval_acc > best_metric:
                 best_metric = mean_eval_acc
                 best_epoch = epoch
-                best_metric_step = int(step_info) if step_info is not None else global_step
-                torch.save(model.state_dict(), best_checkpoint)
+                best_metric_step = step_for_log
+                if state_dict is None:
+                    state_dict = model.state_dict()
+                torch.save(state_dict, best_checkpoint)
 
         if eval_outputs:
             latest_val = eval_outputs[-1]
@@ -556,6 +613,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         best_metric=resolved_best_metric,
         best_epoch=best_epoch,
         best_global_step=best_metric_step,
+        top_checkpoints=list(best_records),
     )
     _write_summary(summary, run_dir / "summary.json")
     if training_cfg.metrics_summary_path is not None:
@@ -897,6 +955,15 @@ def _write_summary(summary: TrainingSummary, path: Path) -> None:
         "best_metric": summary.best_metric,
         "best_epoch": summary.best_epoch,
         "best_global_step": summary.best_global_step,
+        "top_checkpoints": [
+            {
+                "path": str(item.path),
+                "metric": item.metric,
+                "epoch": item.epoch,
+                "global_step": item.global_step,
+            }
+            for item in summary.top_checkpoints
+        ],
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
@@ -939,6 +1006,15 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
         "best_metric": summary.best_metric,
         "best_epoch": summary.best_epoch,
         "best_global_step": summary.best_global_step,
+        "top_checkpoints": [
+            {
+                "path": str(item.path),
+                "metric": item.metric,
+                "epoch": item.epoch,
+                "global_step": item.global_step,
+            }
+            for item in summary.top_checkpoints
+        ],
         "per_task_best": {
             "accuracy": per_task_best_accuracy,
             "loss": per_task_best_loss,
