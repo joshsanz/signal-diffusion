@@ -16,7 +16,6 @@ class TrainingConfig:
     val_every_epochs: int = 1
     clip_grad_norm: float = 1.0
     task: Optional[str] = None
-    opt_restart_every: Optional[int] = None
     swa_start: Optional[int] = None
 
 
