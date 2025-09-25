@@ -34,7 +34,6 @@ sys.path.append("../")
 # In[2]:
 
 
-from common.dog import DoG, LDoG, PDoG
 from models import TransformerClassifier, TransformerSequenceClassifier
 from common.eeg_datasets import EarDataset, EarEEGPreprocessor, MathDataset, MathPreprocessor
 from training import train_seq, train_class, evaluate_seq, evaluate_class, TrainingConfig
@@ -146,49 +145,23 @@ torch.backends.cudnn.benchmark = device.type == "cuda"
 # In[ ]:
 
 
-# Runtime training parameters
-opt_options = [
-    # torch.optim.AdamW,
-    LDoG,
-    PDoG,
-    DoG,
-]
-# restart_options = [0, 100]
-restart_options = [0]
-# max_eta_options = [None, 100.]
-max_eta_options = [None, 100.]
-#  decay_options = [0.0, 0.0001, 0.001]
+opt_options = [torch.optim.AdamW]
 decay_options = [0.0001, 0.001]
-# decouple_options = [True, False]
-decouple_options = [True]
 
-# Run for each option combo
-seen_decays = set()
-for (opt, decay, restart, max_eta, decouple) in itertools.product(
-    opt_options, decay_options, restart_options, max_eta_options, decouple_options):
-    # Only run once for AdamW, decay combos
-    if opt == torch.optim.AdamW:
-        continue
-        if decay in seen_decays:
-            continue
-        seen_decays.add(decay)
+for opt, decay in itertools.product(opt_options, decay_options):
+    restart = 0
 
     # Create model instance
     model = TransformerClassifier(INPUT_DIM, OUTPUT_DIM, HID_DIM, N_LAYERS, N_HEADS, FF_DIM, DROPOUT, BATCH_FIRST)
     model = model.to(device)    
     criterion = nn.CrossEntropyLoss()
-    if opt == torch.optim.AdamW:
-        optimizer = opt(model.parameters(), lr=1e-3, weight_decay=decay)
-    else:
-        optimizer = opt(model.parameters(), weight_decay=decay, max_eta=max_eta, decouple_weight_decay=decouple)
+    optimizer = opt(model.parameters(), lr=1e-3, weight_decay=decay)
 
     # Create training configuration
     ARGS = TrainingConfig(epochs=300, val_every_epochs=10, opt_restart_every=restart)
 
     # Log statistics
-    postfix = ""
-    if isinstance(optimizer, DoG):
-        postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
+    postfix = f"_restart{restart}" if restart else ""
     comment = f"txfmclass_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}"
     tbsw = SummaryWriter(log_dir="./tensorboard_logs/" + comment + "-" + datetime.now().isoformat(sep='_'), 
                          comment=comment)

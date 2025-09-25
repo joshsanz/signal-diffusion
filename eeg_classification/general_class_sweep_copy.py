@@ -229,8 +229,6 @@ for epoch in epochs:
 
                                 # Log statistics
                                 postfix = ""
-                                if isinstance(optimizer, DoG):
-                                    postfix = f"_restart{restart}_etamax{max_eta}_decouple{str(int(decouple))}"
                                 comment = f"cnnclass_{model.name}_{str(type(optimizer)).split('.')[-1][:-2]}_decay{decay}{postfix}_epoch:{EPOCHS},swa_start:{SWA_START},base_lr:{BASE_LEARNING_RATE},swa_lr:{SWA_LEARNING_RATE},epsilon:{EPSILON},sched:{scheduler}"
                                 tbsw = SummaryWriter(log_dir="/home/abastani/signal-diffusion/eeg_classification/tensorboard_logs/cnn/" + comment + "-" +
                                                     datetime.now().isoformat(sep='_'),
