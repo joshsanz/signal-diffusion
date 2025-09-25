@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 import numpy as np
@@ -11,6 +12,7 @@ from torch.utils.data import ConcatDataset, WeightedRandomSampler
 
 from signal_diffusion.config import Settings
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
+from signal_diffusion.log_setup import logger
 
 # ---------------------------------------------------------------------------
 # Meta-level label specifications
@@ -119,7 +121,7 @@ class MetaPreprocessor:
 
     def preprocess(self, **kwargs: Any) -> None:
         for name in self.dataset_names:
-            print(f"Preprocessing {name} dataset...")
+            logger.info(f"Preprocessing {name} dataset...")
             module = importlib.import_module(f"signal_diffusion.data.{name}")
             if name in ("mit", "seed"):
                 preprocessor_class_name = f"{name.upper()}Preprocessor"

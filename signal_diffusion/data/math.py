@@ -1,11 +1,14 @@
 """Math EEG dataset preprocessing and dataset utilities."""
 from __future__ import annotations
 
+import logging
 import math as pymath
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping, Sequence
 
+import coloredlogs
 import mne
 import numpy as np
 import pandas as pd
@@ -14,10 +17,16 @@ from scipy.signal import decimate
 from torchvision import transforms
 
 from common.multichannel_spectrograms import multichannel_spectrogram
-
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
+
+# Basic configuration for logging
+log_level = "DEBUG" if os.environ.get("DEBUG") and os.environ.get("DEBUG") != "0" else "INFO"
+coloredlogs.install(level=log_level)
+
+logger = logging.getLogger(__name__)
+
 
 mne.set_log_level("WARNING")
 
@@ -237,6 +246,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
 
     def _load_subject_table(self) -> pd.DataFrame:
         info_path = self.dataset_settings.root / "raw_eeg" / "subject-info.csv"
+        logger.debug(f"Loading subject info from {info_path}")
         if not info_path.exists():
             raise FileNotFoundError(f"Missing subject info CSV at {info_path}")
         table = pd.read_csv(info_path)
@@ -268,6 +278,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
 
     def _load_subject_state(self, subject_id: str, state: int) -> np.ndarray | None:
         edf_path = self.eeg_dir / f"{subject_id}_{state}.edf"
+        logger.debug(f"Loading data from {edf_path}")
         if not edf_path.exists():
             return None
         raw = mne.io.read_raw_edf(edf_path, preload=True, verbose="ERROR")

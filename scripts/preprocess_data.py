@@ -6,6 +6,7 @@ from pathlib import Path
 
 from signal_diffusion.config import load_settings
 from signal_diffusion.data.meta import MetaPreprocessor
+from signal_diffusion.log_setup import logger
 
 
 def main():
@@ -19,6 +20,8 @@ def main():
     args = parser.parse_args()
 
     settings = load_settings(args.config)
+    logger.info(f"Loading datasets from          {settings.data_root}")
+    logger.info(f"Saving preprocessed outputs to {settings.output_root}")
 
     preprocessor = MetaPreprocessor(
         settings=settings,
@@ -33,7 +36,7 @@ def main():
         resolution=256,
         overwrite=args.overwrite,
     )
-    print("Preprocessing complete.")
+    logger.info("Preprocessing complete.")
 
 
 if __name__ == "__main__":

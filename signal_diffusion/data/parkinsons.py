@@ -1,6 +1,7 @@
 """Parkinsons EEG dataset preprocessing and dataset utilities."""
 from __future__ import annotations
 
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -22,6 +23,8 @@ from signal_diffusion.data.channel_maps import parkinsons_channels
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
+from signal_diffusion.log_setup import logger
+
 
 mne.set_log_level("WARNING")
 
@@ -255,6 +258,7 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
 
     def _load_participants(self) -> pd.DataFrame:
         participants_path = self.data_dir / "participants.tsv"
+        logger.debug(f"Loading participants from {participants_path}")
         if not participants_path.exists():
             raise FileNotFoundError(f"Missing participants.tsv at {participants_path}")
         table = pd.read_csv(participants_path, sep="\t")
@@ -274,6 +278,7 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         set_files = glob.glob(str(eeg_dir / "*eeg.set"))
         if not set_files:
             return None
+        logger.debug(f"Loading data from {set_files[0]}")
         raw = mne.io.read_raw_eeglab(set_files[0], preload=True, verbose="ERROR")
         data = raw.get_data(picks=self.channel_indices)
         if self.decimation > 1:

@@ -1,6 +1,7 @@
 """SEED EEG dataset preprocessing and dataset utilities."""
 from __future__ import annotations
 
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -21,6 +22,7 @@ from signal_diffusion.data.channel_maps import seed_channels
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
+from signal_diffusion.log_setup import logger
 
 mne.set_log_level("WARNING")
 
@@ -234,6 +236,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
 
         info = self._subject_metadata(subject_id)
         for session_index, cnt_path in self.session_files.get(subject_id, []):
+            logger.debug(f"Loading data from {cnt_path}")
             raw = mne.io.read_raw_cnt(cnt_path, preload=True, verbose="ERROR")
             data = raw.get_data()[self.channel_indices, :]
             if self.decimation > 1:
@@ -316,6 +319,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
 
     def _load_participants(self) -> pd.DataFrame:
         info_path = self.data_dir / "participants_info.csv"
+        logger.debug(f"Loading participants from {info_path}")
         if not info_path.exists():
             raise FileNotFoundError(f"Missing participants_info.csv at {info_path}")
         table = pd.read_csv(info_path)
