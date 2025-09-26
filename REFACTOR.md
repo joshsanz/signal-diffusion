@@ -70,6 +70,6 @@ After each step, gather changes into a git commit to separate them and enable ea
 - [x] Removed DoG optimizer artifacts from training and diffusion utilities
 - [x] Added structured metrics summary export plus configurable best-checkpoint retention for classifier runs
 - [x] Removed legacy optimizer restart tuning from historical EEG notebooks and helpers
+- [x] Consolidated Stable Diffusion training helpers into `signal_diffusion/training/diffusion_utils.py` and updated training scripts
 ## Next Steps
-- Begin refactoring diffusion utilities into the shared training module
 - Run the new smoke script once dataset paths are configured to validate regression logging
