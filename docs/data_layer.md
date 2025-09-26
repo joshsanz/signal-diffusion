@@ -72,8 +72,19 @@ It computes duplication counts from `MetaSampler` weights, copies the sampled
 spectrograms into per-split (`train/`, `test/`, etc.) folders below the
 configured `output_root`, emits split-specific metadata files alongside an
 aggregate `metadata.csv`, records the configuration, component datasets, and
-weights in an auto-generated `README.md`, and writes a Hugging Face dataset card
-(`README.hf.md`) ready for publishing.
+weights in an auto-generated `README.md`, and embeds a Hugging Face dataset YAML
+block at the top of that README for direct publishing.
+
+### Metadata Schema
+
+- **Per-dataset preprocessors** now persist canonical label columns: `gender`
+  (`F`/`M`), `health` (`H`/`PD` where applicable), and integer `age`, alongside
+  dataset-specific identifiers (e.g. SEED session/trial). Downstream code should
+  rely on these normalised codes rather than the historical free-form strings.
+- **MetaDataset / weighted exports** prune metadata to the core training fields:
+  `file_name`, `gender`, `health`, `age`, `split`, and an auto-generated
+  human-readable `caption` summarising the labels (e.g. “a spectrogram image of
+  a 62 year old, healthy, male subject”).
 
 ## Getting Started
 

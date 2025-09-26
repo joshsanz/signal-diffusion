@@ -151,10 +151,33 @@ class MetaDataset(ConcatDataset):
             else:
                 dataset_class_name = f"{name.capitalize()}Dataset"
             dataset_class = getattr(module, dataset_class_name)
-            datasets.append(dataset_class(settings, split=split, tasks=tasks, **kwargs))
+            dataset = dataset_class(settings, split=split, tasks=tasks, **kwargs)
+            self._prune_metadata(dataset)
+            datasets.append(dataset)
 
         super().__init__(datasets)
         self.label_registry = _collect_label_specs(self.dataset_names)
+
+
+    @staticmethod
+    def _prune_metadata(dataset) -> None:
+        """Retain only the core label columns required for downstream tasks."""
+
+        if not hasattr(dataset, "metadata"):
+            return
+
+        required = ["file_name", "gender", "health", "age"]
+        metadata = dataset.metadata.copy()
+
+        if "gender" not in metadata.columns:
+            metadata["gender"] = pd.NA
+        if "health" not in metadata.columns:
+            metadata["health"] = "H"
+        if "age" not in metadata.columns:
+            metadata["age"] = pd.NA
+
+        keep = [col for col in required if col in metadata.columns]
+        dataset.metadata = metadata[keep]
 
 
 class MetaSampler(WeightedRandomSampler):

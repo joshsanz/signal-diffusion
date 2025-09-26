@@ -26,7 +26,6 @@ from tqdm.auto import tqdm
 
 from signal_diffusion.config import Settings, load_settings
 from signal_diffusion.data.meta import MetaDataset, MetaPreprocessor, MetaSampler
-from signal_diffusion.data.specs import LabelRegistry
 from signal_diffusion.log_setup import get_logger
 
 
@@ -52,7 +51,112 @@ class WeightStats:
     generated_copies: int = 0
 
 
-PRIMARY_LABELS: tuple[str, ...] = ("age", "gender", "health")
+DEFAULT_HEALTH = "H"
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    try:
+        return bool(pd.isna(value))
+    except TypeError:
+        return False
+
+
+def _normalise_gender(value: Any) -> str | None:
+    if _is_missing(value):
+        return None
+    text = str(value).strip().upper()
+    if text in {"F", "FEMALE", "1", "TRUE"}:
+        return "F"
+    if text in {"M", "MALE", "0", "FALSE"}:
+        return "M"
+    return text
+
+
+def _normalise_health(value: Any) -> str:
+    if _is_missing(value):
+        return DEFAULT_HEALTH
+    text = str(value).strip().upper()
+    if text in {"PD", "PARKINSONS", "1", "TRUE"}:
+        return "PD"
+    if text in {"H", "HEALTHY", "0", "FALSE"}:
+        return "H"
+    return text
+
+
+def _try_int_age(value: Any) -> int | None:
+    if _is_missing(value):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _gender_description(code: str | None) -> str | None:
+    if _is_missing(code):
+        return None
+    mapping = {"F": "female", "M": "male"}
+    text = str(code).strip().upper()
+    return mapping.get(text, text.lower())
+
+
+def _health_description(code: str | None) -> tuple[str | None, str | None]:
+    if _is_missing(code):
+        return None, None
+    text = str(code).strip().upper()
+    if text == "PD":
+        return None, "with Parkinson's disease"
+    if text == "H":
+        return "healthy", None
+    return text.lower(), None
+
+
+def build_caption(metadata: Mapping[str, Any]) -> str:
+    age = _try_int_age(metadata.get("age"))
+    gender_word = _gender_description(metadata.get("gender"))
+    health_code = metadata.get("health", DEFAULT_HEALTH)
+    health_primary, health_clause = _health_description(health_code)
+
+    primary_bits: list[str] = []
+    if age is not None:
+        primary_bits.append(f"{age} year old")
+    if health_primary:
+        primary_bits.append(health_primary)
+    if gender_word:
+        primary_bits.append(gender_word)
+
+    if primary_bits:
+        caption = f"a spectrogram image of a {', '.join(primary_bits)} subject"
+    else:
+        caption = "a spectrogram image of a subject"
+
+    if health_clause:
+        caption += f" {health_clause}"
+
+    return caption
+
+
+def enrich_metadata(row: pd.Series, *, split: str) -> pd.Series:
+    metadata = row.to_dict()
+    file_name = metadata["file_name"]
+
+    gender_code = _normalise_gender(metadata.get("gender"))
+    health_code = _normalise_health(metadata.get("health", DEFAULT_HEALTH))
+    age_value = _try_int_age(metadata.get("age"))
+
+    serialised: dict[str, Any] = {
+        "file_name": file_name,
+        "split": split,
+        "gender": gender_code if gender_code is not None else pd.NA,
+        "health": health_code,
+        "age": age_value if age_value is not None else pd.NA,
+    }
+    serialised["caption"] = build_caption(serialised)
+    return pd.Series(serialised)
 
 
 def parse_args() -> argparse.Namespace:
@@ -258,7 +362,6 @@ def copy_weighted_samples(
     scaled_weights: torch.Tensor,
     output_dir: Path,
     split: str,
-    label_registry: LabelRegistry,
 ) -> tuple[list[pd.Series], dict[str, DatasetStats], dict[float, WeightStats]]:
     """Copy spectrogram files according to their weights for a specific split."""
     cumulative_sizes = dataset.cumulative_sizes
@@ -334,21 +437,11 @@ def copy_weighted_samples(
                 destination_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Update metadata for this copy and add to collection
-                metadata_copy = dict(metadata_dict)
+                metadata_copy = metadata_row.copy()
                 metadata_copy["file_name"] = relative_output.as_posix()
-                metadata_copy["split"] = split
 
-                metadata_copy, decoded_labels = ensure_label_columns(metadata_copy, label_registry)
-                previous_caption = metadata_copy.get("caption")
-                if previous_caption is not None and not is_missing(previous_caption):
-                    metadata_copy.setdefault("original_caption", previous_caption)
-                metadata_copy["caption"] = build_caption(
-                    metadata_copy,
-                    label_registry,
-                    decoded_labels,
-                )
-
-                all_metadata.append(pd.Series(metadata_copy))
+                enriched = enrich_metadata(metadata_copy, split=split)
+                all_metadata.append(enriched)
                 # Copy the actual file
                 copy_file(source_path, destination_path)
 
@@ -401,24 +494,54 @@ def write_readme(
     args: argparse.Namespace,
 ) -> tuple[Path, list[str]]:
     total_generated = sum(stats.generated_samples for stats in dataset_stats.values())
-    lines = [
+    summary = (
+        "This dataset merges the "
+        + ", ".join(args.datasets)
+        + " spectrogram corpora with tasks "
+        + ", ".join(args.tasks)
+        + f". The weighted copies cover splits {', '.join(copy_splits)} and yield {total_generated} total spectrograms."
+    )
+
+    front_matter = [
+        "---",
+        f"pretty_name: Weighted Meta Dataset ({', '.join(args.datasets)})",
+        "language:",
+        "  - en",
+        "license: unknown",
+        "task_categories:",
+        "  - classification",
+        "tags:",
+        "  - eeg",
+        "  - spectrogram",
+        "  - signal-processing",
+        "dataset_summary: |",
+        f"  {summary}",
+        "configs:",
+        f"  - name: {args.bin_spacing}_bin_spacing",
+        f"    description: Weighted copies using {args.bin_spacing} frequency bins",
+        f"  - name: nsamps_{args.nsamps}",
+        f"    description: Spectrogram windows with nsamps={args.nsamps}",
+        "splits:",
+    ] + [f"  - {split}" for split in copy_splits] + [
+        "preprocessing:",
+        f"  nsamps: {args.nsamps}",
+        f"  fs: {args.fs}",
+        f"  resolution: {args.resolution}",
+        f"  bin_spacing: {args.bin_spacing}",
+        f"  overlap_percent: {args.ovr_perc}",
+        f"  preprocess_ran: {str(args.preprocess).lower()}",
+        "generation:",
+        f"  seed: {args.seed}",
+        f"  total_generated_samples: {total_generated}",
+        "---",
+        "",
+    ]
+
+    lines = front_matter + [
         "# Weighted Meta Dataset",
         "",
         f"Generated on: {datetime.now(timezone.utc).isoformat()}",
         f"Source config: {settings.config_path}",
-        "",
-        "## Parameters",
-        f"- datasets: {', '.join(args.datasets)}",
-        f"- tasks: {', '.join(args.tasks)}",
-        f"- nsamps: {args.nsamps}",
-        f"- fs: {args.fs}",
-        f"- resolution: {args.resolution}",
-        f"- bin_spacing: {args.bin_spacing}",
-        f"- overlap_percent: {args.ovr_perc}",
-        f"- seed: {args.seed}",
-        f"- preprocess_ran: {args.preprocess}",
-        f"- copy_splits: {', '.join(copy_splits)}",
-        f"- total_generated_samples: {total_generated}",
         "",
         "## Component Datasets",
         "| dataset | original samples | generated samples |",
@@ -482,52 +605,6 @@ def write_readme(
     readme_path = output_dir / "README.md"
     readme_path.write_text("\n".join(lines))
     return readme_path, lines
-
-
-def write_hf_repo_card(
-    output_dir: Path,
-    *,
-    readme_lines: list[str],
-    args: argparse.Namespace,
-    copy_splits: tuple[str, ...],
-    total_generated: int,
-) -> Path:
-    summary = (
-        "This dataset merges the "
-        + ", ".join(args.datasets)
-        + " spectrogram corpora with tasks "
-        + ", ".join(args.tasks)
-        + f". The weighted copies cover splits {', '.join(copy_splits)} and yield {total_generated} total spectrograms."
-    )
-
-    front_matter = [
-        "---",
-        f"pretty_name: Weighted Meta Dataset ({', '.join(args.datasets)})",
-        "language:",
-        "  - en",
-        "license: unknown",
-        "task_categories:",
-        "  - Text-to-Image",
-        "  - Unconditional Image Generation",
-        "tags:",
-        "  - eeg",
-        "  - spectrogram",
-        "  - signal-processing",
-        "  - diffusion"
-        "dataset_summary: |",
-        f"  {summary}",
-        "configs:",
-        f"  - name: {args.bin_spacing}_bin_spacing",
-        f"    description: Weighted copies using {args.bin_spacing} frequency bins",
-        "splits:",
-    ] + [f"  - {split}" for split in copy_splits] + [
-        "---",
-    ]
-
-    card_lines = front_matter + readme_lines
-    card_path = output_dir / "README.hf.md"
-    card_path.write_text("\n".join(card_lines))
-    return card_path
 
 
 def main() -> None:
@@ -617,7 +694,6 @@ def main() -> None:
             scaled_weights,
             output_dir,
             split,
-            meta_dataset.label_registry,
         )
 
         if not split_metadata_rows:
@@ -655,7 +731,7 @@ def main() -> None:
         metadata_paths[split] = save_metadata(rows, output_dir, split=split)
     aggregate_metadata_path = save_metadata(metadata_rows_all, output_dir)
 
-    readme_path, readme_lines = write_readme(
+    readme_path, _ = write_readme(
         output_dir,
         settings,
         dataset_stats=dataset_stats_total,
@@ -667,13 +743,6 @@ def main() -> None:
     )
 
     total_generated = sum(stats.generated_samples for stats in dataset_stats_total.values())
-    hf_card_path = write_hf_repo_card(
-        output_dir,
-        readme_lines=readme_lines,
-        args=args,
-        copy_splits=copy_splits,
-        total_generated=total_generated,
-    )
     logger.info("Generated %d samples into %s", total_generated, output_dir)
     for split in copy_splits:
         if split in metadata_paths:
@@ -685,7 +754,6 @@ def main() -> None:
         for label, path in plot_paths.items():
             logger.info("Saved weight diagnostics (%s) to %s", label, path)
     logger.info("Documented run in %s", readme_path)
-    logger.info("Generated Hugging Face dataset card at %s", hf_card_path)
 
 
 if __name__ == "__main__":
