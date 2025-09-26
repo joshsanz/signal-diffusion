@@ -71,5 +71,6 @@ After each step, gather changes into a git commit to separate them and enable ea
 - [x] Added structured metrics summary export plus configurable best-checkpoint retention for classifier runs
 - [x] Removed legacy optimizer restart tuning from historical EEG notebooks and helpers
 - [x] Consolidated Stable Diffusion training helpers into `signal_diffusion/training/diffusion_utils.py` and updated training scripts
+- [x] Ported weighted meta-dataset generator into `scripts/`, added per-split outputs + HF dataset card, and documented datasets and weights
 ## Next Steps
 - Run the new smoke script once dataset paths are configured to validate regression logging

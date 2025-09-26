@@ -74,7 +74,7 @@ emotion_class_labels = {idx: EMOTION_NAMES[idx] for idx in sorted(EMOTION_NAMES)
 
 def _encode_gender(row: Mapping[str, object]) -> int:
     value = str(row["gender"]).strip().upper()
-    return 1 if value.startswith("F") else 0
+    return 1 if value in {"F", "FEMALE", "1", "TRUE"} else 0
 
 
 def _encode_emotion(row: Mapping[str, object]) -> int:
@@ -103,8 +103,9 @@ def _encode_age(row: Mapping[str, object]) -> float:
     return age
 
 
-def _encode_health(_: Mapping[str, object]) -> int:
-    return 0
+def _encode_health(row: Mapping[str, object]) -> int:
+    value = str(row.get("health", "H")).strip().upper()
+    return 0 if value in {"H", "HEALTHY", "0", "FALSE"} else 1
 
 
 SEED_LABELS = LabelRegistry()
@@ -170,6 +171,11 @@ SEED_LABELS.register(
         task_type="regression",
     )
 )
+
+
+def _normalize_gender(value: object) -> str:
+    text = str(value).strip().lower()
+    return "F" if text in {"f", "female", "1", "true"} else "M"
 
 
 @dataclass(slots=True)
@@ -281,18 +287,15 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
 
                     emotion_id = emotions[trial_index]
                     metadata = {
-                        "subject": subject_id,
                         "session": session_index,
                         "trial": trial_index,
                         "gender": info.gender,
-                        "health": "healthy",
+                        "health": "H",
                         "age": info.age,
                         "emotion_id": emotion_id,
                         "emotion": emotion_id,
                         "emotion_label": EMOTION_NAMES[emotion_id],
-                        "fs": self.fs,
                     }
-                    metadata["caption"] = self.caption(info.age, info.gender, emotion_id)
                     metadata["seed_condition"] = _encode_condition(metadata)
 
                     relative = Path(subject_id) / f"spectrogram-s{session_index+1}-t{trial_index}-{block_idx}.png"
@@ -332,8 +335,13 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         index = int(subject_id.split("-")[1]) - 1
         row = self.participants.iloc[index]
         age = int(row.get("Age", 0))
-        gender = str(row.get("Sex", "M"))
-        return SeedSubjectInfo(subject_id=subject_id, index=index, gender=gender, age=age)
+        gender_code = _normalize_gender(row.get("Sex", "M"))
+        return SeedSubjectInfo(
+            subject_id=subject_id,
+            index=index,
+            gender=gender_code,
+            age=age,
+        )
 
     def _discover_sessions(self) -> dict[str, list[tuple[int, Path]]]:
         sessions: dict[str, list[tuple[int, Path]]] = {}

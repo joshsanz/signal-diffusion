@@ -59,6 +59,14 @@ Core dataset utilities live in `signal_diffusion/data/`. The shared base handles
 
 See [`docs/data_layer.md`](./docs/data_layer.md) for in-depth guidance on preprocessors, dataset classes, label registries, and the meta-dataset helpers that combine multiple sources.
 
+## Dataset Processing Pipeline
+
+1. **Configure paths** – copy `config/default.toml` and update raw/output roots as needed (`SIGNAL_DIFFUSION_CONFIG` governs which file is loaded).
+2. **Preprocess spectrograms** – run `uv run python scripts/preprocess_data.py --overwrite` (optionally specify datasets) to materialise spectrograms and per-split metadata beneath each dataset’s configured output directory.
+3. **Inspect metadata** – verify `{split}-metadata.csv` files under each dataset output (train/val/test folders plus aggregate `metadata.csv`).
+4. **Generate balanced meta dataset** – execute `uv run python scripts/gen_weighted_dataset.py --preprocess --overwrite` (adjust flags as needed) to duplicate samples according to `MetaSampler` weights; the script materialises per-split directories (e.g. `train/`, `test/`), produces split-specific metadata files plus an aggregate `metadata.csv`, saves weight diagnostics, writes a README summarising configuration and per-dataset counts, and emits a Hugging Face-ready dataset card (`README.hf.md`).
+5. **Point training scripts** – reference the new weighted dataset path in classifier or diffusion configs (e.g. update TOML output roots or CLI dataset arguments) before launching experiments.
+
 ## EEG Classifier Stack
 
 The multi-task classifier factory, model backbones, and dataset helpers live in `signal_diffusion/`.
@@ -86,7 +94,12 @@ uv sync --group metrics
 uv run python metrics/calculate-metrics.py --help
 ```
 
+## Utility Scripts
+
+- `uv run python scripts/gen_weighted_dataset.py --help` generates a re-weighted meta-dataset on disk by duplicating
+  spectrograms according to `MetaSampler` weights, writes per-split diagnostics/metadata, records the run configuration, and
+  creates a Hugging Face dataset card alongside the outputs.
+
 ## Data Peculiarities
 
 File `7_1_20180411.cnt` in the SEED V dataset has a broken header which causes errors in versions of `mne` newer than ~1.6. Something about the number of samples or size of data block is corrupted, breaking data size (bytes) inference or number of samples inference depending on the version.
-

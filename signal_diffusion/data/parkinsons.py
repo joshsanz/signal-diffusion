@@ -36,7 +36,7 @@ GENDER_LABELS = {0: "male", 1: "female"}
 
 def _encode_gender(row: Mapping[str, object]) -> int:
     value = str(row["gender"]).strip().upper()
-    return 1 if value.startswith("F") else 0
+    return 1 if value in {"F", "FEMALE", "1", "TRUE"} else 0
 
 
 def _encode_health(row: Mapping[str, object]) -> int:
@@ -198,6 +198,8 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
             return
 
         total_samples = data.shape[1]
+        gender_code = info.gender
+        health_code = info.health
         shift = self.nsamps - self.noverlap
         if shift <= 0:
             raise ValueError("Overlap percentage results in non-positive shift size")
@@ -225,13 +227,10 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
             )
 
             metadata = {
-                "subject": subject_id,
-                "gender": info.gender,
-                "health": info.health,
+                "gender": gender_code,
+                "health": health_code,
                 "age": info.age,
-                "fs": self.fs,
             }
-            metadata["caption"] = self.caption(info.gender, info.health, info.age)
             metadata["parkinsons_condition"] = _encode_condition(metadata)
 
             relative = Path(subject_id) / f"spectrogram-{counter}.png"
@@ -270,10 +269,15 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
     def _subject_metadata(self, subject_id: str) -> ParkinsonsSubjectInfo:
         sub_num = int(subject_id.split("-")[1]) - 1
         row = self.participants.iloc[sub_num]
-        gender = str(row.get("GENDER", "M"))
-        health = str(row.get("GROUP", "HC"))
+        gender_code = _normalize_gender(row.get("GENDER", "M"))
+        health_code = _normalize_health(row.get("GROUP", "HC"))
         age = int(row.get("AGE", 0))
-        return ParkinsonsSubjectInfo(subject=subject_id, gender=gender, health=health, age=age)
+        return ParkinsonsSubjectInfo(
+            subject=subject_id,
+            gender=gender_code,
+            health=health_code,
+            age=age,
+        )
 
     def _load_subject_data(self, subject_id: str) -> np.ndarray | None:
         eeg_dir = self.data_dir / subject_id / "eeg"
@@ -443,3 +447,11 @@ class ParkinsonsSampler(torch.utils.data.Sampler[int]):
         output = [remapped[label] for label in labels]
         normaliser = sum(output)
         return [weight / normaliser for weight in output]
+def _normalize_gender(value: object) -> str:
+    text = str(value).strip().lower()
+    return "F" if text in {"f", "female", "1", "true"} else "M"
+
+
+def _normalize_health(value: object) -> str:
+    text = str(value).strip().upper()
+    return "PD" if text in {"PD", "PARKINSONS", "1", "TRUE"} else "H"

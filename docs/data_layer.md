@@ -61,6 +61,20 @@ scaffolding and the meta-dataset utilities under
 and `MetaSampler` alongside backwards-compatible aliases named
 `GeneralPreprocessor`, `GeneralDataset`, and `GeneralSampler`.
 
+When you need a class-balanced dataset materialised on disk, run the utility
+script:
+
+```bash
+uv run python scripts/gen_weighted_dataset.py --help
+```
+
+It computes duplication counts from `MetaSampler` weights, copies the sampled
+spectrograms into per-split (`train/`, `test/`, etc.) folders below the
+configured `output_root`, emits split-specific metadata files alongside an
+aggregate `metadata.csv`, records the configuration, component datasets, and
+weights in an auto-generated `README.md`, and writes a Hugging Face dataset card
+(`README.hf.md`) ready for publishing.
+
 ## Getting Started
 
 ```python

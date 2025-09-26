@@ -27,7 +27,7 @@
 
 ## Coding Style & Naming Conventions
 
-Follow PEP 8 with 4-space indentation, group imports as stdlib/third-party/local, and prefer f-strings with explicit type hints in shared utilities. Use snake_case for files, variables, and functions; keep modules focused on a single responsibility. Parameterize data paths via CLI flags or config objects—avoid hard-coded absolute locations.
+Follow PEP 8 with 4-space indentation, group imports as stdlib/third-party/local, and prefer f-strings with explicit type hints in shared utilities. Use snake_case for files, variables, and functions; keep modules focused on a single responsibility. Parameterize data paths via CLI flags or config objects—avoid hard-coded absolute locations. Add comments in function bodies explaining what the code is doing.
 
 ## Testing Guidelines
 

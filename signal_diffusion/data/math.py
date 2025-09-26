@@ -41,10 +41,8 @@ MATH_CONDITION_CLASSES = {
 
 
 def _encode_gender(row: Mapping[str, object]) -> int:
-    value = str(row["gender"]).strip().lower()
-    if value in {"f", "female", "1", "true"}:
-        return 1
-    return 0
+    value = str(row["gender"]).strip().upper()
+    return 1 if value in {"F", "FEMALE", "1", "TRUE"} else 0
 
 
 def _encode_math_activity(row: Mapping[str, object]) -> int:
@@ -102,6 +100,10 @@ MATH_LABELS.register(
         decoder=_decode_math_condition,
     )
 )
+
+def _normalize_gender(value: object) -> str:
+    text = str(value).strip().lower()
+    return "F" if text in {"f", "female", "1", "true"} else "M"
 
 
 @dataclass(slots=True)
@@ -173,6 +175,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         hop_length = hop_length or self._derive_hop_length(resolution)
 
         subject_info = self._subject_metadata(subject_id)
+        gender_code = subject_info.gender
         base_folder = Path(f"sub{subject_id[-2:]}")
         counter = 0
 
@@ -209,15 +212,13 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
                 )
 
                 doing_math = int(state == 2)
+
                 metadata = {
-                    "subject": subject_id,
                     "state": state,
-                    "gender": subject_info.gender,
+                    "gender": gender_code,
                     "doingmath": doing_math,
                     "age": subject_info.age,
-                    "fs": self.fs,
                 }
-                metadata["caption"] = self.caption(metadata["gender"], doing_math, metadata["age"])
                 metadata["math_condition"] = _encode_condition(metadata)
 
                 relative = base_folder / f"spectrogram-{counter}.png"
@@ -258,7 +259,12 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         row = self.subject_table.iloc[idx]
         age = self._extract_value(row, ("Age", "age"), default_index=1)
         gender = self._extract_value(row, ("Gender", "gender", "Sex"), default_index=2)
-        return MathSubjectInfo(subject_id=subject_id, age=int(age), gender=str(gender).strip())
+        gender_code = _normalize_gender(gender)
+        return MathSubjectInfo(
+            subject_id=subject_id,
+            age=int(age),
+            gender=gender_code,
+        )
 
     def _extract_value(self, row: pd.Series, candidates: Sequence[str], default_index: int) -> object:
         for name in candidates:
