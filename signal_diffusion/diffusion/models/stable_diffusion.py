@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 import torch
@@ -196,12 +197,17 @@ class StableDiffusionAdapterV15:
         modules: DiffusionModules,
         output_dir: str,
     ) -> None:
-        output_path = accelerator.project_configuration.project_dir / output_dir if accelerator.project_configuration else output_dir
+        project_dir = getattr(getattr(accelerator, "project_configuration", None), "project_dir", None)
+        if project_dir is not None:
+            output_path = Path(project_dir) / output_dir
+        else:
+            output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
         accelerator.print(f"Saving Stable Diffusion weights to {output_path}")
         if cfg.model.lora.enabled:
-            modules.denoiser.save_attn_procs(output_dir)
+            modules.denoiser.save_attn_procs(str(output_path))
         else:
-            modules.denoiser.save_pretrained(output_dir)
+            modules.denoiser.save_pretrained(str(output_path))
 
 
 registry.register(StableDiffusionAdapterV15())
