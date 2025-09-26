@@ -10,10 +10,7 @@ from typing import Any, Iterable, Mapping, Optional
 import torch
 import typer
 from accelerate import Accelerator
-try:  # pragma: no cover - depends on accelerate version
-    from accelerate.utils import ProjectConfiguration
-except ImportError:  # pragma: no cover - fallback for older accelerate
-    ProjectConfiguration = None  # type: ignore[attr-defined]
+from accelerate.utils import ProjectConfiguration
 from accelerate.utils import set_seed
 from diffusers.optimization import get_scheduler
 
@@ -120,14 +117,12 @@ def train(
     adapter = registry.get(cfg.model.name)
     tokenizer = adapter.create_tokenizer(cfg)
 
-    accelerator_kwargs = {
-        "gradient_accumulation_steps": cfg.training.gradient_accumulation_steps,
-        "mixed_precision": cfg.training.mixed_precision,
-    }
-    if ProjectConfiguration is not None:
-        project_config = ProjectConfiguration(project_dir=str(run_dir), automatic_checkpoint_naming=True)
-        accelerator_kwargs["project_config"] = project_config
-    accelerator = Accelerator(**accelerator_kwargs)
+    project_config = ProjectConfiguration(project_dir=str(run_dir), automatic_checkpoint_naming=True)
+    accelerator = Accelerator(
+        gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
+        mixed_precision=cfg.training.mixed_precision,
+        project_config=project_config,
+    )
     set_seed(cfg.training.seed)
 
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
