@@ -1,0 +1,327 @@
+"""Configuration schema for diffusion training."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping, MutableMapping
+
+import tomllib
+
+
+@dataclass(slots=True)
+class DatasetConfig:
+    """Dataset-related configuration."""
+
+    identifier: str
+    train_split: str = "train"
+    val_split: str | None = None
+    cache_dir: Path | None = None
+    batch_size: int = 4
+    eval_batch_size: int | None = None
+    num_workers: int = 4
+    resolution: int = 256
+    center_crop: bool = False
+    random_flip: bool = False
+    image_column: str | None = None
+    caption_column: str | None = None
+    class_column: str | None = None
+    dataset_type: str = "auto"
+    max_train_samples: int | None = None
+    max_eval_samples: int | None = None
+
+    def effective_eval_batch_size(self) -> int:
+        return self.eval_batch_size or self.batch_size
+
+
+@dataclass(slots=True)
+class LoRAConfig:
+    """Options for applying LoRA adapters during training."""
+
+    enabled: bool = False
+    rank: int = 4
+    alpha: float = 1.0
+    dropout: float = 0.0
+    target_modules: tuple[str, ...] = field(default_factory=lambda: ("to_q", "to_k", "to_v", "to_out.0"))
+    bias: str = "none"
+    scaling: float | None = None
+
+
+@dataclass(slots=True)
+class ModelConfig:
+    """Model factory configuration for diffusion training."""
+
+    name: str
+    pretrained: str | None = None
+    revision: str | None = None
+    sample_size: int | None = None
+    extras: MutableMapping[str, Any] = field(default_factory=dict)
+    lora: LoRAConfig = field(default_factory=LoRAConfig)
+
+
+@dataclass(slots=True)
+class ObjectiveConfig:
+    """Training objective configuration."""
+
+    prediction_type: str = "epsilon"
+    scheduler: str = "ddim"
+    flow_match_timesteps: int = 1000
+
+
+@dataclass(slots=True)
+class OptimizerConfig:
+    """Optimizer hyper-parameters."""
+
+    name: str = "adamw"
+    learning_rate: float = 1e-4
+    weight_decay: float = 1e-2
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+
+
+@dataclass(slots=True)
+class SchedulerConfig:
+    """Learning rate scheduler settings."""
+
+    name: str = "constant"
+    warmup_steps: int = 0
+
+
+@dataclass(slots=True)
+class LoggingConfig:
+    """Training-time logging configuration."""
+
+    tensorboard: bool = False
+    log_dir: Path | None = None
+    wandb_project: str | None = None
+    wandb_run_name: str | None = None
+    wandb_entity: str | None = None
+
+
+@dataclass(slots=True)
+class TrainingConfig:
+    """Execution-related configuration values."""
+
+    seed: int = 42
+    output_dir: Path | None = None
+    mixed_precision: str | None = "fp16"
+    gradient_accumulation_steps: int = 1
+    epochs: int = 1
+    max_train_steps: int | None = None
+    validation_interval: int | str | None = "epoch"
+    log_every_steps: int = 10
+    checkpoint_interval: int | None = None
+    resume: str | None = None
+    gradient_clip_norm: float | None = 1.0
+    ema_decay: float | None = 0.999
+    ema_power: float = 0.75
+    ema_warmup: bool = True
+    ema_update_after_step: int = 0
+    allow_tf32: bool = True
+    snr_gamma: float | None = None
+
+
+@dataclass(slots=True)
+class DiffusionConfig:
+    """Root configuration for a diffusion training run."""
+
+    dataset: DatasetConfig
+    model: ModelConfig
+    objective: ObjectiveConfig
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    settings_config: Path | None = None
+    source_path: Path | None = None
+
+
+def _path_from_value(value: Any, base_dir: Path) -> Path | None:
+    if value in (None, ""):
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    return path
+
+
+def _load_section(mapping: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    data = mapping.get(key)
+    if data is None:
+        raise KeyError(f"Configuration missing required section '{key}'")
+    if not isinstance(data, Mapping):
+        raise TypeError(f"Section '{key}' must be a mapping, got {type(data)!r}")
+    return data
+
+
+def _load_dataset(section: Mapping[str, Any], base_dir: Path) -> DatasetConfig:
+    identifier = section.get("name") or section.get("identifier")
+    if not identifier:
+        raise ValueError("Dataset configuration requires 'name' or 'identifier'")
+    cache_dir = _path_from_value(section.get("cache_dir"), base_dir)
+    def _opt(column: str | None) -> str | None:
+        if column in (None, ""):
+            return None
+        return column
+
+    return DatasetConfig(
+        identifier=str(identifier),
+        train_split=str(section.get("train_split", "train")),
+        val_split=section.get("val_split"),
+        cache_dir=cache_dir,
+        batch_size=int(section.get("batch_size", 4)),
+        eval_batch_size=section.get("eval_batch_size"),
+        num_workers=int(section.get("num_workers", 4)),
+        resolution=int(section.get("resolution", 256)),
+        center_crop=bool(section.get("center_crop", False)),
+        random_flip=bool(section.get("random_flip", False)),
+        image_column=_opt(section.get("image_column")),
+        caption_column=_opt(section.get("caption_column")),
+        class_column=_opt(section.get("class_column")),
+        dataset_type=str(section.get("dataset_type", "auto")),
+        max_train_samples=section.get("max_train_samples"),
+        max_eval_samples=section.get("max_eval_samples"),
+    )
+
+
+def _load_lora(section: Mapping[str, Any] | None) -> LoRAConfig:
+    if not section:
+        return LoRAConfig()
+    enabled = bool(section.get("enabled", False))
+    target_modules = section.get("target_modules", ("to_q", "to_k", "to_v", "to_out.0"))
+    if isinstance(target_modules, str):
+        target_modules = tuple(token.strip() for token in target_modules.split(",") if token.strip())
+    else:
+        target_modules = tuple(target_modules)
+    return LoRAConfig(
+        enabled=enabled,
+        rank=int(section.get("rank", 4)),
+        alpha=float(section.get("alpha", 1.0)),
+        dropout=float(section.get("dropout", 0.0)),
+        target_modules=target_modules,
+        bias=str(section.get("bias", "none")),
+        scaling=section.get("scaling"),
+    )
+
+
+def _load_model(section: Mapping[str, Any]) -> ModelConfig:
+    extras_section = section.get("extras", {})
+    if extras_section is None:
+        extras_section = {}
+    if not isinstance(extras_section, Mapping):
+        raise TypeError("model.extras must be a mapping if provided")
+    extras = dict(extras_section)
+    for key, value in section.items():
+        if key in {"name", "pretrained", "revision", "sample_size", "lora", "extras"}:
+            continue
+        extras[key] = value
+    return ModelConfig(
+        name=str(section.get("name")),
+        pretrained=section.get("pretrained"),
+        revision=section.get("revision"),
+        sample_size=section.get("sample_size"),
+        extras=extras,
+        lora=_load_lora(section.get("lora")),
+    )
+
+
+def _load_objective(section: Mapping[str, Any]) -> ObjectiveConfig:
+    return ObjectiveConfig(
+        prediction_type=str(section.get("prediction_type", "epsilon")),
+        scheduler=str(section.get("scheduler", "ddim")),
+        flow_match_timesteps=int(section.get("flow_match_timesteps", 1000)),
+    )
+
+
+def _load_optimizer(section: Mapping[str, Any] | None) -> OptimizerConfig:
+    if not section:
+        return OptimizerConfig()
+    betas = section.get("betas", (0.9, 0.999))
+    if isinstance(betas, (list, tuple)):
+        beta_tuple = (float(betas[0]), float(betas[1]))
+    else:
+        raise TypeError("optimizer.betas must be a 2-element sequence")
+    return OptimizerConfig(
+        name=str(section.get("name", "adamw")),
+        learning_rate=float(section.get("learning_rate", 1e-4)),
+        weight_decay=float(section.get("weight_decay", 1e-2)),
+        betas=beta_tuple,
+        eps=float(section.get("eps", 1e-8)),
+    )
+
+
+def _load_scheduler(section: Mapping[str, Any] | None) -> SchedulerConfig:
+    if not section:
+        return SchedulerConfig()
+    return SchedulerConfig(
+        name=str(section.get("name", "constant")),
+        warmup_steps=int(section.get("warmup_steps", 0)),
+    )
+
+
+def _load_logging(section: Mapping[str, Any] | None, base_dir: Path) -> LoggingConfig:
+    if not section:
+        return LoggingConfig()
+    log_dir = _path_from_value(section.get("log_dir"), base_dir)
+    return LoggingConfig(
+        tensorboard=bool(section.get("tensorboard", False)),
+        log_dir=log_dir,
+        wandb_project=section.get("wandb_project"),
+        wandb_run_name=section.get("wandb_run_name"),
+        wandb_entity=section.get("wandb_entity"),
+    )
+
+
+def _load_training(section: Mapping[str, Any], base_dir: Path) -> TrainingConfig:
+    output_dir = _path_from_value(section.get("output_dir"), base_dir)
+    resume = _path_from_value(section.get("resume"), base_dir)
+    return TrainingConfig(
+        seed=int(section.get("seed", 42)),
+        output_dir=output_dir,
+        mixed_precision=section.get("mixed_precision", "fp16"),
+        gradient_accumulation_steps=int(section.get("gradient_accumulation_steps", 1)),
+        epochs=int(section.get("epochs", 1)),
+        max_train_steps=section.get("max_train_steps"),
+        validation_interval=section.get("validation_interval", "epoch"),
+        log_every_steps=int(section.get("log_every_steps", 10)),
+        checkpoint_interval=section.get("checkpoint_interval"),
+        resume=str(resume) if resume else None,
+        gradient_clip_norm=section.get("gradient_clip_norm"),
+        ema_decay=section.get("ema_decay"),
+        ema_power=float(section.get("ema_power", 0.75)),
+        ema_warmup=bool(section.get("ema_warmup", True)),
+        ema_update_after_step=int(section.get("ema_update_after_step", 0)),
+        allow_tf32=bool(section.get("allow_tf32", True)),
+        snr_gamma=section.get("snr_gamma"),
+    )
+
+
+def load_diffusion_config(path: str | Path) -> DiffusionConfig:
+    """Load a diffusion training configuration from TOML."""
+
+    config_path = Path(path).expanduser().resolve()
+    with config_path.open("rb") as fp:
+        mapping = tomllib.load(fp)
+
+    base_dir = config_path.parent
+    dataset_cfg = _load_dataset(_load_section(mapping, "dataset"), base_dir)
+    model_cfg = _load_model(_load_section(mapping, "model"))
+    objective_cfg = _load_objective(_load_section(mapping, "objective"))
+    optimizer_cfg = _load_optimizer(mapping.get("optimizer"))
+    scheduler_cfg = _load_scheduler(mapping.get("scheduler"))
+    logging_cfg = _load_logging(mapping.get("logging"), base_dir)
+    training_cfg = _load_training(_load_section(mapping, "training"), base_dir)
+
+    settings_section = mapping.get("settings", {})
+    settings_config = _path_from_value(settings_section.get("config"), base_dir) if isinstance(settings_section, Mapping) else None
+
+    return DiffusionConfig(
+        dataset=dataset_cfg,
+        model=model_cfg,
+        objective=objective_cfg,
+        optimizer=optimizer_cfg,
+        scheduler=scheduler_cfg,
+        training=training_cfg,
+        logging=logging_cfg,
+        settings_config=settings_config,
+        source_path=config_path,
+    )
