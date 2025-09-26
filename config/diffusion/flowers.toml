@@ -1,0 +1,65 @@
+# Example configuration for DiT training on the Oxford Flowers dataset.
+
+[settings]
+config = "config/default.toml"
+
+[dataset]
+name = "/data/data/signal-diffusion/flowers-102-categories"
+train_split = "train"
+val_split = "val"
+batch_size = 16
+num_workers = 4
+resolution = 64
+center_crop = true
+random_flip = true
+image_column = "image"
+caption_column = ""
+
+[model]
+name = "dit"
+sample_size = 32
+
+[model.extras]
+num_attention_heads = 16
+attention_head_dim = 72
+in_channels = 3
+out_channels = 3
+num_layers = 12
+patch_size = 2
+latent_space = false
+num_classes = 0
+cfg_dropout = 0.0
+
+[model.lora]
+enabled = false
+
+[objective]
+prediction_type = "vector_field"
+flow_match_timesteps = 1000
+
+[optimizer]
+name = "adamw"
+learning_rate = 1e-4
+weight_decay = 1e-4
+betas = [0.9, 0.999]
+
+[scheduler]
+name = "constant_with_warmup"
+warmup_steps = 100
+
+[training]
+seed = 42
+epochs = 1
+gradient_accumulation_steps = 1
+validation_interval = "epoch"
+log_every_steps = 10
+checkpoint_interval = 0
+mixed_precision = "fp16"
+gradient_clip_norm = 1.0
+snr_gamma = 5.0
+
+[logging]
+tensorboard = true
+log_dir = "runs/diffusion/tensorboard"
+# wandb_project = "your-project-name"
+# wandb_run_name = "baseline"
