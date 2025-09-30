@@ -115,7 +115,25 @@ def train(
     cfg.training.output_dir = run_dir
 
     adapter = registry.get(cfg.model.name)
-    tokenizer = adapter.create_tokenizer(cfg)
+
+    default_conditioning = "caption" if cfg.model.name.startswith("stable-diffusion") else "none"
+    conditioning_value = cfg.model.extras.get("conditioning", default_conditioning)
+    conditioning = str(conditioning_value).strip().lower()
+    if not conditioning:
+        conditioning = default_conditioning
+    if conditioning not in {"none", "caption", "classes"}:
+        raise ValueError(f"Unsupported conditioning type '{conditioning}'")
+
+    if conditioning == "caption":
+        if not cfg.dataset.caption_column:
+            raise ValueError("Caption conditioning requires 'dataset.caption_column' to be set")
+    if conditioning == "classes":
+        if cfg.dataset.num_classes <= 1:
+            raise ValueError("Class conditioning requires 'dataset.num_classes' to be greater than 1")
+        if not cfg.dataset.class_column:
+            raise ValueError("Class conditioning requires 'dataset.class_column' to be set")
+
+    tokenizer = adapter.create_tokenizer(cfg) if conditioning == "caption" else None
 
     project_config = ProjectConfiguration(project_dir=str(run_dir), automatic_checkpoint_naming=True)
     accelerator = Accelerator(
@@ -141,7 +159,8 @@ def train(
     )
 
     objects_to_prepare: list[Any] = [modules.denoiser, optimizer, train_loader, lr_scheduler]
-    if modules.text_encoder is not None and any(param.requires_grad for param in modules.text_encoder.parameters()):
+    prepare_text_encoder = modules.text_encoder is not None
+    if prepare_text_encoder:
         objects_to_prepare.insert(1, modules.text_encoder)
     if val_loader is not None:
         objects_to_prepare.append(val_loader)
@@ -151,9 +170,6 @@ def train(
     idx = 0
     modules.denoiser = prepared[idx]
     idx += 1
-    prepare_text_encoder = modules.text_encoder is not None and any(
-        param.requires_grad for param in modules.text_encoder.parameters()
-    )
     if prepare_text_encoder:
         modules.text_encoder = prepared[idx]
         idx += 1

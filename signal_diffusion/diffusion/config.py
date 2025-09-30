@@ -13,7 +13,7 @@ class DatasetConfig:
     """Dataset-related configuration."""
 
     identifier: str
-    train_split: str = "train"
+    train_split: str | None = "train"
     val_split: str | None = None
     cache_dir: Path | None = None
     batch_size: int = 4
@@ -28,6 +28,7 @@ class DatasetConfig:
     dataset_type: str = "auto"
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
+    num_classes: int = 0
 
     def effective_eval_batch_size(self) -> int:
         return self.eval_batch_size or self.batch_size
@@ -39,7 +40,7 @@ class LoRAConfig:
 
     enabled: bool = False
     rank: int = 4
-    alpha: float = 1.0
+    alpha: float = 4.0
     dropout: float = 0.0
     target_modules: tuple[str, ...] = field(default_factory=lambda: ("to_q", "to_k", "to_v", "to_out.0"))
     bias: str = "none"
@@ -158,15 +159,25 @@ def _load_dataset(section: Mapping[str, Any], base_dir: Path) -> DatasetConfig:
     if not identifier:
         raise ValueError("Dataset configuration requires 'name' or 'identifier'")
     cache_dir = _path_from_value(section.get("cache_dir"), base_dir)
+
     def _opt(column: str | None) -> str | None:
         if column in (None, ""):
             return None
         return column
 
+    def _split(value: Any, *, default: str | None = None) -> str | None:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            if not value.strip():
+                return None
+            return value
+        return str(value)
+
     return DatasetConfig(
         identifier=str(identifier),
-        train_split=str(section.get("train_split", "train")),
-        val_split=section.get("val_split"),
+        train_split=_split(section.get("train_split"), default="train"),
+        val_split=_split(section.get("val_split")),
         cache_dir=cache_dir,
         batch_size=int(section.get("batch_size", 4)),
         eval_batch_size=section.get("eval_batch_size"),
@@ -180,6 +191,7 @@ def _load_dataset(section: Mapping[str, Any], base_dir: Path) -> DatasetConfig:
         dataset_type=str(section.get("dataset_type", "auto")),
         max_train_samples=section.get("max_train_samples"),
         max_eval_samples=section.get("max_eval_samples"),
+        num_classes=int(section.get("num_classes", 0) or 0),
     )
 
 
