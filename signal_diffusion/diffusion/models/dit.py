@@ -9,6 +9,7 @@ from accelerate import Accelerator
 from diffusers import AutoencoderKL
 from diffusers import DiTTransformer2DModel
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from transformers import AutoTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
@@ -25,6 +26,7 @@ from signal_diffusion.diffusion.objectives import (
 class DiTExtras:
     latent_space: bool = False
     vae: str | None = None
+    text_encoder: str | None = None
     num_classes: int = 0
     cfg_dropout: float = 0.0
 
@@ -35,8 +37,16 @@ class DiTAdapter:
     def __init__(self) -> None:
         self._extras = DiTExtras()
 
-    def create_tokenizer(self, cfg: DiffusionConfig):  # noqa: D401 - DiT has no tokenizer
-        return None
+    def create_tokenizer(self, cfg: DiffusionConfig):
+        conditioning = str(cfg.model.extras.get("conditioning", "none")).strip().lower()
+        if not conditioning or conditioning == "none" or conditioning == "classes":
+            return None
+        if conditioning != "caption":
+            raise ValueError(f"Unsupported conditioning type '{conditioning}' for DiT models")
+        text_encoder_id = cfg.model.extras.get("text_encoder")
+        if not text_encoder_id:
+            raise ValueError("Caption conditioning requires 'model.extras.text_encoder' to be set")
+        return AutoTokenizer.from_pretrained(text_encoder_id)
 
     def _parse_extras(self, cfg: DiffusionConfig) -> DiTExtras:
         extras = cfg.model.extras
