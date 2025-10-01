@@ -277,26 +277,6 @@ def train(
                         progress_bar.set_postfix(step=global_step, train_loss=f"{float(train_loss):.4f}")
                     else:
                         progress_bar.set_postfix(step=global_step)
-                if accelerator.is_main_process and (
-                    global_step == 1 or global_step % max(1, cfg.training.log_every_steps) == 0
-                ):
-                    train_loss = log_payload.get("train/loss")
-                    extra_metrics = {k: v for k, v in log_payload.items() if k != "train/loss"}
-                    if train_loss is not None:
-                        loss_value = float(train_loss)
-                    else:
-                        loss_value = float("nan")
-                    if extra_metrics:
-                        LOGGER.info(
-                            "step %d/%d train_loss=%.4f metrics=%s",
-                            global_step,
-                            max_train_steps,
-                            loss_value,
-                            extra_metrics,
-                        )
-                    else:
-                        LOGGER.info("step %d/%d train_loss=%.4f", global_step, max_train_steps, loss_value)
-
                 if cfg.training.checkpoint_interval and global_step % cfg.training.checkpoint_interval == 0:
                     save_dir = run_dir / f"checkpoint-{global_step}"
                     accelerator.save_state(str(save_dir))
