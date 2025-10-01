@@ -55,6 +55,7 @@ class ModelConfig:
     pretrained: str | None = None
     revision: str | None = None
     sample_size: int | None = None
+    conditioning: str | None = None
     extras: MutableMapping[str, Any] = field(default_factory=dict)
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 
@@ -222,8 +223,13 @@ def _load_model(section: Mapping[str, Any]) -> ModelConfig:
     if not isinstance(extras_section, Mapping):
         raise TypeError("model.extras must be a mapping if provided")
     extras = dict(extras_section)
+    conditioning = section.get("conditioning")
+    if conditioning is None and "conditioning" in extras:
+        conditioning = extras.pop("conditioning")
+    else:
+        extras.pop("conditioning", None)
     for key, value in section.items():
-        if key in {"name", "pretrained", "revision", "sample_size", "lora", "extras"}:
+        if key in {"name", "pretrained", "revision", "sample_size", "conditioning", "lora", "extras"}:
             continue
         extras[key] = value
     return ModelConfig(
@@ -231,6 +237,7 @@ def _load_model(section: Mapping[str, Any]) -> ModelConfig:
         pretrained=section.get("pretrained"),
         revision=section.get("revision"),
         sample_size=section.get("sample_size"),
+        conditioning=conditioning,
         extras=extras,
         lora=_load_lora(section.get("lora")),
     )

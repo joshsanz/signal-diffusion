@@ -6,8 +6,7 @@ from typing import Mapping
 
 import torch
 from accelerate import Accelerator
-from diffusers import AutoencoderKL
-from diffusers import DiTTransformer2DModel
+from diffusers import AutoencoderKL, DiTTransformer2DModel
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from transformers import AutoTokenizer
 
@@ -24,11 +23,13 @@ from signal_diffusion.diffusion.objectives import (
 
 @dataclass(slots=True)
 class DiTExtras:
+    conditioning: str = "none"
     latent_space: bool = False
     vae: str | None = None
     text_encoder: str | None = None
     num_classes: int = 0
     cfg_dropout: float = 0.0
+    timestep_embeddings: int = 1000
 
 
 class DiTAdapter:
@@ -38,7 +39,10 @@ class DiTAdapter:
         self._extras = DiTExtras()
 
     def create_tokenizer(self, cfg: DiffusionConfig):
-        conditioning = str(cfg.model.extras.get("conditioning", "none")).strip().lower()
+        conditioning_value = cfg.model.conditioning
+        if conditioning_value is None:
+            conditioning_value = cfg.model.extras.get("conditioning", "none")
+        conditioning = str(conditioning_value).strip().lower()
         if not conditioning or conditioning == "none" or conditioning == "classes":
             return None
         if conditioning != "caption":
@@ -50,15 +54,27 @@ class DiTAdapter:
 
     def _parse_extras(self, cfg: DiffusionConfig) -> DiTExtras:
         extras = cfg.model.extras
+        conditioning_value = cfg.model.conditioning
+        if conditioning_value is None:
+            conditioning_value = extras.get("conditioning", "none")
+        conditioning = str(conditioning_value).strip().lower() or "none"
+        if conditioning not in {"none", "caption", "classes"}:
+            raise ValueError(f"Unsupported conditioning type '{conditioning}' for DiT models")
         latent_space = bool(extras.get("latent_space", False))
         vae = extras.get("vae")
-        num_classes = int(extras.get("num_classes", 0))
+        num_classes_value = extras.get("num_classes", cfg.dataset.num_classes)
+        num_classes = int(num_classes_value or 0)
         cfg_dropout = float(extras.get("cfg_dropout", 0.0))
+        timestep_embeddings = int(cfg.objective.flow_match_timesteps or 1000)
+        text_encoder = extras.get("text_encoder")
         return DiTExtras(
+            conditioning=conditioning,
             latent_space=latent_space,
             vae=vae,
+            text_encoder=text_encoder,
             num_classes=num_classes,
             cfg_dropout=cfg_dropout,
+            timestep_embeddings=timestep_embeddings,
         )
 
     def build_modules(
@@ -87,12 +103,24 @@ class DiTAdapter:
                 sample_size=int(cfg.model.sample_size or cfg.dataset.resolution),
                 patch_size=int(cfg.model.extras.get("patch_size", 2)),
                 activation_fn=str(cfg.model.extras.get("activation_fn", "gelu-approximate")),
-                num_embeds_ada_norm=int(cfg.model.extras.get("num_embeds_ada_norm", 1000)),
                 upcast_attention=bool(cfg.model.extras.get("upcast_attention", False)),
-                norm_type=str(cfg.model.extras.get("norm_type", "ada_norm_zero")),
                 norm_elementwise_affine=bool(cfg.model.extras.get("norm_elementwise_affine", False)),
                 norm_eps=float(cfg.model.extras.get("norm_eps", 1e-5)),
             )
+            conditioning = self._extras.conditioning
+            # Diffusers' DiT implementation only supports `ada_norm_zero` when a patch_size is used.
+            # To keep unconditional runs working we stick with `ada_norm_zero` and feed dummy
+            # class ids during the forward pass when no conditioning is required.
+            norm_type = "ada_norm_zero"
+            if conditioning == "classes":
+                if self._extras.num_classes <= 0:
+                    raise ValueError("Class conditioning requires 'model.extras.num_classes' to be greater than 0")
+                num_embeds_ada_norm = self._extras.num_classes
+            else:
+                # unconditional / caption runs fall back to timestep embedding count
+                num_embeds_ada_norm = self._extras.timestep_embeddings
+            kwargs["norm_type"] = norm_type
+            kwargs["num_embeds_ada_norm"] = num_embeds_ada_norm
             model = DiTTransformer2DModel(**kwargs)
 
         if cfg.model.lora.enabled:
@@ -156,20 +184,19 @@ class DiTAdapter:
         z_t = scheduler.scale_noise(images, timesteps, noise)
         snr = get_snr(scheduler, timesteps, device=images.device)
 
-        class_labels: torch.Tensor | None = None
-        if extras.num_classes > 0:
-            if batch.class_labels is not None:
-                class_labels = batch.class_labels.to(device=images.device, dtype=torch.long)
-                if extras.cfg_dropout > 0:
-                    mask = torch.rand(class_labels.shape, device=class_labels.device) < extras.cfg_dropout
-                    class_labels = class_labels.masked_fill(mask, extras.num_classes)
-            else:
-                class_labels = torch.full(
-                    (images.shape[0],),
-                    extras.num_classes,
-                    device=images.device,
-                    dtype=torch.long,
-                )
+        class_labels: torch.Tensor | None
+        if extras.conditioning == "classes":
+            if batch.class_labels is None:
+                raise ValueError("Class conditioning requires 'batch.class_labels'")
+            class_labels = batch.class_labels.to(device=images.device, dtype=torch.long)
+            if extras.cfg_dropout > 0:
+                mask = torch.rand(class_labels.shape, device=class_labels.device) < extras.cfg_dropout
+                class_labels = class_labels.masked_fill(mask, extras.num_classes)
+        else:
+            # Diffusers' DiT uses AdaLayerNormZero under the hood, which always expects
+            # a label embedding. Provide a constant dummy tensor so unconditional runs
+            # (conditioning="none") can skip classifier guidance while satisfying the API.
+            class_labels = torch.zeros(images.shape[0], device=images.device, dtype=torch.long)
 
         if cfg.objective.prediction_type == "epsilon":
             target = noise

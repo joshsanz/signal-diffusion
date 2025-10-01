@@ -117,7 +117,9 @@ def train(
     adapter = registry.get(cfg.model.name)
 
     default_conditioning = "caption" if cfg.model.name.startswith("stable-diffusion") else "none"
-    conditioning_value = cfg.model.extras.get("conditioning", default_conditioning)
+    conditioning_value = cfg.model.conditioning
+    if conditioning_value is None:
+        conditioning_value = cfg.model.extras.get("conditioning", default_conditioning)
     conditioning = str(conditioning_value).strip().lower()
     if not conditioning:
         conditioning = default_conditioning
