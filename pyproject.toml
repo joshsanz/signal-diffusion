@@ -30,6 +30,9 @@ dependencies = [
     "diffusers>=0.35.1",
     "ipywidgets>=8.1.7",
     "coloredlogs>=15.0.1",
+    "xformers>=0.0.32.post2",
+    "transformers>=4.56.2",
+    "peft>=0.17.1",
 ]
 
 [project.optional-dependencies]

@@ -1,13 +1,12 @@
-# Example configuration for DiT training on the Oxford Flowers dataset.
-
+# Example configuration for multi-task classifier training.
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
 
 [dataset]
-name = "/data/data/signal-diffusion/flowers-102-categories"
+name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
 train_split = "train"
-val_split = ""
-batch_size = 16
+val_split = "val"
+batch_size = 32
 num_workers = 4
 resolution = 64
 center_crop = true
@@ -56,7 +55,7 @@ gradient_accumulation_steps = 1
 validation_interval = "epoch"
 log_every_steps = 10
 checkpoint_interval = 0
-mixed_precision = "bf16"
+mixed_precision = "fp16"
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
 
@@ -65,7 +64,3 @@ tensorboard = true
 log_dir = "runs/diffusion/tensorboard"
 # wandb_project = "your-project-name"
 # wandb_run_name = "baseline"
-
-[inference]
-denoising_steps = 20
-cfg_scale = 7.5

@@ -185,7 +185,7 @@ def build_dataloaders(
             raise FileNotFoundError(
                 f"Unable to resolve dataset path for identifier '{cfg.identifier}'"
             )
-        ds = load_dataset("imagefolder", data_dir=str(path))
+        ds = load_dataset(path=str(path))
 
     if isinstance(ds, DatasetDict):
         train_dataset = ds[cfg.train_split]

@@ -2306,6 +2306,27 @@ wheels = [
 ]
 
 [[package]]
+name = "peft"
+version = "0.17.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/70/b8/2e79377efaa1e5f0d70a497db7914ffd355846e760ffa2f7883ab0f600fb/peft-0.17.1.tar.gz", hash = "sha256:e6002b42517976c290b3b8bbb9829a33dd5d470676b2dec7cb4df8501b77eb9f", size = 568192, upload-time = "2025-08-21T09:25:22.703Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/fe/a2da1627aa9cb6310b6034598363bd26ac301c4a99d21f415b1b2855891e/peft-0.17.1-py3-none-any.whl", hash = "sha256:3d129d64def3d74779c32a080d2567e5f7b674e77d546e3585138216d903f99e", size = 504896, upload-time = "2025-08-21T09:25:18.974Z" },
+]
+
+[[package]]
 name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3197,6 +3218,7 @@ dependencies = [
     { name = "notebook" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "peft" },
     { name = "pillow" },
     { name = "scipy" },
     { name = "seaborn" },
@@ -3205,7 +3227,9 @@ dependencies = [
     { name = "torchaudio" },
     { name = "torchvision" },
     { name = "tqdm" },
+    { name = "transformers" },
     { name = "typer" },
+    { name = "xformers" },
 ]
 
 [package.optional-dependencies]
@@ -3278,6 +3302,7 @@ requires-dist = [
     { name = "notebook", specifier = ">=7.4.5" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "peft", specifier = ">=0.17.1" },
     { name = "pillow" },
     { name = "plotly", marker = "extra == 'fine-tuning'", specifier = ">=5.18" },
     { name = "pydub", marker = "extra == 'fine-tuning'", specifier = ">=0.25" },
@@ -3295,10 +3320,12 @@ requires-dist = [
     { name = "torchaudio" },
     { name = "torchvision" },
     { name = "tqdm" },
+    { name = "transformers", specifier = ">=4.56.2" },
     { name = "transformers", marker = "extra == 'fine-tuning'", specifier = ">=4.25.1" },
     { name = "triton", marker = "extra == 'fine-tuning'", specifier = ">=2.0.0" },
     { name = "typer" },
     { name = "wandb", marker = "extra == 'fine-tuning'", specifier = ">=0.15" },
+    { name = "xformers", specifier = ">=0.0.32.post2" },
     { name = "xformers", marker = "extra == 'fine-tuning'", specifier = ">=0.0.21" },
 ]
 provides-extras = ["fine-tuning", "metrics"]

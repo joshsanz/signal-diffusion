@@ -274,9 +274,7 @@ def train(
                     train_loss = log_payload.get("train/loss")
                     progress_bar.update(1)
                     if train_loss is not None:
-                        progress_bar.set_postfix(step=global_step, train_loss=f"{float(train_loss):.4f}")
-                    else:
-                        progress_bar.set_postfix(step=global_step)
+                        progress_bar.set_postfix(train_loss=f"{float(train_loss):.4f}")
                 if cfg.training.checkpoint_interval and global_step % cfg.training.checkpoint_interval == 0:
                     save_dir = run_dir / f"checkpoint-{global_step}"
                     accelerator.save_state(str(save_dir))

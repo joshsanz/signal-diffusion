@@ -516,7 +516,7 @@ def write_readme(
         "  - signal-processing",
         "dataset_summary: |",
         f"  {summary}",
-        "configs:",
+        "configurations:",
         f"  - name: {args.bin_spacing}_bin_spacing",
         f"    description: Weighted copies using {args.bin_spacing} frequency bins",
         f"  - name: nsamps_{args.nsamps}",
