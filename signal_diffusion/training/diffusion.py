@@ -13,6 +13,7 @@ from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 from accelerate.utils import set_seed
 from diffusers.optimization import get_scheduler
+from tqdm.auto import tqdm
 
 from signal_diffusion.diffusion import load_diffusion_config
 from signal_diffusion.diffusion.data import build_dataloaders
@@ -235,11 +236,21 @@ def train(
             val_example_count if val_example_count is not None else "unknown",
         )
 
+    progress_bar = None
+    if accelerator.is_main_process:
+        progress_bar = tqdm(
+            total=max_train_steps,
+            desc=f"Epoch 1/{cfg.training.epochs}",
+            dynamic_ncols=True,
+        )
+
     global_step = 0
     for epoch in range(cfg.training.epochs):
         modules.denoiser.train()
         if accelerator.is_main_process:
             LOGGER.info("Epoch %d/%d", epoch + 1, cfg.training.epochs)
+            if progress_bar is not None:
+                progress_bar.set_description(f"Epoch {epoch + 1}/{cfg.training.epochs}")
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(modules.denoiser):
                 loss, metrics = adapter.training_step(accelerator, cfg, modules, batch)
@@ -259,6 +270,13 @@ def train(
                 accelerator.log(log_payload, step=global_step)
                 if logger is not None:
                     logger.log(global_step, log_payload)
+                if accelerator.is_main_process and progress_bar is not None:
+                    train_loss = log_payload.get("train/loss")
+                    progress_bar.update(1)
+                    if train_loss is not None:
+                        progress_bar.set_postfix(step=global_step, train_loss=f"{float(train_loss):.4f}")
+                    else:
+                        progress_bar.set_postfix(step=global_step)
                 if accelerator.is_main_process and (
                     global_step == 1 or global_step % max(1, cfg.training.log_every_steps) == 0
                 ):
@@ -312,6 +330,8 @@ def train(
         adapter.save_checkpoint(accelerator, cfg, modules, str(final_dir))
         LOGGER.info("Saved final checkpoint to %s", final_dir)
         LOGGER.info("Completed training after %d steps", global_step)
+        if progress_bar is not None:
+            progress_bar.close()
 
     if logger is not None:
         logger.close()
