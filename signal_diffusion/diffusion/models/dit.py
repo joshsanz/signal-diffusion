@@ -156,14 +156,20 @@ class DiTAdapter:
         z_t = scheduler.scale_noise(images, timesteps, noise)
         snr = get_snr(scheduler, timesteps, device=images.device)
 
-        class_labels = None
-        if batch.class_labels is not None and extras.num_classes > 0:
-            class_labels = batch.class_labels.to(images.device)
-            if extras.cfg_dropout > 0:
-                mask = torch.rand_like(class_labels, dtype=torch.float32) < extras.cfg_dropout
-                class_labels = class_labels.masked_fill(mask, extras.num_classes)
-        else:
-            class_labels = torch.zeros(images.shape[0], device=images.device, dtype=torch.long)
+        class_labels: torch.Tensor | None = None
+        if extras.num_classes > 0:
+            if batch.class_labels is not None:
+                class_labels = batch.class_labels.to(device=images.device, dtype=torch.long)
+                if extras.cfg_dropout > 0:
+                    mask = torch.rand(class_labels.shape, device=class_labels.device) < extras.cfg_dropout
+                    class_labels = class_labels.masked_fill(mask, extras.num_classes)
+            else:
+                class_labels = torch.full(
+                    (images.shape[0],),
+                    extras.num_classes,
+                    device=images.device,
+                    dtype=torch.long,
+                )
 
         if cfg.objective.prediction_type == "epsilon":
             target = noise
@@ -172,7 +178,7 @@ class DiTAdapter:
         else:
             raise ValueError(f"Unsupported prediction type {cfg.objective.prediction_type} for DiT")
 
-        model_pred = model(z_t, timesteps, y=class_labels).sample
+        model_pred = model(z_t, timestep=timesteps, class_labels=class_labels).sample
         loss = torch.nn.functional.mse_loss(model_pred.float(), target.float(), reduction="none")
         loss = loss.mean(dim=list(range(1, loss.ndim)))
         weights = apply_min_gamma_snr(
