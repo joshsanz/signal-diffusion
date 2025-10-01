@@ -8,19 +8,12 @@ from typing import Mapping
 import torch
 from accelerate import Accelerator
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
-from diffusers.loaders import AttnProcsLayers
-
-try:  # pragma: no cover - depends on diffusers version
-    from diffusers.models.cross_attention import LoRACrossAttnProcessor
-except ImportError as exc:  # pragma: no cover - explicit guidance for incompatible versions
-    raise ImportError(
-        "LoRA training requires diffusers>=0.14 with 'LoRACrossAttnProcessor' available"
-    ) from exc
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
 from signal_diffusion.diffusion.models.base import DiffusionAdapter, DiffusionModules, registry
+from signal_diffusion.log_setup import get_logger
 
 
 @dataclass(slots=True)
@@ -36,6 +29,7 @@ class StableDiffusionAdapterV15:
 
     def __init__(self) -> None:
         self._extras = StableDiffusionExtras()
+        self._logger = get_logger(__name__)
 
     def create_tokenizer(self, cfg: DiffusionConfig) -> CLIPTokenizer:
         pretrained = cfg.model.pretrained or "runwayml/stable-diffusion-v1-5"
@@ -62,6 +56,15 @@ class StableDiffusionAdapterV15:
         revision = cfg.model.revision
         self._extras = self._parse_extras(cfg)
 
+        if accelerator.is_main_process:
+            self._logger.info(
+                "Building Stable Diffusion v1.5 modules pretrained=%s revision=%s train_text_encoder=%s lora_enabled=%s",
+                pretrained,
+                revision,
+                self._extras.train_text_encoder,
+                cfg.model.lora.enabled,
+            )
+
         text_encoder = CLIPTextModel.from_pretrained(pretrained, subfolder="text_encoder", revision=revision)
         vae = AutoencoderKL.from_pretrained(pretrained, subfolder="vae", revision=revision)
         unet = UNet2DConditionModel.from_pretrained(pretrained, subfolder="unet", revision=revision)
@@ -73,9 +76,13 @@ class StableDiffusionAdapterV15:
 
         noise_scheduler = DDPMScheduler.from_pretrained(pretrained, subfolder="scheduler", revision=revision)
         noise_scheduler.register_to_config(prediction_type="epsilon")
+        if accelerator.is_main_process:
+            self._logger.info("Using %s scheduler with prediction_type=epsilon", type(noise_scheduler).__name__)
 
         if cfg.training.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
+            if accelerator.is_main_process:
+                self._logger.info("Enabled TF32 matmul optimizations")
 
         unet.requires_grad_(not cfg.model.lora.enabled)
         text_encoder.requires_grad_(self._extras.train_text_encoder)
@@ -91,36 +98,42 @@ class StableDiffusionAdapterV15:
         vae.to(accelerator.device, dtype=weight_dtype)
         text_encoder.to(accelerator.device, dtype=weight_dtype)
 
+        if accelerator.is_main_process:
+            self._logger.info(
+                "Stable Diffusion modules moved to %s with dtype=%s", accelerator.device, str(weight_dtype)
+            )
+
         trainable_params: list[torch.nn.Parameter] = []
         clip_grad_params = None
 
         if cfg.model.lora.enabled:
-            lora_attn_procs = {}
-            for name in unet.attn_processors.keys():
-                cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-                if name.startswith("mid_block"):
-                    hidden_size = unet.config.block_out_channels[-1]
-                elif name.startswith("up_blocks"):
-                    block_id = int(name[len("up_blocks.")])
-                    hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-                elif name.startswith("down_blocks"):
-                    block_id = int(name[len("down_blocks.")])
-                    hidden_size = unet.config.block_out_channels[block_id]
-                else:
-                    continue
+            try:
+                from peft import LoraConfig
+            except ImportError as exc:  # pragma: no cover - helpful guidance when PEFT is missing
+                raise ImportError(
+                    "LoRA training now depends on PEFT. Install it with 'pip install peft' to enable LoRA adapters."
+                ) from exc
 
-            lora_attn_procs[name] = LoRACrossAttnProcessor(
-                hidden_size=hidden_size,
-                cross_attention_dim=cross_attention_dim,
-                rank=cfg.model.lora.rank,
-                network_alpha=cfg.model.lora.alpha,
-                dropout=cfg.model.lora.dropout,
+            lora_config = LoraConfig(
+                r=int(cfg.model.lora.rank),
+                lora_alpha=float(cfg.model.lora.alpha),
+                target_modules=list(cfg.model.lora.target_modules),
+                lora_dropout=float(cfg.model.lora.dropout),
+                bias=str(cfg.model.lora.bias),
             )
-            unet.set_attn_processor(lora_attn_procs)
-            attn_layers = AttnProcsLayers(unet.attn_processors)
-            lora_params = list(attn_layers.parameters())
-            trainable_params.extend(lora_params)
-            clip_grad_params = lora_params
+
+            unet.add_adapter(lora_config)
+            unet.enable_adapters()
+
+            trainable_params = [param for param in unet.parameters() if param.requires_grad]
+            clip_grad_params = trainable_params
+            if accelerator.is_main_process:
+                self._logger.info(
+                    "Configured LoRA adapters rank=%d alpha=%.2f targets=%s",
+                    cfg.model.lora.rank,
+                    cfg.model.lora.alpha,
+                    list(cfg.model.lora.target_modules),
+                )
         else:
             unet_params = list(unet.parameters())
             trainable_params.extend(unet_params)
@@ -134,6 +147,10 @@ class StableDiffusionAdapterV15:
                 clip_grad_params = list(clip_grad_params) + text_params
             else:
                 clip_grad_params = text_params
+            if accelerator.is_main_process:
+                self._logger.info(
+                    "Text encoder training enabled with lr_scale=%.3f", self._extras.text_encoder_lr_scale
+                )
 
         modules = DiffusionModules(
             denoiser=unet,
@@ -205,7 +222,7 @@ class StableDiffusionAdapterV15:
         output_path.mkdir(parents=True, exist_ok=True)
         accelerator.print(f"Saving Stable Diffusion weights to {output_path}")
         if cfg.model.lora.enabled:
-            modules.denoiser.save_attn_procs(str(output_path))
+            modules.denoiser.save_lora_adapter(str(output_path))
         else:
             modules.denoiser.save_pretrained(str(output_path))
 

@@ -1,7 +1,7 @@
 """DiT adapter supporting noise prediction and flow matching objectives."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Mapping
 
 import torch
@@ -19,6 +19,7 @@ from signal_diffusion.diffusion.objectives import (
     sample_timestep_logitnorm,
     verify_scheduler,
 )
+from signal_diffusion.log_setup import get_logger
 
 
 @dataclass(slots=True)
@@ -37,6 +38,7 @@ class DiTAdapter:
 
     def __init__(self) -> None:
         self._extras = DiTExtras()
+        self._logger = get_logger(__name__)
 
     def create_tokenizer(self, cfg: DiffusionConfig):
         conditioning_value = cfg.model.conditioning
@@ -85,6 +87,15 @@ class DiTAdapter:
     ) -> DiffusionModules:
         self._extras = self._parse_extras(cfg)
 
+        if accelerator.is_main_process:
+            self._logger.info(
+                "Building DiT modules pretrained=%s conditioning=%s latent_space=%s",
+                bool(cfg.model.pretrained),
+                self._extras.conditioning,
+                self._extras.latent_space,
+            )
+            self._logger.info("DiT extras=%s", asdict(self._extras))
+
         if self._extras.latent_space and not self._extras.vae:
             raise ValueError("DiT latent_space requires 'vae' path in model extras")
 
@@ -130,9 +141,19 @@ class DiTAdapter:
         noise_scheduler.register_to_config(prediction_type=cfg.objective.prediction_type)
         verify_scheduler(noise_scheduler)
 
+        if accelerator.is_main_process:
+            self._logger.info(
+                "Noise scheduler %s with %d timesteps and prediction_type=%s",
+                type(noise_scheduler).__name__,
+                cfg.objective.flow_match_timesteps,
+                cfg.objective.prediction_type,
+            )
+
         vae = None
         if self._extras.latent_space and self._extras.vae:
             vae = AutoencoderKL.from_pretrained(self._extras.vae)
+            if accelerator.is_main_process:
+                self._logger.info("Loaded VAE from %s", self._extras.vae)
 
         weight_dtype = torch.float32
         if accelerator.mixed_precision == "fp16":
@@ -144,6 +165,11 @@ class DiTAdapter:
         if vae is not None:
             vae.requires_grad_(False)
             vae.to(accelerator.device, dtype=weight_dtype)
+
+        if accelerator.is_main_process:
+            self._logger.info(
+                "DiT model moved to %s with dtype=%s", accelerator.device, str(weight_dtype)
+            )
 
         params = list(model.parameters())
         modules = DiffusionModules(

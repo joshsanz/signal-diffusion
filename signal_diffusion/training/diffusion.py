@@ -17,9 +17,13 @@ from diffusers.optimization import get_scheduler
 from signal_diffusion.diffusion import load_diffusion_config
 from signal_diffusion.diffusion.data import build_dataloaders
 from signal_diffusion.diffusion.models import registry
+from signal_diffusion.log_setup import get_logger
 
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+
+LOGGER = get_logger(__name__)
 
 
 class DiffusionLogger:
@@ -145,6 +149,24 @@ def train(
     )
     set_seed(cfg.training.seed)
 
+    if accelerator.is_main_process:
+        LOGGER.info("Launching diffusion training run")
+        LOGGER.info("config=%s output_dir=%s", config_path, run_dir)
+        LOGGER.info(
+            "model=%s conditioning=%s mixed_precision=%s",
+            cfg.model.name,
+            conditioning,
+            cfg.training.mixed_precision,
+        )
+        LOGGER.info(
+            "epochs=%d grad_accum=%d max_train_steps=%s batch_size=%d eval_batch_size=%d",
+            cfg.training.epochs,
+            cfg.training.gradient_accumulation_steps,
+            cfg.training.max_train_steps or "auto",
+            cfg.dataset.batch_size,
+            cfg.dataset.effective_eval_batch_size(),
+        )
+
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
 
@@ -190,10 +212,34 @@ def train(
     if accelerator.is_main_process:
         with (run_dir / "config.json").open("w", encoding="utf-8") as fp:
             json.dump(asdict(cfg), fp, default=str, indent=2)
+        train_example_count = None
+        train_dataset = getattr(train_loader, "dataset", None)
+        if train_dataset is not None:
+            try:
+                train_example_count = len(train_dataset)
+            except TypeError:
+                train_example_count = None
+        val_example_count = None
+        if val_loader is not None:
+            val_dataset = getattr(val_loader, "dataset", None)
+            if val_dataset is not None:
+                try:
+                    val_example_count = len(val_dataset)
+                except TypeError:
+                    val_example_count = None
+        LOGGER.info(
+            "train_batches=%d val_batches=%s train_samples=%s val_samples=%s",
+            len(train_loader),
+            len(val_loader) if val_loader is not None else 0,
+            train_example_count if train_example_count is not None else "unknown",
+            val_example_count if val_example_count is not None else "unknown",
+        )
 
     global_step = 0
     for epoch in range(cfg.training.epochs):
         modules.denoiser.train()
+        if accelerator.is_main_process:
+            LOGGER.info("Epoch %d/%d", epoch + 1, cfg.training.epochs)
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(modules.denoiser):
                 loss, metrics = adapter.training_step(accelerator, cfg, modules, batch)
@@ -213,10 +259,31 @@ def train(
                 accelerator.log(log_payload, step=global_step)
                 if logger is not None:
                     logger.log(global_step, log_payload)
+                if accelerator.is_main_process and (
+                    global_step == 1 or global_step % max(1, cfg.training.log_every_steps) == 0
+                ):
+                    train_loss = log_payload.get("train/loss")
+                    extra_metrics = {k: v for k, v in log_payload.items() if k != "train/loss"}
+                    if train_loss is not None:
+                        loss_value = float(train_loss)
+                    else:
+                        loss_value = float("nan")
+                    if extra_metrics:
+                        LOGGER.info(
+                            "step %d/%d train_loss=%.4f metrics=%s",
+                            global_step,
+                            max_train_steps,
+                            loss_value,
+                            extra_metrics,
+                        )
+                    else:
+                        LOGGER.info("step %d/%d train_loss=%.4f", global_step, max_train_steps, loss_value)
 
                 if cfg.training.checkpoint_interval and global_step % cfg.training.checkpoint_interval == 0:
                     save_dir = run_dir / f"checkpoint-{global_step}"
                     accelerator.save_state(str(save_dir))
+                    if accelerator.is_main_process:
+                        LOGGER.info("Saved checkpoint at step %d to %s", global_step, save_dir)
 
                 if val_loader is not None and _should_validate(global_step, step, len(train_loader), cfg.training.validation_interval):
                     modules.denoiser.eval()
@@ -230,6 +297,8 @@ def train(
                     accelerator.log(metrics_map, step=global_step)
                     if logger is not None:
                         logger.log(global_step, metrics_map)
+                    if accelerator.is_main_process:
+                        LOGGER.info("Validation step %d metrics=%s", global_step, metrics_map)
                     modules.denoiser.train()
 
             if global_step >= max_train_steps:
@@ -241,6 +310,8 @@ def train(
         final_dir = run_dir / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
         adapter.save_checkpoint(accelerator, cfg, modules, str(final_dir))
+        LOGGER.info("Saved final checkpoint to %s", final_dir)
+        LOGGER.info("Completed training after %d steps", global_step)
 
     if logger is not None:
         logger.close()
