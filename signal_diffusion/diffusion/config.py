@@ -30,8 +30,7 @@ class DatasetConfig:
     max_eval_samples: int | None = None
     num_classes: int = 0
 
-    def effective_eval_batch_size(self) -> int:
-        return self.eval_batch_size or self.batch_size
+
 
 
 @dataclass(slots=True)
@@ -132,6 +131,7 @@ class TrainingConfig:
     eval_mmd_fallback_ntrain: int = 0
     eval_strategy: str = "epoch"
     eval_num_steps: int = 0
+    eval_batch_size: int = 0
 
 
 @dataclass(slots=True)
@@ -316,11 +316,7 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
     output_dir = _path_from_value(section.get("output_dir"))
     resume = _path_from_value(section.get("resume"))
     strategy_value = section.get("eval_strategy", "epoch")
-    if strategy_value is None:
-        strategy_value = "epoch"
     strategy = str(strategy_value).strip().lower() or "epoch"
-    if strategy == "validation":
-        strategy = "epoch"
 
     return TrainingConfig(
         seed=int(section.get("seed", 42)),
@@ -344,6 +340,7 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         eval_mmd_fallback_ntrain=int(section.get("eval_mmd_fallback_ntrain", 0)),
         eval_strategy=strategy,
         eval_num_steps=int(section.get("eval_num_steps", 0)),
+        eval_batch_size=int(section.get("eval_batch_size", 0)),
     )
 
 

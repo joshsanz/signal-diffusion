@@ -71,6 +71,20 @@ class DiffusionLogger:
         if self._wandb_run is not None:
             self._wandb_run.log(dict(metrics), step=step)
 
+    def log_image_grid(self, tag: str, images: torch.Tensor, step: int, **kwargs: Any) -> None:
+        from torchvision.utils import make_grid
+
+        grid = make_grid(images, **kwargs)
+        if self._tensorboard is not None:
+            self._tensorboard.add_image(tag, grid, step)
+        if self._wandb_run is not None:
+            try:
+                import wandb  # type: ignore
+
+                self._wandb_run.log({tag: wandb.Image(grid)}, step=step)
+            except ImportError:  # pragma: no cover
+                pass
+
     def close(self) -> None:
         if self._tensorboard is not None:
             self._tensorboard.flush()
@@ -114,6 +128,7 @@ def _run_evaluation(
     val_loader,
     run_dir: Path,
     global_step: int,
+    logger: Optional[DiffusionLogger] = None,
 ):
     eval_examples = getattr(cfg.training, "eval_num_examples", 0) or 0
     eval_mmd_samples = getattr(cfg.training, "eval_mmd_samples", 0) or 0
@@ -123,18 +138,42 @@ def _run_evaluation(
     num_generate = max(eval_examples, eval_mmd_samples)
     num_generate = max(1, num_generate)
 
+    eval_gen_seed = getattr(cfg.training, "eval_gen_seed", None)
+    generator = None
+    if eval_gen_seed is not None:
+        generator = torch.Generator(device=accelerator.device).manual_seed(eval_gen_seed)
+
+    eval_batch_size = cfg.training.eval_batch_size or cfg.dataset.batch_size
+    num_batches = math.ceil(num_generate / eval_batch_size)
+
     was_training = modules.denoiser.training
     modules.denoiser.eval()
+    generated_samples = []
     try:
         with torch.no_grad():
-            generated = adapter.generate_samples(
-                accelerator,
-                cfg,
-                modules,
-                num_generate,
-                denoising_steps=cfg.inference.denoising_steps,
-                cfg_scale=cfg.inference.cfg_scale,
+            pbar = tqdm(
+                range(num_batches),
+                desc="Generating samples",
+                disable=not accelerator.is_main_process,
+                dynamic_ncols=True,
+                leave=True,
             )
+            for i in pbar:
+                batch_size = min(eval_batch_size, num_generate - i * eval_batch_size)
+                if batch_size <= 0:
+                    continue
+
+                generated_batch = adapter.generate_samples(
+                    accelerator,
+                    cfg,
+                    modules,
+                    batch_size,
+                    denoising_steps=cfg.inference.denoising_steps,
+                    cfg_scale=cfg.inference.cfg_scale,
+                    generator=generator,
+                )
+                generated_samples.append(generated_batch.cpu())
+        generated = torch.cat(generated_samples, dim=0)
     finally:
         if was_training:
             modules.denoiser.train()
@@ -150,6 +189,8 @@ def _run_evaluation(
         grid_images = generated[:eval_examples].detach().cpu()
         grid_path = run_dir / f"{global_step:06d}.jpg"
         save_image_grid(grid_images, grid_path, cols=4)
+        if logger is not None:
+            logger.log_image_grid("eval/generated_samples", grid_images, global_step, nrow=4)
 
     if eval_mmd_samples > 0:
         gen_for_kid = generated[:eval_mmd_samples]
@@ -241,7 +282,7 @@ def train(
             cfg.training.gradient_accumulation_steps,
             cfg.training.max_train_steps or "auto",
             cfg.dataset.batch_size,
-            cfg.dataset.effective_eval_batch_size(),
+            cfg.training.eval_batch_size or cfg.dataset.batch_size,
         )
 
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
@@ -311,6 +352,26 @@ def train(
             train_example_count if train_example_count is not None else "unknown",
             val_example_count if val_example_count is not None else "unknown",
         )
+
+    if accelerator.is_main_process:
+        LOGGER.info("Running initial evaluation...")
+        eval_metrics = _run_evaluation(
+            accelerator=accelerator,
+            adapter=adapter,
+            cfg=cfg,
+            modules=modules,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            run_dir=run_dir,
+            global_step=0,
+            logger=logger,
+        )
+        if eval_metrics:
+            accelerator.log(eval_metrics, step=0)
+            if logger is not None:
+                logger.log(0, eval_metrics)
+            LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
+    accelerator.wait_for_everyone()
 
     progress_bar = None
     if accelerator.is_main_process:
@@ -391,6 +452,7 @@ def train(
                             val_loader=val_loader,
                             run_dir=run_dir,
                             global_step=global_step,
+                            logger=logger,
                         )
                     accelerator.wait_for_everyone()
                     if eval_metrics and accelerator.is_main_process:
@@ -409,6 +471,26 @@ def train(
                 break
         if global_step >= max_train_steps:
             break
+
+    if accelerator.is_main_process:
+        LOGGER.info("Running final evaluation...")
+        eval_metrics = _run_evaluation(
+            accelerator=accelerator,
+            adapter=adapter,
+            cfg=cfg,
+            modules=modules,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            run_dir=run_dir,
+            global_step=global_step,
+            logger=logger,
+        )
+        if eval_metrics:
+            accelerator.log(eval_metrics, step=global_step)
+            if logger is not None:
+                logger.log(global_step, eval_metrics)
+            LOGGER.info("Final evaluation metrics: %s", eval_metrics)
+    accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
         final_dir = run_dir / "final"

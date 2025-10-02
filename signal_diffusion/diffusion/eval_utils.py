@@ -61,6 +61,7 @@ def compute_kid_score(
         kid=True,
         feature_extractor="dinov2-vit-s-14",
         feature_extractor_internal_dtype="float32",
+        verbose=False,
     )
     kid_mean = metrics["kernel_inception_distance_mean"]
     kid_std = metrics["kernel_inception_distance_std"]

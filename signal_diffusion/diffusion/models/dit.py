@@ -8,6 +8,7 @@ import torch
 from accelerate import Accelerator
 from diffusers import AutoencoderKL, DiTTransformer2DModel
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
@@ -138,7 +139,7 @@ class DiTAdapter:
             raise NotImplementedError("LoRA for DiT models is not yet implemented")
 
         noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.flow_match_timesteps)
-        noise_scheduler.register_to_config(prediction_type=cfg.objective.prediction_type)
+        # noise_scheduler.register_to_config(prediction_type=cfg.objective.prediction_type)
         verify_scheduler(noise_scheduler)
 
         if accelerator.is_main_process:
@@ -191,6 +192,7 @@ class DiTAdapter:
         *,
         denoising_steps: int,
         cfg_scale: float,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         del cfg_scale  # classifier-free guidance is unused for unconditional sampling.
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config)
@@ -205,17 +207,15 @@ class DiTAdapter:
             sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
         vae = modules.vae
 
-        sample = torch.randn((num_images, channels, sample_size, sample_size), device=device, dtype=dtype)
+        sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
         class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
 
-        from tqdm import tqdm
-
         with torch.no_grad():
-            for timestep in tqdm(scheduler.timesteps, desc="Generating samples"):
+            for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
                 model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
-                
+
                 denoiser_timestep = timestep.expand(model_input.shape[0])
                 model_output = modules.denoiser(
                     model_input, timestep=denoiser_timestep, class_labels=class_labels

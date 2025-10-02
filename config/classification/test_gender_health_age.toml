@@ -3,6 +3,7 @@
 [settings]
 # Resolve relative to repository root so smoke script can run anywhere
 config = "~/git/signal-diffusion/config/default.toml"
+trainer = "classification"
 
 [dataset]
 name = "parkinsons"

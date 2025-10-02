@@ -2,6 +2,7 @@
 
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
 
 [dataset]
 name = "/data/data/signal-diffusion/flowers-102-categories"
@@ -59,8 +60,10 @@ mixed_precision = "bf16"
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
 eval_strategy = "steps" # or "epoch"
-eval_num_steps = 10
+eval_num_steps = 100
 eval_num_examples = 8
+eval_gen_seed = 1234
+eval_batch_size = 512
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 

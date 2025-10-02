@@ -8,6 +8,7 @@ from typing import Mapping
 import torch
 from accelerate import Accelerator
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
+from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
@@ -173,6 +174,7 @@ class StableDiffusionAdapterV15:
         *,
         denoising_steps: int,
         cfg_scale: float,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         scheduler_cls = type(modules.noise_scheduler)
         scheduler = scheduler_cls.from_config(modules.noise_scheduler.config)
@@ -189,7 +191,7 @@ class StableDiffusionAdapterV15:
         height = int(cfg.model.sample_size or cfg.dataset.resolution)
         width = height
         latent_channels = getattr(modules.denoiser.config, 'in_channels', 4)
-        latents = torch.randn((num_images, latent_channels, height // 8, width // 8), device=device, dtype=dtype)
+        latents = torch.randn((num_images, latent_channels, height // 8, width // 8), generator=generator, device=device, dtype=dtype)
         if hasattr(scheduler, 'init_noise_sigma'):
             latents = latents * scheduler.init_noise_sigma
 
@@ -202,7 +204,7 @@ class StableDiffusionAdapterV15:
             uncond_embeddings = text_encoder(uncond_inputs.input_ids.to(device))[0]
             prompt_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
-            for timestep in scheduler.timesteps:
+            for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
                 latent_model_input = torch.cat([latents, latents])
                 if hasattr(scheduler, 'scale_model_input'):
                     latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)

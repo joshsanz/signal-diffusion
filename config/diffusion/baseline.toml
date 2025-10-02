@@ -1,6 +1,7 @@
 # Example configuration for multi-task classifier training.
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
 
 [dataset]
 name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"

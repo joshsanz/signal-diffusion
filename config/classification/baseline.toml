@@ -3,6 +3,7 @@
 [settings]
 # Path to the TOML settings file describing dataset locations.
 config = "config/default.toml"
+trainer = "classification"
 
 [dataset]
 name = "parkinsons"
