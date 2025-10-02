@@ -77,6 +77,9 @@ class MetricsLogger:
         self._tensorboard = None
         self._wandb_run = None
 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"{training_cfg.run_name}-{timestamp}" if training_cfg.run_name else None
+
         if training_cfg.tensorboard:
             try:
                 from torch.utils.tensorboard import SummaryWriter
@@ -85,6 +88,8 @@ class MetricsLogger:
                     "TensorBoard logging requested but 'torch.utils.tensorboard' is unavailable"
                 ) from exc
             log_dir = training_cfg.log_dir or (run_dir / "tensorboard")
+            if run_name:
+                log_dir = log_dir / run_name
             log_dir.mkdir(parents=True, exist_ok=True)
             self._tensorboard = SummaryWriter(log_dir=str(log_dir))
 
@@ -97,8 +102,9 @@ class MetricsLogger:
                 "project": training_cfg.wandb_project,
                 "dir": str(run_dir),
             }
-            if training_cfg.wandb_run_name:
-                init_kwargs["name"] = training_cfg.wandb_run_name
+            if run_name:
+                init_kwargs["name"] = run_name
+
             if training_cfg.wandb_entity:
                 init_kwargs["entity"] = training_cfg.wandb_entity
             if training_cfg.wandb_tags:
@@ -196,9 +202,9 @@ class TrainingConfig:
     log_dir: Path | None = None
     tensorboard: bool = False
     wandb_project: str | None = None
-    wandb_run_name: str | None = None
     wandb_entity: str | None = None
     wandb_tags: tuple[str, ...] = ()
+    run_name: str | None = None
     checkpoint_every: int = 0
     task_weights: dict[str, float] = field(default_factory=dict)
     use_amp: bool = False
@@ -309,9 +315,9 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         log_dir=_optional_path(training_section.get("log_dir"), base_dir),
         tensorboard=bool(training_section.get("tensorboard", False)),
         wandb_project=training_section.get("wandb_project"),
-        wandb_run_name=training_section.get("wandb_run_name"),
         wandb_entity=training_section.get("wandb_entity"),
         wandb_tags=tuple(training_section.get("wandb_tags", ())),
+        run_name=training_section.get("run_name"),
         checkpoint_every=int(training_section.get("checkpoint_every", 0)),
         task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
         use_amp=bool(training_section.get("use_amp", False)),
@@ -870,8 +876,11 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
     base = config.training.output_dir or (config.path.parent / "runs")
     base = base if base.is_absolute() else base.resolve()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    task_part = "-".join(config.dataset.tasks)
-    run_name = f"{config.dataset.name}-{config.model.backbone}-{task_part}-{timestamp}"
+    if config.training.run_name:
+        run_name = f"{config.training.run_name}-{timestamp}"
+    else:
+        task_part = "-".join(config.dataset.tasks)
+        run_name = f"{config.dataset.name}-{config.model.backbone}-{task_part}-{timestamp}"
     run_dir = base / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 

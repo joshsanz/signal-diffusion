@@ -182,6 +182,58 @@ class DiTAdapter:
         )
         return modules
 
+    def generate_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+    ) -> torch.Tensor:
+        del cfg_scale  # classifier-free guidance is unused for unconditional sampling.
+        scheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config)
+        device = accelerator.device
+        dtype = modules.weight_dtype
+        scheduler.set_timesteps(denoising_steps, device=device)
+
+        model_config = getattr(modules.denoiser, "config", None)
+        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
+        sample_size = getattr(model_config, "sample_size", None)
+        if sample_size is None:
+            sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
+        vae = modules.vae
+
+        sample = torch.randn((num_images, channels, sample_size, sample_size), device=device, dtype=dtype)
+        class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
+
+        from tqdm import tqdm
+
+        with torch.no_grad():
+            for timestep in tqdm(scheduler.timesteps, desc="Generating samples"):
+                model_input = sample
+                if hasattr(scheduler, "scale_model_input"):
+                    model_input = scheduler.scale_model_input(model_input, timestep)
+                
+                denoiser_timestep = timestep.expand(model_input.shape[0])
+                model_output = modules.denoiser(
+                    model_input, timestep=denoiser_timestep, class_labels=class_labels
+                ).sample
+
+                step_output = scheduler.step(model_output, timestep, sample)
+                sample = getattr(step_output, "prev_sample", step_output[0] if isinstance(step_output, tuple) else step_output)
+
+        if self._extras.latent_space:
+            if vae is None:
+                raise RuntimeError("VAE expected for latent-space DiT sampling")
+            sample = sample / getattr(vae.config, "scaling_factor", 1.0)
+            with torch.no_grad():
+                sample = vae.decode(sample.to(device=device, dtype=vae.dtype)).sample
+
+        return sample.to(dtype=torch.float32).detach()
+
+
     def training_step(
         self,
         accelerator: Accelerator,

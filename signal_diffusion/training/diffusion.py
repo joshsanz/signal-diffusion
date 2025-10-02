@@ -17,6 +17,7 @@ from tqdm.auto import tqdm
 
 from signal_diffusion.diffusion import load_diffusion_config
 from signal_diffusion.diffusion.data import build_dataloaders
+from signal_diffusion.diffusion.eval_utils import compute_kid_score, save_image_grid
 from signal_diffusion.diffusion.models import registry
 from signal_diffusion.log_setup import get_logger
 
@@ -27,6 +28,8 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 LOGGER = get_logger(__name__)
 
 
+from datetime import datetime
+
 class DiffusionLogger:
     """Minimal logger supporting TensorBoard and Weights & Biases."""
 
@@ -34,12 +37,16 @@ class DiffusionLogger:
         self._tensorboard = None
         self._wandb_run = None
 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"{logging_cfg.run_name}-{timestamp}" if logging_cfg.run_name else timestamp
+
         if logging_cfg.tensorboard:
             try:
                 from torch.utils.tensorboard import SummaryWriter
             except ImportError as exc:  # pragma: no cover - optional dependency
                 raise RuntimeError("TensorBoard logging requested but not installed") from exc
             log_dir = logging_cfg.log_dir or (run_dir / "tensorboard")
+            log_dir = log_dir / run_name
             log_dir.mkdir(parents=True, exist_ok=True)
             self._tensorboard = SummaryWriter(str(log_dir))
 
@@ -51,9 +58,8 @@ class DiffusionLogger:
             init_kwargs: dict[str, Any] = {
                 "project": logging_cfg.wandb_project,
                 "dir": str(run_dir),
+                "name": run_name,
             }
-            if logging_cfg.wandb_run_name:
-                init_kwargs["name"] = logging_cfg.wandb_run_name
             if logging_cfg.wandb_entity:
                 init_kwargs["entity"] = logging_cfg.wandb_entity
             self._wandb_run = wandb.init(**init_kwargs)
@@ -99,13 +105,82 @@ def _build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg) -> torch.opt
     )
 
 
-def _should_validate(global_step: int, step_in_epoch: int, steps_per_epoch: int, interval) -> bool:
-    if interval is None:
-        return False
-    if interval == "epoch":
+def _run_evaluation(
+    accelerator: Accelerator,
+    adapter,
+    cfg,
+    modules,
+    train_loader,
+    val_loader,
+    run_dir: Path,
+    global_step: int,
+):
+    eval_examples = getattr(cfg.training, "eval_num_examples", 0) or 0
+    eval_mmd_samples = getattr(cfg.training, "eval_mmd_samples", 0) or 0
+    if eval_examples <= 0 and eval_mmd_samples <= 0:
+        return {}
+
+    num_generate = max(eval_examples, eval_mmd_samples)
+    num_generate = max(1, num_generate)
+
+    was_training = modules.denoiser.training
+    modules.denoiser.eval()
+    try:
+        with torch.no_grad():
+            generated = adapter.generate_samples(
+                accelerator,
+                cfg,
+                modules,
+                num_generate,
+                denoising_steps=cfg.inference.denoising_steps,
+                cfg_scale=cfg.inference.cfg_scale,
+            )
+    finally:
+        if was_training:
+            modules.denoiser.train()
+        else:
+            modules.denoiser.eval()
+
+    if generated.ndim != 4:
+        raise ValueError("Adapter.generate_samples must return a tensor shaped (N, C, H, W)")
+
+    metrics: dict[str, float] = {}
+
+    if eval_examples > 0:
+        grid_images = generated[:eval_examples].detach().cpu()
+        grid_path = run_dir / f"{global_step:06d}.jpg"
+        save_image_grid(grid_images, grid_path, cols=4)
+
+    if eval_mmd_samples > 0:
+        gen_for_kid = generated[:eval_mmd_samples]
+        if gen_for_kid.shape[0] == 0:
+            raise ValueError("Not enough generated samples to compute KID score")
+
+        if val_loader is not None:
+            ref_dataset = val_loader.dataset
+        else:
+            ref_dataset = train_loader.dataset
+
+        kid_mean, kid_std = compute_kid_score(gen_for_kid, ref_dataset)
+        metrics["eval/kid_mean"] = kid_mean
+        metrics["eval/kid_std"] = kid_std
+
+    return metrics
+
+
+def _should_evaluate(
+    global_step: int,
+    step_in_epoch: int,
+    steps_per_epoch: int,
+    training_cfg,
+) -> bool:
+    strategy = getattr(training_cfg, "eval_strategy", "epoch") or "epoch"
+    strategy = strategy.strip().lower()
+    if strategy in {"validation", "epoch"}:
         return step_in_epoch == (steps_per_epoch - 1)
-    if isinstance(interval, int) and interval > 0:
-        return global_step % interval == 0
+    if strategy == "steps":
+        interval = getattr(training_cfg, "eval_num_steps", 0) or 0
+        return interval > 0 and global_step > 0 and global_step % interval == 0
     return False
 
 
@@ -114,6 +189,7 @@ def train(
     config_path: Path = typer.Argument(..., help="Path to diffusion training TOML"),
     output_dir: Optional[Path] = typer.Option(None, help="Override the configured output directory"),
 ) -> None:
+    torch.multiprocessing.set_start_method('spawn', force=True)
     cfg = load_diffusion_config(config_path)
     run_dir = _resolve_output_dir(cfg, config_path, output_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -270,18 +346,23 @@ def train(
                 accelerator.log(log_payload, step=global_step)
                 if logger is not None:
                     logger.log(global_step, log_payload)
-                if accelerator.is_main_process and progress_bar is not None:
-                    train_loss = log_payload.get("train/loss")
-                    progress_bar.update(1)
-                    if train_loss is not None:
-                        progress_bar.set_postfix(train_loss=f"{float(train_loss):.4f}")
+
+                postfix_payload: dict[str, str] = {}
+                train_loss = log_payload.get("train/loss")
+                if train_loss is not None:
+                    postfix_payload["train_loss"] = f"{float(train_loss):.4f}"
+
                 if cfg.training.checkpoint_interval and global_step % cfg.training.checkpoint_interval == 0:
                     save_dir = run_dir / f"checkpoint-{global_step}"
                     accelerator.save_state(str(save_dir))
                     if accelerator.is_main_process:
                         LOGGER.info("Saved checkpoint at step %d to %s", global_step, save_dir)
 
-                if val_loader is not None and _should_validate(global_step, step, len(train_loader), cfg.training.validation_interval):
+                should_evaluate = _should_evaluate(
+                    global_step, step, len(train_loader), cfg.training
+                )
+
+                if should_evaluate and val_loader is not None:
                     modules.denoiser.eval()
                     val_losses: list[float] = []
                     with torch.no_grad():
@@ -296,6 +377,33 @@ def train(
                     if accelerator.is_main_process:
                         LOGGER.info("Validation step %d metrics=%s", global_step, metrics_map)
                     modules.denoiser.train()
+                    postfix_payload["val_loss"] = f"{mean_val:.4f}"
+
+                eval_metrics: dict[str, float] = {}
+                if should_evaluate:
+                    if accelerator.is_main_process:
+                        eval_metrics = _run_evaluation(
+                            accelerator=accelerator,
+                            adapter=adapter,
+                            cfg=cfg,
+                            modules=modules,
+                            train_loader=train_loader,
+                            val_loader=val_loader,
+                            run_dir=run_dir,
+                            global_step=global_step,
+                        )
+                    accelerator.wait_for_everyone()
+                    if eval_metrics and accelerator.is_main_process:
+                        accelerator.log(eval_metrics, step=global_step)
+                        if logger is not None:
+                            logger.log(global_step, eval_metrics)
+                        kid_score = eval_metrics.get("eval/kid_mean")
+                        if kid_score is not None:
+                            postfix_payload["kid"] = f"{kid_score:.4f}"
+                if accelerator.is_main_process and progress_bar is not None:
+                    progress_bar.update(1)
+                    if postfix_payload:
+                        progress_bar.set_postfix(**postfix_payload)
 
             if global_step >= max_train_steps:
                 break

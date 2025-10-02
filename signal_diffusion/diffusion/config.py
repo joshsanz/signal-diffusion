@@ -95,8 +95,16 @@ class LoggingConfig:
     tensorboard: bool = False
     log_dir: Path | None = None
     wandb_project: str | None = None
-    wandb_run_name: str | None = None
     wandb_entity: str | None = None
+    run_name: str | None = None
+
+
+@dataclass(slots=True)
+class InferenceConfig:
+    """Inference-time sampling configuration used during evaluation."""
+
+    denoising_steps: int = 50
+    cfg_scale: float = 7.5
 
 
 @dataclass(slots=True)
@@ -109,7 +117,6 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     epochs: int = 1
     max_train_steps: int | None = None
-    validation_interval: int | str | None = "epoch"
     log_every_steps: int = 10
     checkpoint_interval: int | None = None
     resume: str | None = None
@@ -120,6 +127,11 @@ class TrainingConfig:
     ema_update_after_step: int = 0
     allow_tf32: bool = True
     snr_gamma: float | None = None
+    eval_num_examples: int = 0
+    eval_mmd_samples: int = 0
+    eval_mmd_fallback_ntrain: int = 0
+    eval_strategy: str = "epoch"
+    eval_num_steps: int = 0
 
 
 @dataclass(slots=True)
@@ -133,16 +145,17 @@ class DiffusionConfig:
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
     settings_config: Path | None = None
     source_path: Path | None = None
 
 
-def _path_from_value(value: Any, base_dir: Path) -> Path | None:
+def _path_from_value(value: Any) -> Path | None:
     if value in (None, ""):
         return None
     path = Path(value).expanduser()
     if not path.is_absolute():
-        path = (base_dir / path).resolve()
+        path = (Path.cwd() / path).resolve()
     return path
 
 
@@ -155,11 +168,11 @@ def _load_section(mapping: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return data
 
 
-def _load_dataset(section: Mapping[str, Any], base_dir: Path) -> DatasetConfig:
+def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
     identifier = section.get("name") or section.get("identifier")
     if not identifier:
         raise ValueError("Dataset configuration requires 'name' or 'identifier'")
-    cache_dir = _path_from_value(section.get("cache_dir"), base_dir)
+    cache_dir = _path_from_value(section.get("cache_dir"))
 
     def _opt(column: str | None) -> str | None:
         if column in (None, ""):
@@ -277,22 +290,38 @@ def _load_scheduler(section: Mapping[str, Any] | None) -> SchedulerConfig:
     )
 
 
-def _load_logging(section: Mapping[str, Any] | None, base_dir: Path) -> LoggingConfig:
+def _load_logging(section: Mapping[str, Any] | None) -> LoggingConfig:
     if not section:
         return LoggingConfig()
-    log_dir = _path_from_value(section.get("log_dir"), base_dir)
+    log_dir = _path_from_value(section.get("log_dir"))
     return LoggingConfig(
         tensorboard=bool(section.get("tensorboard", False)),
         log_dir=log_dir,
         wandb_project=section.get("wandb_project"),
-        wandb_run_name=section.get("wandb_run_name"),
         wandb_entity=section.get("wandb_entity"),
+        run_name=section.get("run_name"),
     )
 
 
-def _load_training(section: Mapping[str, Any], base_dir: Path) -> TrainingConfig:
-    output_dir = _path_from_value(section.get("output_dir"), base_dir)
-    resume = _path_from_value(section.get("resume"), base_dir)
+def _load_inference(section: Mapping[str, Any] | None) -> InferenceConfig:
+    if not section:
+        return InferenceConfig()
+    return InferenceConfig(
+        denoising_steps=int(section.get("denoising_steps", 50)),
+        cfg_scale=float(section.get("cfg_scale", 7.5)),
+    )
+
+
+def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
+    output_dir = _path_from_value(section.get("output_dir"))
+    resume = _path_from_value(section.get("resume"))
+    strategy_value = section.get("eval_strategy", "epoch")
+    if strategy_value is None:
+        strategy_value = "epoch"
+    strategy = str(strategy_value).strip().lower() or "epoch"
+    if strategy == "validation":
+        strategy = "epoch"
+
     return TrainingConfig(
         seed=int(section.get("seed", 42)),
         output_dir=output_dir,
@@ -300,7 +329,6 @@ def _load_training(section: Mapping[str, Any], base_dir: Path) -> TrainingConfig
         gradient_accumulation_steps=int(section.get("gradient_accumulation_steps", 1)),
         epochs=int(section.get("epochs", 1)),
         max_train_steps=section.get("max_train_steps"),
-        validation_interval=section.get("validation_interval", "epoch"),
         log_every_steps=int(section.get("log_every_steps", 10)),
         checkpoint_interval=section.get("checkpoint_interval"),
         resume=str(resume) if resume else None,
@@ -311,6 +339,11 @@ def _load_training(section: Mapping[str, Any], base_dir: Path) -> TrainingConfig
         ema_update_after_step=int(section.get("ema_update_after_step", 0)),
         allow_tf32=bool(section.get("allow_tf32", True)),
         snr_gamma=section.get("snr_gamma"),
+        eval_num_examples=int(section.get("eval_num_examples", 0)),
+        eval_mmd_samples=int(section.get("eval_mmd_samples", 0)),
+        eval_mmd_fallback_ntrain=int(section.get("eval_mmd_fallback_ntrain", 0)),
+        eval_strategy=strategy,
+        eval_num_steps=int(section.get("eval_num_steps", 0)),
     )
 
 
@@ -321,17 +354,17 @@ def load_diffusion_config(path: str | Path) -> DiffusionConfig:
     with config_path.open("rb") as fp:
         mapping = tomllib.load(fp)
 
-    base_dir = config_path.parent
-    dataset_cfg = _load_dataset(_load_section(mapping, "dataset"), base_dir)
+    dataset_cfg = _load_dataset(_load_section(mapping, "dataset"))
     model_cfg = _load_model(_load_section(mapping, "model"))
     objective_cfg = _load_objective(_load_section(mapping, "objective"))
     optimizer_cfg = _load_optimizer(mapping.get("optimizer"))
     scheduler_cfg = _load_scheduler(mapping.get("scheduler"))
-    logging_cfg = _load_logging(mapping.get("logging"), base_dir)
-    training_cfg = _load_training(_load_section(mapping, "training"), base_dir)
+    logging_cfg = _load_logging(mapping.get("logging"))
+    training_cfg = _load_training(_load_section(mapping, "training"))
+    inference_cfg = _load_inference(mapping.get("inference"))
 
     settings_section = mapping.get("settings", {})
-    settings_config = _path_from_value(settings_section.get("config"), base_dir) if isinstance(settings_section, Mapping) else None
+    settings_config = _path_from_value(settings_section.get("config")) if isinstance(settings_section, Mapping) else None
 
     return DiffusionConfig(
         dataset=dataset_cfg,
@@ -341,6 +374,7 @@ def load_diffusion_config(path: str | Path) -> DiffusionConfig:
         scheduler=scheduler_cfg,
         training=training_cfg,
         logging=logging_cfg,
+        inference=inference_cfg,
         settings_config=settings_config,
         source_path=config_path,
     )

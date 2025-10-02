@@ -2,6 +2,7 @@
 from .config import (
     DatasetConfig,
     DiffusionConfig,
+    InferenceConfig,
     LoRAConfig,
     LoggingConfig,
     ModelConfig,
@@ -15,6 +16,7 @@ from .config import (
 __all__ = [
     "DatasetConfig",
     "DiffusionConfig",
+    "InferenceConfig",
     "LoRAConfig",
     "LoggingConfig",
     "ModelConfig",

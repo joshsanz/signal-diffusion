@@ -53,18 +53,22 @@ warmup_steps = 100
 seed = 42
 epochs = 1
 gradient_accumulation_steps = 1
-validation_interval = "epoch"
 log_every_steps = 10
 checkpoint_interval = 0
 mixed_precision = "bf16"
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
+eval_strategy = "steps" # or "epoch"
+eval_num_steps = 10
+eval_num_examples = 8
+eval_mmd_samples = 1000
+eval_mmd_fallback_ntrain = 5000
 
 [logging]
 tensorboard = true
 log_dir = "runs/diffusion/tensorboard"
+run_name = "flowers_testing"
 # wandb_project = "your-project-name"
-# wandb_run_name = "baseline"
 
 [inference]
 denoising_steps = 20

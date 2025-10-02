@@ -20,9 +20,8 @@ dropout = 0.3
 
 [training]
 tensorboard = false
-log_dir = "runs/tensorboard"
 # wandb_project = "your-project-name"
-# wandb_run_name = "baseline"
+# run_name = "baseline"
 epochs = 25
 max_steps = -1
 optimizer = "adamw"

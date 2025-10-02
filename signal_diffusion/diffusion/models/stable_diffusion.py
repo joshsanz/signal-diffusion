@@ -164,6 +164,59 @@ class StableDiffusionAdapterV15:
         )
         return modules
 
+    def generate_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+    ) -> torch.Tensor:
+        scheduler_cls = type(modules.noise_scheduler)
+        scheduler = scheduler_cls.from_config(modules.noise_scheduler.config)
+        device = accelerator.device
+        dtype = modules.weight_dtype
+        scheduler.set_timesteps(denoising_steps, device=device)
+
+        vae = modules.vae
+        text_encoder = modules.text_encoder
+        tokenizer = modules.tokenizer
+        if vae is None or text_encoder is None or tokenizer is None:
+            raise RuntimeError("Stable Diffusion sampling requires VAE, text encoder, and tokenizer")
+
+        height = int(cfg.model.sample_size or cfg.dataset.resolution)
+        width = height
+        latent_channels = getattr(modules.denoiser.config, 'in_channels', 4)
+        latents = torch.randn((num_images, latent_channels, height // 8, width // 8), device=device, dtype=dtype)
+        if hasattr(scheduler, 'init_noise_sigma'):
+            latents = latents * scheduler.init_noise_sigma
+
+        text_inputs = tokenizer([''] * num_images, padding='max_length', max_length=tokenizer.model_max_length, return_tensors='pt')
+        text_inputs = text_inputs.input_ids.to(device)
+
+        with torch.no_grad():
+            text_embeddings = text_encoder(text_inputs)[0]
+            uncond_inputs = tokenizer([''] * num_images, padding='max_length', max_length=tokenizer.model_max_length, return_tensors='pt')
+            uncond_embeddings = text_encoder(uncond_inputs.input_ids.to(device))[0]
+            prompt_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+
+            for timestep in scheduler.timesteps:
+                latent_model_input = torch.cat([latents, latents])
+                if hasattr(scheduler, 'scale_model_input'):
+                    latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)
+                noise_pred = modules.denoiser(latent_model_input, timestep, encoder_hidden_states=prompt_embeddings).sample
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                guidance = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
+                latents = scheduler.step(guidance, timestep, latents).prev_sample
+
+            latents = latents / getattr(vae.config, 'scaling_factor', 1.0)
+            images = vae.decode(latents.to(dtype=vae.dtype)).sample
+
+        return images.to(dtype=torch.float32).detach()
+
+
     def training_step(
         self,
         accelerator: Accelerator,

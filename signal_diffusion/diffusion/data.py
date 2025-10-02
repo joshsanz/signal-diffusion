@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
 
@@ -154,8 +155,8 @@ def _prepare_dataset(
     is_train: bool,
 ) -> Dataset:
     transform = _build_transforms(cfg, train=is_train)
-    preprocess = lambda batch: _preprocess(
-        batch,
+    preprocess = partial(
+        _preprocess,
         transform=transform,
         tokenizer=tokenizer,
         caption_column=caption_column,

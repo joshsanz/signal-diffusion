@@ -63,6 +63,18 @@ class DiffusionAdapter(Protocol):
     ) -> Mapping[str, float]:
         """Run validation for a batch and return scalar metrics."""
 
+    def generate_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+    ) -> torch.Tensor:
+        """Generate unconditional samples in ``[-1, 1]`` of shape ``(N, C, H, W)``."""
+
     def save_checkpoint(
         self,
         accelerator: Accelerator,

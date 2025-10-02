@@ -83,7 +83,7 @@ Set `[training.eval_strategy]` to control validation cadence (`epoch`, `steps`, 
 The training loop records total loss, per-task losses, and per-task accuracies in
 `history.json` under each run directory. Enable live dashboards by setting
 `tensorboard = true` (optionally `log_dir`) or by providing `wandb_project` (with
-optional `wandb_run_name`/`wandb_entity`) inside the `[training]` section of your
+optional `run_name`/`wandb_entity`) inside the `[training]` section of your
 configuration. When enabled, TensorBoard and Weights & Biases receive both the
 aggregate losses (`train/` and `val/`) and per-task breakdowns (e.g.
 `train/loss/task-name`).
