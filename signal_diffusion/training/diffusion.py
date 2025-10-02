@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 import torch
 import typer
 from accelerate import Accelerator
+from accelerate.utils import LoggerType
 from accelerate.utils import ProjectConfiguration
 from accelerate.utils import set_seed
 from diffusers.optimization import get_scheduler
@@ -28,72 +30,7 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 LOGGER = get_logger(__name__)
 
 
-from datetime import datetime
 
-class DiffusionLogger:
-    """Minimal logger supporting TensorBoard and Weights & Biases."""
-
-    def __init__(self, logging_cfg, run_dir: Path) -> None:
-        self._tensorboard = None
-        self._wandb_run = None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_name = f"{logging_cfg.run_name}-{timestamp}" if logging_cfg.run_name else timestamp
-
-        if logging_cfg.tensorboard:
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError("TensorBoard logging requested but not installed") from exc
-            log_dir = logging_cfg.log_dir or (run_dir / "tensorboard")
-            log_dir = log_dir / run_name
-            log_dir.mkdir(parents=True, exist_ok=True)
-            self._tensorboard = SummaryWriter(str(log_dir))
-
-        if logging_cfg.wandb_project:
-            try:
-                import wandb  # type: ignore
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError("Weights & Biases logging requested but not installed") from exc
-            init_kwargs: dict[str, Any] = {
-                "project": logging_cfg.wandb_project,
-                "dir": str(run_dir),
-                "name": run_name,
-            }
-            if logging_cfg.wandb_entity:
-                init_kwargs["entity"] = logging_cfg.wandb_entity
-            self._wandb_run = wandb.init(**init_kwargs)
-
-    def log(self, step: int, metrics: Mapping[str, float]) -> None:
-        if self._tensorboard is not None:
-            for key, value in metrics.items():
-                self._tensorboard.add_scalar(key, value, step)
-        if self._wandb_run is not None:
-            self._wandb_run.log(dict(metrics), step=step)
-
-    def log_image_grid(self, tag: str, images: torch.Tensor, step: int, **kwargs: Any) -> None:
-        from torchvision.utils import make_grid
-
-        grid = make_grid(images, **kwargs)
-        if self._tensorboard is not None:
-            self._tensorboard.add_image(tag, grid, step)
-        if self._wandb_run is not None:
-            try:
-                import wandb  # type: ignore
-
-                self._wandb_run.log({tag: wandb.Image(grid)}, step=step)
-            except ImportError:  # pragma: no cover
-                pass
-
-    def close(self) -> None:
-        if self._tensorboard is not None:
-            self._tensorboard.flush()
-            self._tensorboard.close()
-        if self._wandb_run is not None:
-            try:
-                self._wandb_run.finish()
-            except AttributeError:  # pragma: no cover - older wandb
-                pass
 
 
 def _resolve_output_dir(cfg, config_path: Path, override: Optional[Path]) -> Path:
@@ -128,7 +65,6 @@ def _run_evaluation(
     val_loader,
     run_dir: Path,
     global_step: int,
-    logger: Optional[DiffusionLogger] = None,
 ):
     eval_examples = getattr(cfg.training, "eval_num_examples", 0) or 0
     eval_mmd_samples = getattr(cfg.training, "eval_mmd_samples", 0) or 0
@@ -189,8 +125,11 @@ def _run_evaluation(
         grid_images = generated[:eval_examples].detach().cpu()
         grid_path = run_dir / f"{global_step:06d}.jpg"
         save_image_grid(grid_images, grid_path, cols=4)
-        if logger is not None:
-            logger.log_image_grid("eval/generated_samples", grid_images, global_step, nrow=4)
+        accelerator.log({"eval/generated_samples": grid_images}, step=global_step)
+        tb_tracker = accelerator.get_tracker("tensorboard")
+        print(tb_tracker)
+        if tb_tracker:
+            tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step) # type: ignore
 
     if eval_mmd_samples > 0:
         gen_for_kid = generated[:eval_mmd_samples]
@@ -207,6 +146,24 @@ def _run_evaluation(
         metrics["eval/kid_std"] = kid_std
 
     return metrics
+
+
+def _flatten_and_sanitize_hparams(config_dict: Any, prefix: str = "") -> dict:
+    hparams = {}
+    if not isinstance(config_dict, dict):
+        return hparams
+
+    for k, v in config_dict.items():
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            hparams.update(_flatten_and_sanitize_hparams(v, prefix=key))
+        elif isinstance(v, (str, int, float, bool)):
+            hparams[key] = v
+        elif isinstance(v, (list, tuple)):
+            # Convert lists/tuples of simple types to a string
+            if all(isinstance(item, (str, int, float, bool)) for item in v):
+                hparams[key] = str(v)
+    return hparams
 
 
 def _should_evaluate(
@@ -259,12 +216,43 @@ def train(
 
     tokenizer = adapter.create_tokenizer(cfg) if conditioning == "caption" else None
 
-    project_config = ProjectConfiguration(project_dir=str(run_dir), automatic_checkpoint_naming=True)
+    log_with = []
+    if getattr(cfg.logging, "tensorboard", False):
+        log_with.append(LoggerType.TENSORBOARD)
+    if getattr(cfg.logging, "wandb_project", None):
+        log_with.append("wandb")
+
+    # Initialize accelerator and logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"{cfg.logging.run_name}-{timestamp}" if cfg.logging.run_name else f"signal_diffusion-{timestamp}"
+    log_dir = str(cfg.logging.log_dir / run_name
+                  if cfg.logging.log_dir
+                  else run_dir / "tensorboard")
+    LOGGER.info(f"Tracking run name {run_name}")
+    LOGGER.info(f"Tracking log dir {log_dir}")
+    project_config = ProjectConfiguration(project_dir=str(run_dir),
+                                          logging_dir=log_dir,
+                                          automatic_checkpoint_naming=True,
+                                          total_limit=cfg.training.checkpoint_total_limit)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         mixed_precision=cfg.training.mixed_precision,
         project_config=project_config,
+        log_with=log_with if log_with else None,
     )
+
+    if accelerator.is_main_process and log_with:
+        # A simple dict of hyperparameters for logging
+        project_name = cfg.logging.wandb_project or "signal_diffusion"
+        hps = _flatten_and_sanitize_hparams(asdict(cfg))
+        accelerator.init_trackers(
+            project_name,
+            config=hps,
+            init_kwargs={
+                # "tensorboard": {"logging_dir": log_dir},
+                "wandb": {"run_name": run_name},
+            },
+        )
     set_seed(cfg.training.seed)
 
     if accelerator.is_main_process:
@@ -326,7 +314,7 @@ def train(
 
     modules.parameters = [param for group in optimizer.param_groups for param in group["params"]]
 
-    logger = DiffusionLogger(cfg.logging, run_dir) if accelerator.is_main_process else None
+
     if accelerator.is_main_process:
         with (run_dir / "config.json").open("w", encoding="utf-8") as fp:
             json.dump(asdict(cfg), fp, default=str, indent=2)
@@ -364,12 +352,9 @@ def train(
             val_loader=val_loader,
             run_dir=run_dir,
             global_step=0,
-            logger=logger,
         )
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
-            if logger is not None:
-                logger.log(0, eval_metrics)
             LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
     accelerator.wait_for_everyone()
 
@@ -405,8 +390,6 @@ def train(
                 if metrics:
                     log_payload.update({f"train/{k}": float(v) for k, v in metrics.items()})
                 accelerator.log(log_payload, step=global_step)
-                if logger is not None:
-                    logger.log(global_step, log_payload)
 
                 postfix_payload: dict[str, str] = {}
                 train_loss = log_payload.get("train/loss")
@@ -433,8 +416,6 @@ def train(
                     mean_val = sum(val_losses) / max(1, len(val_losses))
                     metrics_map = {"val/loss": mean_val}
                     accelerator.log(metrics_map, step=global_step)
-                    if logger is not None:
-                        logger.log(global_step, metrics_map)
                     if accelerator.is_main_process:
                         LOGGER.info("Validation step %d metrics=%s", global_step, metrics_map)
                     modules.denoiser.train()
@@ -452,13 +433,10 @@ def train(
                             val_loader=val_loader,
                             run_dir=run_dir,
                             global_step=global_step,
-                            logger=logger,
                         )
                     accelerator.wait_for_everyone()
                     if eval_metrics and accelerator.is_main_process:
                         accelerator.log(eval_metrics, step=global_step)
-                        if logger is not None:
-                            logger.log(global_step, eval_metrics)
                         kid_score = eval_metrics.get("eval/kid_mean")
                         if kid_score is not None:
                             postfix_payload["kid"] = f"{kid_score:.4f}"
@@ -483,12 +461,9 @@ def train(
             val_loader=val_loader,
             run_dir=run_dir,
             global_step=global_step,
-            logger=logger,
         )
         if eval_metrics:
             accelerator.log(eval_metrics, step=global_step)
-            if logger is not None:
-                logger.log(global_step, eval_metrics)
             LOGGER.info("Final evaluation metrics: %s", eval_metrics)
     accelerator.wait_for_everyone()
 
@@ -500,9 +475,6 @@ def train(
         LOGGER.info("Completed training after %d steps", global_step)
         if progress_bar is not None:
             progress_bar.close()
-
-    if logger is not None:
-        logger.close()
 
 
 if __name__ == "__main__":  # pragma: no cover

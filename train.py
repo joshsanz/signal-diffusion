@@ -2,8 +2,12 @@
 import argparse
 import os
 from pathlib import Path
-import tomllib
+from rich.traceback import install
 import sys
+import tomllib
+
+# Useful for debugging
+install(show_locals=True)
 
 # Add the project root to the Python path
 project_root = Path(__file__).resolve().parent
