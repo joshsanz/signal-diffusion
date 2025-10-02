@@ -31,6 +31,8 @@ log_every_batches = 10
 tensorboard = true
 eval_strategy = "epoch"
 checkpoint_every = 0
+checkpoint_total_limit = 3
+
 
 [training.task_weights]
 gender = 1.0

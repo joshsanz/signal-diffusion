@@ -206,6 +206,7 @@ class TrainingConfig:
     wandb_tags: tuple[str, ...] = ()
     run_name: str | None = None
     checkpoint_every: int = 0
+    checkpoint_total_limit: int | None = None
     task_weights: dict[str, float] = field(default_factory=dict)
     use_amp: bool = False
     metrics_summary_path: Path | None = None
@@ -319,6 +320,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         wandb_tags=tuple(training_section.get("wandb_tags", ())),
         run_name=training_section.get("run_name"),
         checkpoint_every=int(training_section.get("checkpoint_every", 0)),
+        checkpoint_total_limit=_optional_int(training_section.get("checkpoint_total_limit")),
         task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
         use_amp=bool(training_section.get("use_amp", False)),
         metrics_summary_path=_optional_path(training_section.get("metrics_summary_path"), base_dir),
@@ -598,6 +600,11 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
         if training_cfg.checkpoint_every and epoch % training_cfg.checkpoint_every == 0:
             torch.save(model.state_dict(), checkpoints_dir / f"epoch-{epoch:03d}.pt")
+            if training_cfg.checkpoint_total_limit is not None and training_cfg.checkpoint_total_limit > 0:
+                periodic_checkpoints = sorted(checkpoints_dir.glob("epoch-*.pt"))
+                while len(periodic_checkpoints) > training_cfg.checkpoint_total_limit:
+                    oldest_checkpoint = periodic_checkpoints.pop(0)
+                    oldest_checkpoint.unlink(missing_ok=True)
 
     last_checkpoint = checkpoints_dir / "last.pt"
     torch.save(model.state_dict(), last_checkpoint)

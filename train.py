@@ -37,7 +37,7 @@ def main():
 
     if trainer_type == "classification":
         from signal_diffusion.training.classification import load_experiment_config, train_from_config
-        
+
         experiment_config = load_experiment_config(config_path)
         if output_dir:
             experiment_config.training.output_dir = output_dir
@@ -45,7 +45,7 @@ def main():
 
     elif trainer_type == "diffusion":
         from signal_diffusion.training.diffusion import train as train_diffusion
-        
+
         train_diffusion(config_path=config_path, output_dir=output_dir)
 
     else:

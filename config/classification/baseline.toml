@@ -29,6 +29,8 @@ optimizer = "adamw"
 learning_rate = 3e-4
 weight_decay = 1e-4
 clip_grad_norm = 1.0
+checkpoint_total_limit = 3
+
 
 [training.task_weights]
 gender = 1.0

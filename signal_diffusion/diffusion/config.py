@@ -118,6 +118,7 @@ class TrainingConfig:
     max_train_steps: int | None = None
     log_every_steps: int = 10
     checkpoint_interval: int | None = None
+    checkpoint_total_limit: int | None = None
     resume: str | None = None
     gradient_clip_norm: float | None = 1.0
     ema_decay: float | None = 0.999
@@ -327,6 +328,7 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         max_train_steps=section.get("max_train_steps"),
         log_every_steps=int(section.get("log_every_steps", 10)),
         checkpoint_interval=section.get("checkpoint_interval"),
+        checkpoint_total_limit=section.get("checkpoint_total_limit"),
         resume=str(resume) if resume else None,
         gradient_clip_norm=section.get("gradient_clip_norm"),
         ema_decay=section.get("ema_decay"),

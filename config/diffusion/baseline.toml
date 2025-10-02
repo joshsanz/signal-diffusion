@@ -55,6 +55,8 @@ epochs = 1
 gradient_accumulation_steps = 1
 log_every_steps = 10
 checkpoint_interval = 0
+checkpoint_total_limit = 3
+
 mixed_precision = "fp16"
 gradient_clip_norm = 1.0
 snr_gamma = 5.0

@@ -217,7 +217,7 @@ def _should_evaluate(
 ) -> bool:
     strategy = getattr(training_cfg, "eval_strategy", "epoch") or "epoch"
     strategy = strategy.strip().lower()
-    if strategy in {"validation", "epoch"}:
+    if strategy == "epoch":
         return step_in_epoch == (steps_per_epoch - 1)
     if strategy == "steps":
         interval = getattr(training_cfg, "eval_num_steps", 0) or 0
