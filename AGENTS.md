@@ -10,20 +10,22 @@
 
 ## Project Structure & Module Organization
 
-- `fine_tuning/`: diffusion training, LoRA utilities, and launch configs (`run-cmd.sh` for reference commands).
-- `eeg_classification/`: EEG CNN/transformer trainers, sweeps, TensorBoard logs, and saved checkpoints under `bestmodels/`.
-- `common/` & `data_processing/`: shared preprocessing helpers, spectrogram builders, and metadata utilities.
+- `signal_diffusion/`: core package providing configs, dataloaders, models, and training loops.
+- `scripts/`: CLI wrappers for preprocessing, dataset weighting, and trainer launches.
+- `config/`: TOML configs for datasets, diffusion runs, and classification experiments.
+- `common/`: legacy utilities retained while older pipelines migrate into `signal_diffusion/`.
 - `metrics/`: evaluation scripts such as `calculate-metrics.py` plus VAE data tooling.
+- `eeg_classification/`: historical CNN/transformer trainers and archived checkpoints under `bestmodels/`.
 - `vae/`: STFT VAE prototypes (`train_vae.py`, decoder notebooks). Keep exploratory notebooks beside the modules they touch; store derived assets in `tensorboard_logs/` or dataset-specific folders.
 
 ## Build, Test, and Development Commands
 
 - `uv venv && source .venv/bin/activate`: create and activate the Python 3.10+ virtualenv managed by `uv`.
-- `uv pip install -r fine_tuning/requirements.txt`: install diffusion and LoRA dependencies (`metrics/requirements.txt` for metrics-only work).
-- `uv run accelerate launch fine_tuning/train_text_to_image.py ...`: kick off full diffusion training; copy baseline flags from `run-cmd.sh`.
-- `uv run python fine_tuning/infer_text_to_image_lora.py --help`: inspect LoRA inference options before running with custom weights.
-- `uv run python eeg_classification/transformer_classification_2.0.py`: train the EEG transformer (ensure dataset paths are parameterized).
-- `uv run tensorboard --logdir eeg_classification/tensorboard_logs`: monitor experiments and metric trends.
+- `uv sync [--group metrics|--group dev]`: install base dependencies plus optional extras.
+- `uv run python scripts/preprocess_data.py --help`: inspect preprocessing options before generating spectrograms.
+- `uv run python -m signal_diffusion.training.diffusion config/diffusion/flowers.toml --output-dir runs/diffusion/flowers`: launch diffusion training.
+- `uv run python -m signal_diffusion.training.classification config/classification/test_gender_health_age.toml --output-dir runs/classification/baseline`: train the EEG classifier with the unified entry point.
+- `uv run tensorboard --logdir runs`: monitor experiments and metric trends.
 
 ## Coding Style & Naming Conventions
 
