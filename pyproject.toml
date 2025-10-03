@@ -33,8 +33,17 @@ dependencies = [
     "xformers>=0.0.32.post2",
     "transformers>=4.56.2",
     "peft>=0.17.1",
+    #"natten==0.21.0+torch280cu128",  # Unable to use pre-built wheels for torch==2.8
     "torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@1121d4dbb7497deaa38c8e67688bd1d373320082",
 ]
+
+[[tool.uv.index]]
+name = "NATTEN"
+url = "https://whl.natten.org"
+explicit = true
+
+[tool.uv.sources]
+natten = { index = "NATTEN" }
 
 [dependency-groups]
 dev = [

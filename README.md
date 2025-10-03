@@ -25,7 +25,14 @@ The repository houses EEG spectrogram preprocessing, multi-task classifiers, and
    uv sync --group dev          # linting/formatting helpers
    ```
 
-4. Launch scripts through `uv run` to ensure the environment stays consistent, e.g.
+4. Install NATTEN for Hourglass Diffusion Models
+
+   ```bash
+   uv run ./install-natten.sh
+   # rm -rf NATTEN  # source may be removed if installation succeeds
+   ```
+
+5. Launch scripts through `uv run` to ensure the environment stays consistent, e.g.
 
    ```bash
    uv run python -m signal_diffusion.training.diffusion config/diffusion/flowers.toml --output-dir runs/diffusion/flowers
