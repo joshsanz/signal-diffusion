@@ -103,6 +103,10 @@ class DiTAdapter:
         if cfg.model.pretrained:
             model = DiTTransformer2DModel.from_pretrained(cfg.model.pretrained)
         else:
+            if cfg.model.sample_size and cfg.dataset.resolution and cfg.model.sample_size != cfg.dataset.resolution:
+                raise ValueError(
+                    f"Model sample size ({cfg.model.sample_size}) and dataset resolution ({cfg.dataset.resolution}) must be the same."
+                )
             kwargs = dict(
                 num_attention_heads=int(cfg.model.extras.get("num_attention_heads", 16)),
                 attention_head_dim=int(cfg.model.extras.get("attention_head_dim", 72)),

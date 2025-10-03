@@ -188,6 +188,11 @@ class StableDiffusionAdapterV15:
         if vae is None or text_encoder is None or tokenizer is None:
             raise RuntimeError("Stable Diffusion sampling requires VAE, text encoder, and tokenizer")
 
+        if cfg.model.sample_size and cfg.dataset.resolution and cfg.model.sample_size != cfg.dataset.resolution:
+            raise ValueError(
+                f"Model sample size ({cfg.model.sample_size}) and dataset resolution ({cfg.dataset.resolution}) must be the same."
+            )
+
         height = int(cfg.model.sample_size or cfg.dataset.resolution)
         width = height
         latent_channels = getattr(modules.denoiser.config, 'in_channels', 4)
