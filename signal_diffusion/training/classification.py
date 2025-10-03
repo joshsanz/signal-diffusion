@@ -127,6 +127,10 @@ class MetricsLogger:
         if epoch is not None:
             scalars[f"{phase}/epoch"] = float(epoch)
 
+        grad_norm = metrics.get("grad_norm")
+        if grad_norm is not None:
+            scalars[f"{phase}/grad_norm"] = float(grad_norm)
+
         if not scalars:
             return
 
@@ -701,6 +705,8 @@ def _run_epoch(
         for name, spec in task_specs.items()
         if spec.task_type == "classification"
     }
+    grad_norm_sum = 0.0
+    grad_norm_count = 0
 
     for batch_idx, batch in enumerate(data_loader, start=1):
         if max_steps > 0 and global_step >= max_steps:
@@ -732,18 +738,23 @@ def _run_epoch(
                 )
 
         if train:
+            grad_norm = None
             if scaler is not None and scaler.is_enabled():
                 scaler.scale(loss).backward()
                 if clip_grad is not None:
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
                 if clip_grad is not None:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
                 optimizer.step()
+
+            if grad_norm is not None:
+                grad_norm_sum += grad_norm.item()
+                grad_norm_count += 1
 
             global_step += 1
             triggered = False
@@ -808,6 +819,8 @@ def _run_epoch(
         for name in task_loss_sums
     }
     metrics = {"loss": mean_loss, "accuracy": accuracy, "losses": per_task_mean}
+    if train and grad_norm_count > 0:
+        metrics["grad_norm"] = grad_norm_sum / grad_norm_count
     return metrics, (global_step if train else None)
 
 

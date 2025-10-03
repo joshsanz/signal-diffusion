@@ -127,7 +127,6 @@ def _run_evaluation(
         save_image_grid(grid_images, grid_path, cols=4)
         accelerator.log({"eval/generated_samples": grid_images}, step=global_step)
         tb_tracker = accelerator.get_tracker("tensorboard")
-        print(tb_tracker)
         if tb_tracker:
             tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step) # type: ignore
 
@@ -373,20 +372,30 @@ def train(
             LOGGER.info("Epoch %d/%d", epoch + 1, cfg.training.epochs)
             if progress_bar is not None:
                 progress_bar.set_description(f"Epoch {epoch + 1}/{cfg.training.epochs}")
+        grad_norm = 0
+        grad_norm_steps = 0
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(modules.denoiser):
                 loss, metrics = adapter.training_step(accelerator, cfg, modules, batch)
                 accelerator.backward(loss)
                 if cfg.training.gradient_clip_norm is not None:
                     clip_params = [param for group in optimizer.param_groups for param in group["params"]]
-                    accelerator.clip_grad_norm_(clip_params, cfg.training.gradient_clip_norm)
+                    clip_norm = accelerator.clip_grad_norm_(clip_params, cfg.training.gradient_clip_norm)
+                    if clip_norm:
+                        grad_norm += clip_norm.item()
+                        grad_norm_steps += 1
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
 
             if accelerator.sync_gradients:
                 global_step += 1
-                log_payload = {"train/loss": accelerator.gather_for_metrics(loss.detach()).mean().item()}
+                log_payload = {
+                    "train/loss": accelerator.gather_for_metrics(loss.detach()).mean().item()}
+                if grad_norm > 0:
+                    log_payload.update({"train/grad_norm": grad_norm / grad_norm_steps})
+                    grad_norm = 0
+                    grad_norm_steps = 0
                 if metrics:
                     log_payload.update({f"train/{k}": float(v) for k, v in metrics.items()})
                 accelerator.log(log_payload, step=global_step)
