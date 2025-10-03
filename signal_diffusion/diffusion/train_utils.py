@@ -1,6 +1,4 @@
 """Training objective helpers for diffusion models."""
-from __future__ import annotations
-
 import warnings
 
 import torch

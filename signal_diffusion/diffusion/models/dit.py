@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
 from signal_diffusion.diffusion.models.base import DiffusionAdapter, DiffusionModules, registry
-from signal_diffusion.diffusion.objectives import (
+from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
     get_snr,
     sample_timestep_logitnorm,
