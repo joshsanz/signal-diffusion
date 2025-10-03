@@ -19,7 +19,7 @@ num_classes = 0
 
 [model]
 name = "dit"
-sample_size = 32
+sample_size = 64
 conditioning = "none" # none, caption, classes
 
 [model.extras]
@@ -64,7 +64,7 @@ eval_strategy = "steps" # or "epoch"
 eval_num_steps = 100
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 512
+eval_batch_size = 256
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 

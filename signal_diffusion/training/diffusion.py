@@ -30,9 +30,6 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 LOGGER = get_logger(__name__)
 
 
-
-
-
 def _resolve_output_dir(cfg, config_path: Path, override: Optional[Path]) -> Path:
     if override is not None:
         return override
@@ -167,13 +164,14 @@ def _flatten_and_sanitize_hparams(config_dict: Any, prefix: str = "") -> dict:
 
 def _should_evaluate(
     global_step: int,
-    step_in_epoch: int,
     steps_per_epoch: int,
     training_cfg,
 ) -> bool:
     strategy = getattr(training_cfg, "eval_strategy", "epoch") or "epoch"
     strategy = strategy.strip().lower()
     if strategy == "epoch":
+        # Calculate current step within epoch using global_step and data_len
+        step_in_epoch = global_step % steps_per_epoch
         return step_in_epoch == (steps_per_epoch - 1)
     if strategy == "steps":
         interval = getattr(training_cfg, "eval_num_steps", 0) or 0
@@ -185,6 +183,7 @@ def _should_evaluate(
 def train(
     config_path: Path = typer.Argument(..., help="Path to diffusion training TOML"),
     output_dir: Optional[Path] = typer.Option(None, help="Override the configured output directory"),
+    resume_from_checkpoint: Optional[Path] = typer.Option(None, help="Path to a checkpoint directory to resume training from"),
 ) -> None:
     torch.multiprocessing.set_start_method('spawn', force=True)
     cfg = load_diffusion_config(config_path)
@@ -231,7 +230,7 @@ def train(
     LOGGER.info(f"Tracking log dir {log_dir}")
     project_config = ProjectConfiguration(project_dir=str(run_dir),
                                           logging_dir=log_dir,
-                                          automatic_checkpoint_naming=True,
+                                          automatic_checkpoint_naming=False,
                                           total_limit=cfg.training.checkpoint_total_limit)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
@@ -357,16 +356,39 @@ def train(
             LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
     accelerator.wait_for_everyone()
 
+    first_epoch = 0
+    global_step = 0
+
+    if resume_from_checkpoint:
+        if not resume_from_checkpoint.is_dir():
+            raise ValueError(f"Checkpoint path {resume_from_checkpoint} is not a directory.")
+
+        accelerator.load_state(resume_from_checkpoint)
+        LOGGER.info(f"Resumed from checkpoint: {resume_from_checkpoint}")
+
+        # Extract global_step from the checkpoint path
+        resume_step_str = resume_from_checkpoint.name.replace("checkpoint-", "")
+        try:
+            global_step = int(resume_step_str)
+        except ValueError:
+            raise ValueError(f"Could not parse global step from checkpoint path: {resume_from_checkpoint}")
+
+        # Calculate first_epoch
+        num_update_steps_per_epoch = math.ceil(len(train_loader) / cfg.training.gradient_accumulation_steps)
+        first_epoch = global_step // num_update_steps_per_epoch
+
+        LOGGER.info(f"Resuming training from global step {global_step}, epoch {first_epoch}")
+
     progress_bar = None
     if accelerator.is_main_process:
         progress_bar = tqdm(
             total=max_train_steps,
-            desc=f"Epoch 1/{cfg.training.epochs}",
+            initial=global_step,
+            desc=f"Epoch {first_epoch + 1}/{cfg.training.epochs}",
             dynamic_ncols=True,
         )
 
-    global_step = 0
-    for epoch in range(cfg.training.epochs):
+    for epoch in range(first_epoch, cfg.training.epochs):
         modules.denoiser.train()
         if accelerator.is_main_process:
             LOGGER.info("Epoch %d/%d", epoch + 1, cfg.training.epochs)
@@ -374,7 +396,7 @@ def train(
                 progress_bar.set_description(f"Epoch {epoch + 1}/{cfg.training.epochs}")
         grad_norm = 0
         grad_norm_steps = 0
-        for step, batch in enumerate(train_loader):
+        for batch in train_loader:
             with accelerator.accumulate(modules.denoiser):
                 loss, metrics = adapter.training_step(accelerator, cfg, modules, batch)
                 accelerator.backward(loss)
@@ -412,7 +434,7 @@ def train(
                         LOGGER.info("Saved checkpoint at step %d to %s", global_step, save_dir)
 
                 should_evaluate = _should_evaluate(
-                    global_step, step, len(train_loader), cfg.training
+                    global_step, len(train_loader), cfg.training
                 )
 
                 if should_evaluate and val_loader is not None:
@@ -459,6 +481,7 @@ def train(
         if global_step >= max_train_steps:
             break
 
+    # Training finished
     if accelerator.is_main_process:
         LOGGER.info("Running final evaluation...")
         eval_metrics = _run_evaluation(

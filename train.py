@@ -7,7 +7,7 @@ import sys
 import tomllib
 
 # Useful for debugging
-install(show_locals=True)
+install(show_locals=False)
 
 # Add the project root to the Python path
 project_root = Path(__file__).resolve().parent
@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run training for classification or diffusion models.")
     parser.add_argument("--config", type=str, required=True, help="Path to the configuration TOML file.")
     parser.add_argument("--output_dir", type=str, default=None, help="Optional: Path to the output directory.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Optional: Path to a checkpoint directory to resume training from.")
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser().resolve()
@@ -50,7 +51,7 @@ def main():
     elif trainer_type == "diffusion":
         from signal_diffusion.training.diffusion import train as train_diffusion
 
-        train_diffusion(config_path=config_path, output_dir=output_dir)
+        train_diffusion(config_path=config_path, output_dir=output_dir, resume_from_checkpoint=args.resume_from_checkpoint)
 
     else:
         raise ValueError(f"Unknown trainer type: '{trainer_type}'. Must be 'classification' or 'diffusion'.")
