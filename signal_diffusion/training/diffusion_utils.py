@@ -1,11 +1,12 @@
 """Shared helpers for diffusion-based training pipelines."""
 from __future__ import annotations
 
+import math
 import os
 import random
 from argparse import Namespace
 from pathlib import Path
-from typing import Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import datasets
 import numpy as np
@@ -14,16 +15,182 @@ from accelerate import Accelerator
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import CLIPTokenizer
 from torchvision import transforms
 
+from signal_diffusion.diffusion.eval_utils import compute_kid_score, save_image_grid
+
 __all__ = [
+    "resolve_output_dir",
+    "build_optimizer",
+    "run_evaluation",
+    "flatten_and_sanitize_hparams",
+    "should_evaluate",
     "DATASET_NAME_MAPPING",
     "GITIGNORE_ENTRIES",
     "get_full_repo_name",
     "setup_repository",
     "build_image_caption_dataloader",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Diffusion training run utilities
+# ---------------------------------------------------------------------------
+
+
+def resolve_output_dir(cfg: Any, config_path: Path, override: Optional[Path]) -> Path:
+    """Determine the output directory for a diffusion run."""
+    if override is not None:
+        return override
+    configured = getattr(cfg.training, "output_dir", None)
+    if configured:
+        return Path(configured)
+    runs_root = Path("runs") / "diffusion"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    return runs_root / config_path.stem
+
+
+def build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg: Any) -> torch.optim.Optimizer:
+    """Construct the optimizer used during diffusion training."""
+    params = list(parameters)
+    if not params:
+        raise ValueError("No trainable parameters found for optimizer")
+    return torch.optim.AdamW(
+        params,
+        lr=cfg.optimizer.learning_rate,
+        betas=cfg.optimizer.betas,
+        eps=cfg.optimizer.eps,
+        weight_decay=cfg.optimizer.weight_decay,
+    )
+
+
+def run_evaluation(
+    accelerator: Accelerator,
+    adapter: Any,
+    cfg: Any,
+    modules: Any,
+    train_loader: Any,
+    val_loader: Any,
+    run_dir: Path,
+    global_step: int,
+) -> dict[str, float]:
+    """Generate samples and compute evaluation metrics for the current step."""
+    eval_examples = getattr(cfg.training, "eval_num_examples", 0) or 0
+    eval_mmd_samples = getattr(cfg.training, "eval_mmd_samples", 0) or 0
+    if eval_examples <= 0 and eval_mmd_samples <= 0:
+        return {}
+
+    num_generate = max(eval_examples, eval_mmd_samples, 1)
+
+    eval_gen_seed = getattr(cfg.training, "eval_gen_seed", None)
+    generator = None
+    if eval_gen_seed is not None:
+        generator = torch.Generator(device=accelerator.device).manual_seed(eval_gen_seed)
+
+    eval_batch_size = cfg.training.eval_batch_size or cfg.dataset.batch_size
+    num_batches = math.ceil(num_generate / eval_batch_size)
+
+    was_training = modules.denoiser.training
+    modules.denoiser.eval()
+    generated_samples = []
+    try:
+        with torch.no_grad():
+            pbar = tqdm(
+                range(num_batches),
+                desc="Generating samples",
+                disable=not accelerator.is_main_process,
+                dynamic_ncols=True,
+                leave=True,
+            )
+            for i in pbar:
+                batch_size = min(eval_batch_size, num_generate - i * eval_batch_size)
+                if batch_size <= 0:
+                    continue
+
+                generated_batch = adapter.generate_samples(
+                    accelerator,
+                    cfg,
+                    modules,
+                    batch_size,
+                    denoising_steps=cfg.inference.denoising_steps,
+                    cfg_scale=cfg.inference.cfg_scale,
+                    generator=generator,
+                )
+                generated_samples.append(generated_batch.cpu())
+        generated = torch.cat(generated_samples, dim=0)
+    finally:
+        if was_training:
+            modules.denoiser.train()
+        else:
+            modules.denoiser.eval()
+
+    if generated.ndim != 4:
+        raise ValueError("Adapter.generate_samples must return a tensor shaped (N, C, H, W)")
+
+    metrics: dict[str, float] = {}
+
+    if eval_examples > 0:
+        grid_images = generated[:eval_examples].detach().cpu()
+        grid_path = run_dir / f"{global_step:06d}.jpg"
+        save_image_grid(grid_images, grid_path, cols=4)
+        accelerator.log({"eval/generated_samples": grid_images}, step=global_step)
+        tb_tracker = accelerator.get_tracker("tensorboard")
+        if tb_tracker:
+            tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step)  # type: ignore[arg-type]
+
+    if eval_mmd_samples > 0:
+        gen_for_kid = generated[:eval_mmd_samples]
+        if gen_for_kid.shape[0] == 0:
+            raise ValueError("Not enough generated samples to compute KID score")
+
+        if val_loader is not None:
+            ref_dataset = val_loader.dataset
+        else:
+            ref_dataset = train_loader.dataset
+
+        kid_mean, kid_std = compute_kid_score(gen_for_kid, ref_dataset)
+        metrics["eval/kid_mean"] = kid_mean
+        metrics["eval/kid_std"] = kid_std
+
+    return metrics
+
+
+def flatten_and_sanitize_hparams(config_dict: Any, prefix: str = "") -> dict[str, Any]:
+    """Flatten nested config structures for logging-friendly hyperparameters."""
+    hparams: dict[str, Any] = {}
+    if not isinstance(config_dict, dict):
+        return hparams
+
+    for key, value in config_dict.items():
+        composed_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            hparams.update(flatten_and_sanitize_hparams(value, prefix=composed_key))
+        elif isinstance(value, (str, int, float, bool)):
+            hparams[composed_key] = value
+        elif isinstance(value, (list, tuple)) and all(
+            isinstance(item, (str, int, float, bool)) for item in value
+        ):
+            hparams[composed_key] = str(value)
+    return hparams
+
+
+def should_evaluate(global_step: int, steps_per_epoch: int, training_cfg: Any) -> bool:
+    """Decide whether evaluation should run at the current training step."""
+    strategy = (getattr(training_cfg, "eval_strategy", "epoch") or "epoch").strip().lower()
+    if strategy == "epoch":
+        step_in_epoch = global_step % steps_per_epoch
+        return step_in_epoch == (steps_per_epoch - 1)
+    if strategy == "steps":
+        interval = getattr(training_cfg, "eval_num_steps", 0) or 0
+        return interval > 0 and global_step > 0 and global_step % interval == 0
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Dataset preparation utilities used by the legacy fine-tuning scripts
+# ---------------------------------------------------------------------------
 
 # Mapping of known dataset identifiers to their (image_column, caption_column) pair.
 DATASET_NAME_MAPPING: Mapping[str, Tuple[str, str]] = {

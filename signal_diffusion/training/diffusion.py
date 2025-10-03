@@ -6,7 +6,7 @@ import math
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Optional
 
 import torch
 import typer
@@ -19,164 +19,22 @@ from tqdm.auto import tqdm
 
 from signal_diffusion.diffusion import load_diffusion_config
 from signal_diffusion.diffusion.data import build_dataloaders
-from signal_diffusion.diffusion.eval_utils import compute_kid_score, save_image_grid
 from signal_diffusion.diffusion.models import registry
 from signal_diffusion.log_setup import get_logger
+
+from signal_diffusion.training.diffusion_utils import (
+    build_optimizer,
+    flatten_and_sanitize_hparams,
+    resolve_output_dir,
+    run_evaluation,
+    should_evaluate,
+)
 
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
 LOGGER = get_logger(__name__)
-
-
-def _resolve_output_dir(cfg, config_path: Path, override: Optional[Path]) -> Path:
-    if override is not None:
-        return override
-    if cfg.training.output_dir is not None:
-        return Path(cfg.training.output_dir)
-    runs_root = Path("runs") / "diffusion"
-    runs_root.mkdir(parents=True, exist_ok=True)
-    return (runs_root / config_path.stem)
-
-
-def _build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg) -> torch.optim.Optimizer:
-    params = list(parameters)
-    if not params:
-        raise ValueError("No trainable parameters found for optimizer")
-    return torch.optim.AdamW(
-        params,
-        lr=cfg.optimizer.learning_rate,
-        betas=cfg.optimizer.betas,
-        eps=cfg.optimizer.eps,
-        weight_decay=cfg.optimizer.weight_decay,
-    )
-
-
-def _run_evaluation(
-    accelerator: Accelerator,
-    adapter,
-    cfg,
-    modules,
-    train_loader,
-    val_loader,
-    run_dir: Path,
-    global_step: int,
-):
-    eval_examples = getattr(cfg.training, "eval_num_examples", 0) or 0
-    eval_mmd_samples = getattr(cfg.training, "eval_mmd_samples", 0) or 0
-    if eval_examples <= 0 and eval_mmd_samples <= 0:
-        return {}
-
-    num_generate = max(eval_examples, eval_mmd_samples)
-    num_generate = max(1, num_generate)
-
-    eval_gen_seed = getattr(cfg.training, "eval_gen_seed", None)
-    generator = None
-    if eval_gen_seed is not None:
-        generator = torch.Generator(device=accelerator.device).manual_seed(eval_gen_seed)
-
-    eval_batch_size = cfg.training.eval_batch_size or cfg.dataset.batch_size
-    num_batches = math.ceil(num_generate / eval_batch_size)
-
-    was_training = modules.denoiser.training
-    modules.denoiser.eval()
-    generated_samples = []
-    try:
-        with torch.no_grad():
-            pbar = tqdm(
-                range(num_batches),
-                desc="Generating samples",
-                disable=not accelerator.is_main_process,
-                dynamic_ncols=True,
-                leave=True,
-            )
-            for i in pbar:
-                batch_size = min(eval_batch_size, num_generate - i * eval_batch_size)
-                if batch_size <= 0:
-                    continue
-
-                generated_batch = adapter.generate_samples(
-                    accelerator,
-                    cfg,
-                    modules,
-                    batch_size,
-                    denoising_steps=cfg.inference.denoising_steps,
-                    cfg_scale=cfg.inference.cfg_scale,
-                    generator=generator,
-                )
-                generated_samples.append(generated_batch.cpu())
-        generated = torch.cat(generated_samples, dim=0)
-    finally:
-        if was_training:
-            modules.denoiser.train()
-        else:
-            modules.denoiser.eval()
-
-    if generated.ndim != 4:
-        raise ValueError("Adapter.generate_samples must return a tensor shaped (N, C, H, W)")
-
-    metrics: dict[str, float] = {}
-
-    if eval_examples > 0:
-        grid_images = generated[:eval_examples].detach().cpu()
-        grid_path = run_dir / f"{global_step:06d}.jpg"
-        save_image_grid(grid_images, grid_path, cols=4)
-        accelerator.log({"eval/generated_samples": grid_images}, step=global_step)
-        tb_tracker = accelerator.get_tracker("tensorboard")
-        if tb_tracker:
-            tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step) # type: ignore
-
-    if eval_mmd_samples > 0:
-        gen_for_kid = generated[:eval_mmd_samples]
-        if gen_for_kid.shape[0] == 0:
-            raise ValueError("Not enough generated samples to compute KID score")
-
-        if val_loader is not None:
-            ref_dataset = val_loader.dataset
-        else:
-            ref_dataset = train_loader.dataset
-
-        kid_mean, kid_std = compute_kid_score(gen_for_kid, ref_dataset)
-        metrics["eval/kid_mean"] = kid_mean
-        metrics["eval/kid_std"] = kid_std
-
-    return metrics
-
-
-def _flatten_and_sanitize_hparams(config_dict: Any, prefix: str = "") -> dict:
-    hparams = {}
-    if not isinstance(config_dict, dict):
-        return hparams
-
-    for k, v in config_dict.items():
-        key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            hparams.update(_flatten_and_sanitize_hparams(v, prefix=key))
-        elif isinstance(v, (str, int, float, bool)):
-            hparams[key] = v
-        elif isinstance(v, (list, tuple)):
-            # Convert lists/tuples of simple types to a string
-            if all(isinstance(item, (str, int, float, bool)) for item in v):
-                hparams[key] = str(v)
-    return hparams
-
-
-def _should_evaluate(
-    global_step: int,
-    steps_per_epoch: int,
-    training_cfg,
-) -> bool:
-    strategy = getattr(training_cfg, "eval_strategy", "epoch") or "epoch"
-    strategy = strategy.strip().lower()
-    if strategy == "epoch":
-        # Calculate current step within epoch using global_step and data_len
-        step_in_epoch = global_step % steps_per_epoch
-        return step_in_epoch == (steps_per_epoch - 1)
-    if strategy == "steps":
-        interval = getattr(training_cfg, "eval_num_steps", 0) or 0
-        return interval > 0 and global_step > 0 and global_step % interval == 0
-    return False
 
 
 @app.command()
@@ -187,7 +45,7 @@ def train(
 ) -> None:
     torch.multiprocessing.set_start_method('spawn', force=True)
     cfg = load_diffusion_config(config_path)
-    run_dir = _resolve_output_dir(cfg, config_path, output_dir)
+    run_dir = resolve_output_dir(cfg, config_path, output_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg.training.output_dir = run_dir
 
@@ -242,7 +100,7 @@ def train(
     if accelerator.is_main_process and log_with:
         # A simple dict of hyperparameters for logging
         project_name = cfg.logging.wandb_project or "signal_diffusion"
-        hps = _flatten_and_sanitize_hparams(asdict(cfg))
+        hps = flatten_and_sanitize_hparams(asdict(cfg))
         accelerator.init_trackers(
             project_name,
             config=hps,
@@ -274,7 +132,7 @@ def train(
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
 
-    optimizer = _build_optimizer(modules.parameters, cfg)
+    optimizer = build_optimizer(modules.parameters, cfg)
 
     num_update_steps_per_epoch = math.ceil(len(train_loader) / cfg.training.gradient_accumulation_steps)
     max_train_steps = cfg.training.max_train_steps or (cfg.training.epochs * num_update_steps_per_epoch)
@@ -341,7 +199,7 @@ def train(
 
     if accelerator.is_main_process:
         LOGGER.info("Running initial evaluation...")
-        eval_metrics = _run_evaluation(
+        eval_metrics = run_evaluation(
             accelerator=accelerator,
             adapter=adapter,
             cfg=cfg,
@@ -433,11 +291,11 @@ def train(
                     if accelerator.is_main_process:
                         LOGGER.info("Saved checkpoint at step %d to %s", global_step, save_dir)
 
-                should_evaluate = _should_evaluate(
+                run_eval_now = should_evaluate(
                     global_step, len(train_loader), cfg.training
                 )
 
-                if should_evaluate and val_loader is not None:
+                if run_eval_now and val_loader is not None:
                     modules.denoiser.eval()
                     val_losses: list[float] = []
                     with torch.no_grad():
@@ -453,9 +311,9 @@ def train(
                     postfix_payload["val_loss"] = f"{mean_val:.4f}"
 
                 eval_metrics: dict[str, float] = {}
-                if should_evaluate:
+                if run_eval_now:
                     if accelerator.is_main_process:
-                        eval_metrics = _run_evaluation(
+                        eval_metrics = run_evaluation(
                             accelerator=accelerator,
                             adapter=adapter,
                             cfg=cfg,
@@ -484,7 +342,7 @@ def train(
     # Training finished
     if accelerator.is_main_process:
         LOGGER.info("Running final evaluation...")
-        eval_metrics = _run_evaluation(
+        eval_metrics = run_evaluation(
             accelerator=accelerator,
             adapter=adapter,
             cfg=cfg,
