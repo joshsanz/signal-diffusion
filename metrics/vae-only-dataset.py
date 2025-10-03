@@ -1,86 +1,39 @@
-# Generate a just-the-VAE dataset for KDD baseline
+"""CLI for generating VAE reconstruction datasets."""
 
 import argparse
-from datasets import load_dataset, Features, Image
-from diffusers import AutoencoderKL
-import numpy as np
-import os
-from PIL import Image as pImage
-import torch
-import torchvision.transforms.v2 as v2
-import tqdm.auto as tqdm
+from pathlib import Path
 
-# Enable TF32 on Ampere GPUs
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+from signal_diffusion.metrics import (
+    ImageFolderConfig,
+    VAEGenerationConfig,
+    generate_vae_dataset,
+)
 
 
-def main(args):
-    os.makedirs(args.output, exist_ok=True)
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-    transform = v2.Compose([
-        v2.Resize((args.image_size, args.image_size)),
-        v2.ToImage(),
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize([0.5], [0.5]),
-    ])
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate VAE reconstructions for KID baselines")
+    parser.add_argument("-d", "--dataset", required=True, help="Path to source dataset")
+    parser.add_argument("-m", "--model", required=True, help="Diffusers model or checkpoint path")
+    parser.add_argument("-o", "--output", required=True, help="Directory to store reconstructed images")
+    parser.add_argument("-b", "--batch-size", type=int, default=16, help="Batch size for inference")
+    parser.add_argument("-s", "--image-size", type=int, default=256, help="Resize edge length before encoding")
+    parser.add_argument("--num-workers", type=int, default=4, help="Dataloader worker processes")
+    return parser.parse_args()
 
-    def transform_fn(x):
-        x['image'] = transform(x['image'])
-        return x
 
-    def collate_fn(examples):
-        return torch.stack([x['image'] for x in examples])
-
-    dataset = load_dataset("imagefolder", data_dir=args.dataset,
-                           features=Features({"image": Image(mode="RGB")})
-                           ).with_format("torch")
-    dataset = dataset.with_transform(transform_fn)
-    use_pin_memory = torch.cuda.is_available()
-    dataloader = torch.utils.data.DataLoader(
-        dataset['train'],
+def main(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output)
+    config = VAEGenerationConfig(
+        dataset=ImageFolderConfig(args.dataset),
+        model=args.model,
+        output_dir=output_dir,
         batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        pin_memory=use_pin_memory,
-        num_workers=4,
+        image_size=args.image_size,
+        num_workers=args.num_workers,
     )
-
-    if "vae" in args.model:
-        vae = AutoencoderKL.from_pretrained(args.model).to(device)
-    else:
-        vae = AutoencoderKL.from_pretrained(args.model, subfolder="vae").to(device)
-    vae.eval()
-
-    count = 0
-    for batch in tqdm.tqdm(dataloader):
-        images = batch.to(device)
-        with torch.no_grad():
-            recon = vae(images)
-        recon = recon.sample.permute(0, 2, 3, 1).cpu().float().numpy().clip(-1, 1)
-        # Save the reconstructions
-        for im in recon:
-            im = pImage.fromarray(((im * 0.5 + 0.5) * 255).astype(np.uint8))
-            im.save(f"{args.output}/recon_{count}.jpg")
-            count += 1
-
-    with open(f"{args.output}/metadata.csv", "w") as f:
-        f.write("file_name\n")
-        for i in range(count):
-            f.write(f"recon_{i}.jpg\n")
+    total = generate_vae_dataset(config)
+    print(f"Saved {total} reconstructions to {output_dir}")
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Generate a just-the-VAE dataset for KDD baseline')
-    parser.add_argument('-d', '--dataset', type=str, help='Path to dataset')
-    parser.add_argument('-m', '--model', type=str, help='Path to model')
-    parser.add_argument('-o', '--output', type=str, help='Path to save output')
-    parser.add_argument('-b', '--batch-size', type=int, default=16, help='Batch size')
-    parser.add_argument('-s', '--image-size', type=int, default=256, help='Image size')
-    args = parser.parse_args()
-    main(args)
+if __name__ == "__main__":
+    main(parse_args())
