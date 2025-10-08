@@ -1,73 +1,49 @@
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
 import torch
 import typer
-import numpy as np
-from pathlib import Path
 from accelerate import Accelerator
-from accelerate.utils import set_seed
-from torchvision.utils import make_grid
 from PIL import Image
-from typing import List, Optional
 from torchvision.transforms import v2 as transforms
-from tqdm import tqdm
+from torchvision.utils import make_grid
 
-from signal_diffusion.diffusion.data import build_dataloaders
 from signal_diffusion.diffusion.config import load_diffusion_config
-from signal_diffusion.diffusion.eval_utils import save_image_grid, _to_uint8
+from signal_diffusion.diffusion.data import build_dataloaders
+from signal_diffusion.diffusion.eval_utils import _to_uint8
 from signal_diffusion.diffusion.models import registry
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from signal_diffusion.diffusion.train_utils import get_sigmas_from_timesteps
 
 app = typer.Typer()
 
 
-def get_class_labels(dataset: torch.utils.data.Dataset) -> Optional[List[str]]:
-    """Extracts class labels from a dataset, supporting both standard and Hugging Face formats."""
+def get_class_labels(dataset: torch.utils.data.Dataset) -> Optional[list[str]]:
+    """Extract class labels from datasets produced by torchvision or Hugging Face."""
     if hasattr(dataset, "classes"):
-        return dataset.classes
+        return list(dataset.classes)
     if hasattr(dataset, "features"):
-        if "label" in dataset.features and hasattr(dataset.features["label"], "names"):
-            return dataset.features["label"].names
+        features = dataset.features
+        label_feature = features.get("label")
+        if label_feature is not None and hasattr(label_feature, "names"):
+            return list(label_feature.names)
     return None
 
-def generate_conditional_samples(
-    accelerator: Accelerator,
-    cfg,
-    modules,
-    num_images: int,
-    class_labels: torch.Tensor,
-    *,
-    denoising_steps: int,
-    generator: torch.Generator,
-) -> torch.Tensor:
-    scheduler: FlowMatchEulerDiscreteScheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config)
-    device = accelerator.device
-    dtype = modules.weight_dtype
-    scheduler.set_timesteps(denoising_steps, device=device)
 
-    model_config = getattr(modules.denoiser, "config", None)
-    channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
-    sample_size = getattr(model_config, "sample_size", None)
-    if sample_size is None:
-        sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
+def resolve_conditioning_mode(cfg) -> str:
+    conditioning_value = getattr(cfg.model, "conditioning", None)
+    if conditioning_value is None:
+        conditioning_value = cfg.model.extras.get("conditioning", "none")
+    return str(conditioning_value or "none").strip().lower()
 
-    sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
 
-    with torch.no_grad():
-        for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-            model_input = sample
-            if hasattr(scheduler, "scale_model_input"):
-                model_input = scheduler.scale_model_input(model_input, timestep)
-            timesteps = torch.ones(sample.size(0)).to(device) * timestep
-            sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
-            model_output = modules.denoiser(
-                model_input, sigma=sigmas, class_cond=class_labels
-            )
-
-            step_output = scheduler.step(model_output, timestep, sample, return_dict=True)
-            sample = step_output.prev_sample
-
-    return sample.to(dtype=torch.float32).detach()
+def tensor_to_pil(image: torch.Tensor) -> Image.Image:
+    """Convert a tensor in [-1, 1] range to a PIL.Image."""
+    if image.ndim != 3:
+        raise ValueError("Expected image tensor shaped (C, H, W)")
+    uint8 = _to_uint8(image.unsqueeze(0))[0].permute(1, 2, 0).numpy()
+    return Image.fromarray(uint8)
 
 
 @app.command()
@@ -78,7 +54,7 @@ def main(
     c: int = typer.Option(4, help="Number of classes to generate for"),
     seed: int = typer.Option(42, help="Random seed for reproducibility"),
     batch_size: int = typer.Option(4, help="Batch size for generation"),
-    unconditioned: bool = typer.Option(False, help="Generate column without class conditioning"),
+    unconditioned: bool = typer.Option(False, help="Add an unconditional column to the grid"),
     output_filename: str = typer.Option("generated_grid.jpg", help="Output filename for the image grid"),
 ):
     """
@@ -93,91 +69,109 @@ def main(
     train_loader, _ = build_dataloaders(d_config, tokenizer=None, settings_path=None)
     dataset = train_loader.dataset
 
-    class_names = get_class_labels(dataset)
-    if not class_names:
-        raise ValueError("Could not extract class names from the dataset.")
+    conditioning_mode = resolve_conditioning_mode(cfg)
 
-    num_classes = len(class_names)
+    class_names = get_class_labels(dataset) if conditioning_mode == "classes" else None
+    if conditioning_mode == "classes" and not class_names:
+        raise ValueError("Class conditioning requested but dataset does not expose class names.")
 
-    num_to_select = min(c, num_classes)
-    selected_class_indices = np.random.choice(range(num_classes), num_to_select, replace=False)
-    selected_classes = [(i, class_names[i]) for i in selected_class_indices]
-    print(f"Selected classes: {[name for _, name in selected_classes]}")
-    if unconditioned:
-        selected_classes.append(num_classes)
-        print("Also generating with no class conditioning.")
+    condition_indices: list[tuple[Optional[int], str]] = []
+    if conditioning_mode == "classes":
+        num_classes = len(class_names or [])
+        num_to_select = min(c, num_classes)
+        selected_ids = np.random.choice(range(num_classes), num_to_select, replace=False)
+        condition_indices = [(int(idx), str(class_names[idx])) for idx in selected_ids]
+        print(f"Selected classes: {[name for _, name in condition_indices]}")
+    elif conditioning_mode == "caption":
+        raise NotImplementedError("Caption-based sampling is not supported by this script yet.")
+    elif conditioning_mode == "none":
+        condition_indices = []
+    else:
+        raise ValueError(f"Unsupported conditioning mode '{conditioning_mode}'")
 
-    # Get original images
-    original_images = []
-    for class_idx, _ in selected_classes:
-        class_dataset = dataset.filter(lambda example: example["class_labels"] == class_idx)
-        if len(class_dataset) > 0:
-            random_index = np.random.randint(0, len(class_dataset))
-            image = class_dataset[random_index]["pixel_values"]
-            original_images.append(transforms.functional.to_pil_image(_to_uint8(image)))
-    if unconditioned:
-        image_size = (d_config.resolution, d_config.resolution)
-        black_image = Image.new("RGB", image_size, (0, 0, 0))
-        original_images.append(black_image)
-
-    # Load model
     adapter = registry.get(cfg.model.name)
-    modules = adapter.build_modules(accelerator, cfg)
+    tokenizer = adapter.create_tokenizer(cfg)
+    modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
+
     state_dict = torch.load(model_path, map_location="cpu")
     modules.denoiser.load_state_dict(state_dict)
     modules.denoiser.to(accelerator.device)
     modules.denoiser.eval()
 
-    # Generate images
-    generated_images_rows = []
-    for i in range(n):
-        print(f"Generating row {i+1}/{n}")
-        row_images = []
-        for class_idx, _ in selected_classes:
-            for _ in range((n + batch_size - 1) // batch_size):
-                labels = torch.ones(batch_size, device=accelerator.device, dtype=torch.long) * class_idx
-                generated_batch = generate_conditional_samples(
-                    accelerator, cfg, modules, batch_size, labels,
-                    denoising_steps=cfg.inference.denoising_steps,
-                    generator=generator,
-                )
-                row_images.append(generated_batch[0])
-        generated_images_rows.append(row_images)
+    conditions: list[tuple[Optional[int], str]] = condition_indices.copy()
     if unconditioned:
-        row_images = []
-        for _ in range((n + batch_size - 1) // batch_size):
-            labels = torch.ones(batch_size, device=accelerator.device, dtype=torch.long) * num_classes
-            generated_batch = generate_conditional_samples(
-                    accelerator, cfg, modules, batch_size, labels,
-                    denoising_steps=cfg.inference.denoising_steps,
-                    generator=generator,
+        conditions.append((None, "unconditional"))
+        print("Including unconditional samples.")
+
+    if not conditions:
+        conditions.append((None, "generated"))
+
+    image_height = int(d_config.resolution)
+    reference_images: list[torch.Tensor] = []
+    for idx, _ in conditions:
+        if idx is None:
+            reference_images.append(torch.full((3, image_height, image_height), -1.0, dtype=torch.float32))
+            continue
+        filtered = dataset.filter(lambda example: example["class_labels"] == idx)
+        if len(filtered) == 0:
+            raise ValueError(f"No samples found for class index {idx}")
+        random_index = np.random.randint(0, len(filtered))
+        reference = filtered[random_index]["pixel_values"]
+        if isinstance(reference, torch.Tensor):
+            reference_images.append(reference.detach().cpu())
+        else:
+            reference_images.append(transforms.ToTensor()(reference) * 2.0 - 1.0)
+
+    generated_by_condition: dict[Optional[int], list[torch.Tensor]] = {idx: [] for idx, _ in conditions}
+
+    for idx, name in conditions:
+        remaining = n
+        print(f"Generating {n} samples for '{name}'")
+        while remaining > 0:
+            current_batch = min(batch_size, remaining)
+            if idx is None:
+                conditioning_input: torch.Tensor | None = None
+            else:
+                conditioning_input = torch.full(
+                    (current_batch,),
+                    idx,
+                    device=accelerator.device,
+                    dtype=torch.long,
                 )
-            row_images.append(generated_batch[0])
 
-    # Create grid
-    grid_rows = [original_images] + generated_images_rows
+            batch_samples = adapter.generate_conditional_samples(
+                accelerator,
+                cfg,
+                modules,
+                current_batch,
+                denoising_steps=cfg.inference.denoising_steps,
+                cfg_scale=cfg.inference.cfg_scale,
+                conditioning=conditioning_input,
+                generator=generator,
+            )
+            for tensor in batch_samples.detach().cpu():
+                generated_by_condition[idx].append(tensor)
+            remaining -= current_batch
 
-    flat_image_list = [img for row in grid_rows for img in row]
+        generated_by_condition[idx] = generated_by_condition[idx][:n]
 
-    pil_images = []
-    for img in flat_image_list:
-        if not isinstance(img, Image.Image):
-            # Assuming tensor, convert to PIL
-            img = transforms.ToPILImage()(img.cpu())
-        pil_images.append(img)
+    grid_rows: list[list[torch.Tensor]] = [reference_images]
+    for row_idx in range(n):
+        row: list[torch.Tensor] = []
+        for idx, _ in conditions:
+            row.append(generated_by_condition[idx][row_idx])
+        grid_rows.append(row)
 
-    if pil_images:
-        grid = make_grid(
-            [transforms.ToImage()(img) for img in pil_images],
-            nrow=len(selected_classes) if not no_class_conditioning else c,
-        )
+    flat = [tensor for row in grid_rows for tensor in row]
+    if not flat:
+        raise RuntimeError("No images available to assemble grid.")
 
-        to_pil = transforms.ToPILImage()
-        grid_image = to_pil(grid)
-        grid_image.save(output_filename)
-        print(f"Saved image grid to {output_filename}")
-    else:
-        print("No images were generated or found to create a grid.")
+    stacked = torch.stack(flat, dim=0)
+    nrow = len(conditions)
+    grid = make_grid(stacked, nrow=nrow)
+    grid_image = tensor_to_pil(grid)
+    grid_image.save(output_filename)
+    print(f"Saved image grid to {output_filename}")
 
 if __name__ == "__main__":
     app()
