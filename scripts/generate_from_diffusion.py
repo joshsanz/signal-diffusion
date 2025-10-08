@@ -63,6 +63,9 @@ def main(
     accelerator = Accelerator()
     generator = torch.Generator(device=accelerator.device).manual_seed(seed)
 
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+
     cfg = load_diffusion_config(dataset_config)
     d_config = cfg.dataset
 
