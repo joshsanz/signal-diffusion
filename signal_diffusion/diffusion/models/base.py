@@ -73,8 +73,28 @@ class DiffusionAdapter(Protocol):
         *,
         denoising_steps: int,
         cfg_scale: float,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Generate unconditional samples in ``[-1, 1]`` of shape ``(N, C, H, W)``."""
+
+    def generate_conditional_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+        conditioning: torch.Tensor | str | Iterable[str] | None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Generate samples using classifier-free guidance.
+
+        ``conditioning`` may be ``None`` for unconditional sampling, a tensor of integer
+        class labels with shape ``(N,)``, or a caption / iterable of captions when the
+        adapter supports text conditioning.
+        """
 
     def save_checkpoint(
         self,

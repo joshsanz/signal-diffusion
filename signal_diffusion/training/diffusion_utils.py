@@ -5,6 +5,7 @@ import math
 import json
 import os
 import random
+from collections import deque
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
@@ -107,35 +108,78 @@ def run_evaluation(
         generator = torch.Generator(device=accelerator.device).manual_seed(eval_gen_seed)
 
     eval_batch_size = cfg.training.eval_batch_size or cfg.dataset.batch_size
-    num_batches = math.ceil(num_generate / eval_batch_size)
-
     was_training = modules.denoiser.training
     modules.denoiser.eval()
     generated_samples = []
     try:
         with torch.no_grad():
+            num_classes = int(getattr(cfg.dataset, "num_classes", 0) or 0)
+            unconditional_eval = 0
+            if eval_examples > 0:
+                unconditional_eval = max(1, math.ceil(eval_examples * 0.25))
+                unconditional_eval = min(unconditional_eval, eval_examples)
+            class_eval = max(eval_examples - unconditional_eval, 0)
+
+            conditioning_plan: list[tuple[str, int]] = []
+            if unconditional_eval > 0:
+                conditioning_plan.append(("uncond", unconditional_eval))
+            if class_eval > 0:
+                conditioning_plan.append(("classes" if num_classes > 0 else "uncond", class_eval))
+
+            remaining = num_generate - eval_examples
+            if remaining > 0:
+                conditioning_plan.append(("classes" if num_classes > 0 else "uncond", remaining))
+
+            if not conditioning_plan:
+                conditioning_plan.append(("uncond", num_generate))
+
+            task_queue = deque(conditioning_plan)
+            total_remaining = num_generate
             pbar = tqdm(
-                range(num_batches),
+                total=num_generate,
                 desc="Generating samples",
                 disable=not accelerator.is_main_process,
                 dynamic_ncols=True,
                 leave=True,
             )
-            for i in pbar:
-                batch_size = min(eval_batch_size, num_generate - i * eval_batch_size)
+            while total_remaining > 0 and task_queue:
+                task_type, task_count = task_queue[0]
+                batch_size = min(eval_batch_size, total_remaining, task_count)
                 if batch_size <= 0:
+                    task_queue.popleft()
                     continue
 
-                generated_batch = adapter.generate_samples(
+                conditioning_input: torch.Tensor | None
+                if task_type == "classes" and num_classes > 0:
+                    conditioning_input = torch.randint(
+                        low=0,
+                        high=num_classes,
+                        size=(batch_size,),
+                        device=accelerator.device,
+                        generator=generator,
+                    )
+                else:
+                    conditioning_input = None
+
+                generated_batch = adapter.generate_conditional_samples(
                     accelerator,
                     cfg,
                     modules,
                     batch_size,
                     denoising_steps=cfg.inference.denoising_steps,
                     cfg_scale=cfg.inference.cfg_scale,
+                    conditioning=conditioning_input,
                     generator=generator,
                 )
                 generated_samples.append(generated_batch.cpu())
+
+                total_remaining -= batch_size
+                task_count -= batch_size
+                if task_count <= 0:
+                    task_queue.popleft()
+                else:
+                    task_queue[0] = (task_type, task_count)
+                pbar.update(batch_size)
         generated = torch.cat(generated_samples, dim=0)
     finally:
         if was_training:
@@ -144,7 +188,7 @@ def run_evaluation(
             modules.denoiser.eval()
 
     if generated.ndim != 4:
-        raise ValueError("Adapter.generate_samples must return a tensor shaped (N, C, H, W)")
+        raise ValueError("Adapter.generate_conditional_samples must return a tensor shaped (N, C, H, W)")
 
     metrics: dict[str, float] = {}
 
