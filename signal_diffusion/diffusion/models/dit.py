@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import torch
 from accelerate import Accelerator
@@ -198,7 +198,29 @@ class DiTAdapter:
         cfg_scale: float,
         generator: torch.Generator | None = None,
     ) -> torch.Tensor:
-        del cfg_scale  # classifier-free guidance is unused for unconditional sampling.
+        return self.generate_conditional_samples(
+            accelerator,
+            cfg,
+            modules,
+            num_images,
+            denoising_steps=denoising_steps,
+            cfg_scale=cfg_scale,
+            conditioning=None,
+            generator=generator,
+        )
+
+    def generate_conditional_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+        conditioning: torch.Tensor | str | Iterable[str] | None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config)
         device = accelerator.device
         dtype = modules.weight_dtype
@@ -212,19 +234,58 @@ class DiTAdapter:
         vae = modules.vae
 
         sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
-        # TODO: set to num_classes if class_conditional?
-        class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
+        extras = self._extras
+
+        if conditioning is not None and not isinstance(conditioning, torch.Tensor):
+            raise ValueError("DiT adapter only supports tensor class-label conditioning during sampling")
+        if conditioning is not None and extras.conditioning != "classes":
+            raise ValueError("Class label conditioning is only enabled when 'conditioning' is set to 'classes'")
+        if conditioning is None and extras.conditioning not in {"none", "classes"}:
+            raise ValueError(f"Unsupported conditioning mode '{extras.conditioning}' for DiT sampling")
+
+        classifier_free = conditioning is not None
+        if conditioning is not None:
+            class_labels = conditioning.to(device=device, dtype=torch.long)
+            if class_labels.ndim != 1:
+                raise ValueError("Class-label conditioning tensor must be 1D with shape (num_images,)")
+            if class_labels.shape[0] == 1 and num_images > 1:
+                class_labels = class_labels.expand(num_images)
+            if class_labels.shape[0] != num_images:
+                raise ValueError("Number of class labels must match num_images")
+            dropout_label = extras.num_classes
+            num_embeds = int(getattr(getattr(modules.denoiser, "config", None), "num_embeds_ada_norm", dropout_label + 1))
+            if dropout_label >= num_embeds:
+                raise ValueError(
+                    "DiT classifier-free guidance expects an extra class embedding for dropout; "
+                    "increase 'model.extras.num_classes' to include the dropout token."
+                )
+            unconditional_labels = torch.full_like(class_labels, dropout_label)
+        else:
+            class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
+            unconditional_labels = None
 
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                model_input = sample
+                if classifier_free:
+                    model_input = torch.cat([sample, sample], dim=0)
+                else:
+                    model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
 
                 denoiser_timestep = timestep.expand(model_input.shape[0])
+                if classifier_free and unconditional_labels is not None:
+                    class_input = torch.cat([unconditional_labels, class_labels], dim=0)
+                else:
+                    class_input = class_labels
+
                 model_output = modules.denoiser(
-                    model_input, timestep=denoiser_timestep, class_labels=class_labels
+                    model_input, timestep=denoiser_timestep, class_labels=class_input
                 ).sample
+
+                if classifier_free and unconditional_labels is not None:
+                    model_output_uncond, model_output_cond = model_output.chunk(2)
+                    model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
 
                 step_output = scheduler.step(model_output, timestep, sample)
                 sample = getattr(step_output, "prev_sample", step_output[0] if isinstance(step_output, tuple) else step_output)

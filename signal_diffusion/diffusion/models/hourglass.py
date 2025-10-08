@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import torch
 from accelerate import Accelerator
@@ -364,7 +364,29 @@ class HourglassAdapter:
         cfg_scale: float,
         generator: torch.Generator | None = None,
     ) -> torch.Tensor:
-        del cfg_scale  # classifier-free guidance is unused for unconditional sampling.
+        return self.generate_conditional_samples(
+            accelerator,
+            cfg,
+            modules,
+            num_images,
+            denoising_steps=denoising_steps,
+            cfg_scale=cfg_scale,
+            conditioning=None,
+            generator=generator,
+        )
+
+    def generate_conditional_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+        conditioning: torch.Tensor | str | Iterable[str] | None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
         scheduler: FlowMatchEulerDiscreteScheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config) # pyright: ignore[reportAssignmentType]
         device = accelerator.device
         dtype = modules.weight_dtype
@@ -378,18 +400,57 @@ class HourglassAdapter:
         vae = modules.vae
 
         sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
-        class_labels = torch.ones(num_images, device=device, dtype=torch.long) * cfg.dataset.num_classes
+        dropout_label = self._num_dataset_classes
+
+        if conditioning is None:
+            class_labels = torch.full((num_images,), dropout_label, device=device, dtype=torch.long)
+            unconditional_labels = None
+            classifier_free = False
+        elif isinstance(conditioning, torch.Tensor):
+            classifier_free = True
+            class_labels = conditioning.to(device=device, dtype=torch.long)
+            if class_labels.ndim != 1:
+                raise ValueError("Class-label conditioning tensor must be 1D with shape (num_images,)")
+            if class_labels.shape[0] == 1 and num_images > 1:
+                class_labels = class_labels.expand(num_images)
+            if class_labels.shape[0] != num_images:
+                raise ValueError("Number of class labels must match num_images")
+            if class_labels.numel() == 0:
+                raise ValueError("Class-label conditioning tensor must be non-empty")
+            if class_labels.min() < 0 or class_labels.max() >= self._num_dataset_classes:
+                raise ValueError(
+                    f"Class labels must be in [0, {self._num_dataset_classes - 1}] for hourglass adapter"
+                )
+            unconditional_labels = torch.full_like(class_labels, dropout_label)
+        elif isinstance(conditioning, str) or isinstance(conditioning, Iterable):
+            raise NotImplementedError("Hourglass caption conditioning is not implemented yet")
+        else:
+            raise TypeError("Unsupported conditioning value for Hourglass sampling")
 
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                model_input = sample
+                if classifier_free and unconditional_labels is not None:
+                    model_input = torch.cat([sample, sample], dim=0)
+                else:
+                    model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
-                timesteps = torch.ones(sample.size(0)).to(device) * timestep
+
+                timesteps = torch.full((model_input.size(0),), timestep, device=device)
                 sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
+
+                if classifier_free and unconditional_labels is not None:
+                    class_input = torch.cat([unconditional_labels, class_labels], dim=0)
+                else:
+                    class_input = class_labels
+
                 model_output = modules.denoiser(
-                    model_input, sigma=sigmas, class_cond=class_labels
+                    model_input, sigma=sigmas, class_cond=class_input
                 )
+
+                if classifier_free and unconditional_labels is not None:
+                    model_output_uncond, model_output_cond = model_output.chunk(2)
+                    model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
 
                 step_output = scheduler.step(model_output, timestep, sample, return_dict=True)
                 sample = step_output.prev_sample  # type: ignore

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import torch
 from accelerate import Accelerator
@@ -176,6 +176,29 @@ class StableDiffusionAdapterV15:
         cfg_scale: float,
         generator: torch.Generator | None = None,
     ) -> torch.Tensor:
+        return self.generate_conditional_samples(
+            accelerator,
+            cfg,
+            modules,
+            num_images,
+            denoising_steps=denoising_steps,
+            cfg_scale=cfg_scale,
+            conditioning=None,
+            generator=generator,
+        )
+
+    def generate_conditional_samples(
+        self,
+        accelerator: Accelerator,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        num_images: int,
+        *,
+        denoising_steps: int,
+        cfg_scale: float,
+        conditioning: torch.Tensor | str | Iterable[str] | None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
         scheduler_cls = type(modules.noise_scheduler)
         scheduler = scheduler_cls.from_config(modules.noise_scheduler.config)
         device = accelerator.device
@@ -200,12 +223,39 @@ class StableDiffusionAdapterV15:
         if hasattr(scheduler, 'init_noise_sigma'):
             latents = latents * scheduler.init_noise_sigma
 
-        text_inputs = tokenizer([''] * num_images, padding='max_length', max_length=tokenizer.model_max_length, return_tensors='pt')
+        if conditioning is None:
+            prompts = [""] * num_images
+        elif isinstance(conditioning, torch.Tensor):
+            raise TypeError("Stable Diffusion adapter does not accept tensor class-label conditioning during sampling")
+        elif isinstance(conditioning, str):
+            prompts = [conditioning] * num_images
+        elif isinstance(conditioning, Iterable):
+            prompts_list = [str(item) for item in conditioning]
+            if len(prompts_list) == 1 and num_images > 1:
+                prompts = prompts_list * num_images
+            elif len(prompts_list) != num_images:
+                raise ValueError("Number of text prompts must match num_images")
+            else:
+                prompts = prompts_list
+        else:
+            raise TypeError("Unsupported conditioning value for Stable Diffusion sampling")
+
+        text_inputs = tokenizer(
+            prompts,
+            padding="max_length",
+            max_length=tokenizer.model_max_length,
+            return_tensors="pt",
+        )
         text_inputs = text_inputs.input_ids.to(device)
 
         with torch.no_grad():
             text_embeddings = text_encoder(text_inputs)[0]
-            uncond_inputs = tokenizer([''] * num_images, padding='max_length', max_length=tokenizer.model_max_length, return_tensors='pt')
+            uncond_inputs = tokenizer(
+                [""] * num_images,
+                padding="max_length",
+                max_length=tokenizer.model_max_length,
+                return_tensors="pt",
+            )
             uncond_embeddings = text_encoder(uncond_inputs.input_ids.to(device))[0]
             prompt_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
