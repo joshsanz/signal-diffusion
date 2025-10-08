@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -199,6 +200,7 @@ def train(
 
     if accelerator.is_main_process:
         LOGGER.info("Running initial evaluation...")
+        torch.cuda.empty_cache()
         eval_metrics = run_evaluation(
             accelerator=accelerator,
             adapter=adapter,
@@ -209,6 +211,7 @@ def train(
             run_dir=run_dir,
             global_step=0,
         )
+        torch.cuda.empty_cache()
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
             LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
@@ -271,7 +274,9 @@ def train(
             if accelerator.sync_gradients:
                 global_step += 1
                 log_payload = {
-                    "train/loss": accelerator.gather_for_metrics(loss.detach()).mean().item()}
+                    "train/loss": accelerator.gather_for_metrics(loss.detach()).mean().item(),
+                    "train/lr": lr_scheduler.get_last_lr()[0],
+                }
                 if grad_norm > 0:
                     log_payload.update({"train/grad_norm": grad_norm / grad_norm_steps})
                     grad_norm = 0
@@ -286,10 +291,24 @@ def train(
                     postfix_payload["train_loss"] = f"{float(train_loss):.4f}"
 
                 if cfg.training.checkpoint_interval and global_step % cfg.training.checkpoint_interval == 0:
-                    save_dir = run_dir / f"checkpoint-{global_step}"
+                    checkpoints_dir = run_dir / "checkpoints"
+                    save_dir = checkpoints_dir / f"checkpoint-{global_step}"
                     accelerator.save_state(str(save_dir))
                     if accelerator.is_main_process:
                         LOGGER.info("Saved checkpoint at step %d to %s", global_step, save_dir)
+
+                        if cfg.training.checkpoint_total_limit is not None and cfg.training.checkpoint_total_limit > 0:
+                            # Get all checkpoint directories
+                            saved_checkpoints = sorted(
+                                [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+                                key=lambda x: int(x.name.split("-")[-1]),
+                            )
+
+                            # Remove oldest checkpoints if limit is exceeded
+                            while len(saved_checkpoints) > cfg.training.checkpoint_total_limit:
+                                checkpoint_to_delete = saved_checkpoints.pop(0)
+                                LOGGER.info(f"Deleting old checkpoint: {checkpoint_to_delete}")
+                                shutil.rmtree(checkpoint_to_delete)
 
                 run_eval_now = should_evaluate(
                     global_step, len(train_loader), cfg.training
@@ -313,6 +332,7 @@ def train(
                 eval_metrics: dict[str, float] = {}
                 if run_eval_now:
                     if accelerator.is_main_process:
+                        torch.cuda.empty_cache()
                         eval_metrics = run_evaluation(
                             accelerator=accelerator,
                             adapter=adapter,
@@ -323,6 +343,7 @@ def train(
                             run_dir=run_dir,
                             global_step=global_step,
                         )
+                        torch.cuda.empty_cache()
                     accelerator.wait_for_everyone()
                     if eval_metrics and accelerator.is_main_process:
                         accelerator.log(eval_metrics, step=global_step)
@@ -342,6 +363,7 @@ def train(
     # Training finished
     if accelerator.is_main_process:
         LOGGER.info("Running final evaluation...")
+        torch.cuda.empty_cache()
         eval_metrics = run_evaluation(
             accelerator=accelerator,
             adapter=adapter,
@@ -352,6 +374,7 @@ def train(
             run_dir=run_dir,
             global_step=global_step,
         )
+        torch.cuda.empty_cache()
         if eval_metrics:
             accelerator.log(eval_metrics, step=global_step)
             LOGGER.info("Final evaluation metrics: %s", eval_metrics)

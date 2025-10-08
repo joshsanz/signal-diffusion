@@ -8,7 +8,10 @@ from typing import Any, Iterable, Mapping, MutableMapping
 
 import numpy as np
 import torch
-from datasets import Dataset, DatasetDict, IterableDataset, load_dataset
+from datasets import (
+    Dataset, DatasetDict, IterableDataset, IterableDatasetDict,
+    load_dataset
+)
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
 from transformers import PreTrainedTokenizerBase
@@ -53,13 +56,8 @@ def _resolve_dataset(cfg: DatasetConfig, settings: Settings | None) -> tuple[str
         ds_settings = settings.dataset(cfg.identifier)
         return None, ds_settings.root
 
-    identifier_path = Path(cfg.identifier)
-    if identifier_path.exists():
-        return None, identifier_path
-
-    if cfg.dataset_type == "imagefolder":
-        # Assume the identifier is a relative path when dataset_type hints imagefolder.
-        return None, identifier_path
+    if cfg.dataset_type == "imagefolder" or Path(cfg.identifier).exists():
+        return None, Path(cfg.identifier)
 
     return cfg.identifier, None
 
@@ -178,16 +176,18 @@ def build_dataloaders(
     settings = _maybe_load_settings(settings_path)
     hf_dataset, local_path = _resolve_dataset(cfg, settings)
 
-    ds: Dataset | DatasetDict | IterableDataset
+    ds: Dataset | DatasetDict | IterableDataset | IterableDatasetDict
     if hf_dataset is not None:
-        ds = load_dataset(hf_dataset, cache_dir=cfg.cache_dir, split=None)
+        cache_dir = None
+        if cfg.cache_dir:
+            cache_dir = str(cache_dir)
+        ds = load_dataset(hf_dataset, cache_dir=cache_dir, split=None)
     else:
-        path = local_path
-        if path is None:
+        if local_path is None:
             raise FileNotFoundError(
                 f"Unable to resolve dataset path for identifier '{cfg.identifier}'"
             )
-        ds = load_dataset(path=str(path))
+        ds = load_dataset(path=str(local_path))
 
     if isinstance(ds, DatasetDict):
         train_dataset = ds[cfg.train_split]
@@ -231,7 +231,7 @@ def build_dataloaders(
         )
         val_loader = DataLoader(
             val_dataset,
-            batch_size=cfg.effective_eval_batch_size(),
+            batch_size=cfg.batch_size * 4,
             shuffle=False,
             num_workers=cfg.num_workers,
             collate_fn=DiffusionCollator(),

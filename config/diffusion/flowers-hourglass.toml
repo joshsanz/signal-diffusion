@@ -5,21 +5,22 @@ config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
 
 [dataset]
-name = "/data/data/signal-diffusion/flowers-102-categories"
+name = "nkirschi/oxford-flowers"
 train_split = "train"
-val_split = ""
-batch_size = 64
+val_split = "test"
+batch_size = 32
 num_workers = 4
-resolution = 64
+resolution = 128
 center_crop = true
 random_flip = true
 image_column = "image"
-num_classes = 0
+class_column = "label"
+num_classes = 102
 
 [model]
 name = "hourglass"
-sample_size = 64
-conditioning = "none"
+sample_size = 128
+conditioning = "classes"
 
 [model.extras]
 mapping_width = 256
@@ -51,7 +52,7 @@ prediction_type = "vector_field"
 
 [optimizer]
 name = "adamw"
-learning_rate = 5e-4
+learning_rate = 1e-3
 weight_decay = 1e-4
 betas = [0.9, 0.99]
 
@@ -62,17 +63,17 @@ warmup_steps = 100
 [training]
 seed = 42
 epochs = 200
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 2
 log_every_steps = 10
 checkpoint_interval = 500
 checkpoint_total_limit = 3
 mixed_precision = "bf16"
 gradient_clip_norm = 1.0
 eval_strategy = "steps"
-eval_num_steps = 500
+eval_num_steps = 1000
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 512
+eval_batch_size = 256
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 

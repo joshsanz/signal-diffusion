@@ -99,7 +99,6 @@ def load_settings(path: str | os.PathLike[str] | None = None) -> Settings:
     2. Environment variable ``SIGNAL_DIFFUSION_CONFIG``.
     3. Repository default ``config/default.toml``.
     """
-
     config_path = _determine_config_path(path)
     with config_path.open("rb") as fp:
         data = tomllib.load(fp)

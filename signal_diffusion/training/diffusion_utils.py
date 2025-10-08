@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 import random
 from argparse import Namespace
@@ -64,6 +65,22 @@ def build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg: Any) -> torch
         eps=cfg.optimizer.eps,
         weight_decay=cfg.optimizer.weight_decay,
     )
+
+
+def _compute_per_channel_stats(tensor: torch.Tensor) -> dict[str, dict[str, float]]:
+    """Computes per-channel min, max, mean, and std for a given tensor."""
+    stats: dict[str, dict[str, float]] = {}
+    if tensor.ndim != 4:
+        return stats
+    for i in range(tensor.shape[1]):
+        channel_data = tensor[:, i, :, :]
+        stats[f"ch{i}"] = {
+            "min": channel_data.min().item(),
+            "max": channel_data.max().item(),
+            "mean": channel_data.mean().item(),
+            "std": channel_data.std().item(),
+        }
+    return stats
 
 
 def run_evaluation(
