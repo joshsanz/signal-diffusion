@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "bidict",
-    "numpy",
+    "numpy>2",
     "scipy",
     "pandas",
     "torch>=2.8",
@@ -35,7 +35,12 @@ dependencies = [
     "peft>=0.17.1",
     #"natten==0.21.0+torch280cu128",  # Unable to use pre-built wheels for torch==2.8
     "torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@1121d4dbb7497deaa38c8e67688bd1d373320082",
+    "einops>=0.8.1",
+    "flash-attn<=2.8.2",
 ]
+
+[tool.uv]
+no-build-isolation = true
 
 [[tool.uv.index]]
 name = "NATTEN"

@@ -20,11 +20,16 @@ def sample_timestep_logitnorm(
     return scheduler_timesteps[indices]
 
 
-def get_snr(scheduler, timesteps: torch.Tensor, *, device: torch.device) -> torch.Tensor:
+def get_sigmas_from_timesteps(scheduler, timesteps: torch.Tensor, *, device: torch.device) -> torch.Tensor:
     schedule_timesteps = scheduler.timesteps.to(device)
     sigmas = scheduler.sigmas.to(device)
     step_indices = [scheduler.index_for_timestep(t.item(), schedule_timesteps) for t in timesteps]
-    sigma = sigmas[step_indices].flatten()
+    sigmas = sigmas[step_indices].flatten()
+    return sigmas
+
+
+def get_snr(scheduler, timesteps: torch.Tensor, *, device: torch.device) -> torch.Tensor:
+    sigma = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
     snr = (1 - sigma) ** 2 / sigma ** 2
     return snr
 

@@ -1,4 +1,4 @@
-# Example configuration for DiT training on the Oxford Flowers dataset.
+# Example configuration for training the Hourglass transformer denoiser on Oxford Flowers.
 
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
@@ -8,29 +8,39 @@ trainer = "diffusion"
 name = "/data/data/signal-diffusion/flowers-102-categories"
 train_split = "train"
 val_split = ""
-batch_size = 16
+batch_size = 64
 num_workers = 4
 resolution = 64
 center_crop = true
 random_flip = true
 image_column = "image"
-caption_column = ""
 num_classes = 0
 
 [model]
-name = "dit"
+name = "hourglass"
 sample_size = 64
-conditioning = "none" # none, caption, classes
+conditioning = "none"
 
 [model.extras]
-num_attention_heads = 16
-attention_head_dim = 72
+mapping_width = 256
+mapping_depth = 2
+mapping_d_ff = 768
+mapping_cond_dim = 0
+mapping_dropout_rate = 0.0
+depths = [4, 4, 4]
+widths = [128, 384, 768]
+d_ffs = [768, 768, 768]
+self_attns = [
+    { type = "neighborhood", d_head = 64, kernel_size = 7 },
+    { type = "neighborhood", d_head = 64, kernel_size = 7 },
+    { type = "global", d_head = 64 }
+]
+dropout_rate = [0.1, 0.1, 0.1]
+augment_wrapper = false
+augment_prob = 0.0
+patch_size = [2, 2]
 in_channels = 3
 out_channels = 3
-num_layers = 12
-patch_size = 2
-latent_space = false
-num_classes = 0
 cfg_dropout = 0.0
 
 [model.lora]
@@ -38,11 +48,10 @@ enabled = false
 
 [objective]
 prediction_type = "vector_field"
-flow_match_timesteps = 1000
 
 [optimizer]
 name = "adamw"
-learning_rate = 1e-4
+learning_rate = 5e-4
 weight_decay = 1e-4
 betas = [0.9, 0.99]
 
@@ -52,28 +61,26 @@ warmup_steps = 100
 
 [training]
 seed = 42
-epochs = 1
+epochs = 200
 gradient_accumulation_steps = 1
 log_every_steps = 10
-checkpoint_interval = 100
+checkpoint_interval = 500
 checkpoint_total_limit = 3
 mixed_precision = "bf16"
 gradient_clip_norm = 1.0
-snr_gamma = 5.0
-eval_strategy = "steps" # or "epoch"
-eval_num_steps = 100
+eval_strategy = "steps"
+eval_num_steps = 500
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 256
+eval_batch_size = 512
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 
 [logging]
 tensorboard = true
 log_dir = "runs/diffusion/tensorboard"
-run_name = "flowers_testing"
-# wandb_project = "your-project-name"
+run_name = "flowers_hourglass"
 
 [inference]
-denoising_steps = 20
-cfg_scale = 7.5
+denoising_steps = 30
+cfg_scale = 1.0

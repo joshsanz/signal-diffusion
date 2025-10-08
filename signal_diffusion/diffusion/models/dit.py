@@ -212,6 +212,7 @@ class DiTAdapter:
         vae = modules.vae
 
         sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
+        # TODO: set to num_classes if class_conditional?
         class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
 
         with torch.no_grad():

@@ -1,6 +1,6 @@
 # Diffusion Training Workflow
 
-Use `signal_diffusion.training.diffusion` to launch text-to-image or flow-matching runs with a model registry that currently includes Stable Diffusion v1.5 (`stable-diffusion-v1-5`) and DiT (`dit`).
+Use `signal_diffusion.training.diffusion` to launch text-to-image or flow-matching runs with a model registry that currently includes Stable Diffusion v1.5 (`stable-diffusion-v1-5`), DiT (`dit`), and the Hourglass transformer (`hourglass`, requires the bundled `k_diffusion`).
 
 ## Quickstart
 

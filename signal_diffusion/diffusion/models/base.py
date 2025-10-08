@@ -6,8 +6,9 @@ from typing import Iterable, Mapping, Protocol
 
 import torch
 from accelerate import Accelerator
+from diffusers import AutoencoderKL
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, CLIPTextModel
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
@@ -20,8 +21,8 @@ class DiffusionModules:
     denoiser: torch.nn.Module
     noise_scheduler: SchedulerMixin
     weight_dtype: torch.dtype
-    vae: torch.nn.Module | None = None
-    text_encoder: torch.nn.Module | None = None
+    vae: AutoencoderKL | None = None
+    text_encoder: CLIPTextModel | None = None
     tokenizer: PreTrainedTokenizerBase | None = None
     extra_conditioning: Mapping[str, torch.Tensor] | None = None
     ema: torch.nn.Module | None = None
