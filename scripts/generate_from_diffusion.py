@@ -107,20 +107,30 @@ def main(
         conditions.append((None, "generated"))
 
     image_height = int(d_config.resolution)
+    indices = np.arange(len(dataset))
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+
     reference_images: list[torch.Tensor] = []
     for idx, _ in conditions:
         if idx is None:
             reference_images.append(torch.full((3, image_height, image_height), -1.0, dtype=torch.float32))
             continue
-        filtered = dataset.filter(lambda example: example["class_labels"] == idx)
-        if len(filtered) == 0:
+        reference_tensor: torch.Tensor | None = None
+        for dataset_index in indices:
+            example = dataset[dataset_index]
+            class_value = example.get("class_labels") if isinstance(example, dict) else example[1]
+            if int(class_value) == idx:
+                pixel_values = example["pixel_values"] if isinstance(example, dict) else example[0]
+                reference_tensor = (
+                    pixel_values.detach().cpu()
+                    if isinstance(pixel_values, torch.Tensor)
+                    else transforms.ToTensor()(pixel_values) * 2.0 - 1.0
+                )
+                break
+        if reference_tensor is None:
             raise ValueError(f"No samples found for class index {idx}")
-        random_index = np.random.randint(0, len(filtered))
-        reference = filtered[random_index]["pixel_values"]
-        if isinstance(reference, torch.Tensor):
-            reference_images.append(reference.detach().cpu())
-        else:
-            reference_images.append(transforms.ToTensor()(reference) * 2.0 - 1.0)
+        reference_images.append(reference_tensor)
 
     generated_by_condition: dict[Optional[int], list[torch.Tensor]] = {idx: [] for idx, _ in conditions}
 
