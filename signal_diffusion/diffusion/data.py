@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from datasets import Dataset, DatasetDict, IterableDataset, load_dataset
 from torch.utils.data import DataLoader
-from torchvision import transforms
+from torchvision.transforms import v2 as transforms
 from transformers import PreTrainedTokenizerBase
 
 from signal_diffusion.config import Settings, load_settings
@@ -66,7 +66,8 @@ def _resolve_dataset(cfg: DatasetConfig, settings: Settings | None) -> tuple[str
 
 def _build_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
     size = cfg.resolution
-    ops: list[Any] = [transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR)]
+    ops: list[Any] = [transforms.ToImage()]
+    ops.append(transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR))
     if cfg.center_crop:
         ops.append(transforms.CenterCrop(size))
     else:
@@ -78,7 +79,7 @@ def _build_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
         ops.append(transforms.RandomHorizontalFlip())
     ops.extend(
         [
-            transforms.ToTensor(),
+            transforms.ToDtype(torch.float32, scale=True),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )

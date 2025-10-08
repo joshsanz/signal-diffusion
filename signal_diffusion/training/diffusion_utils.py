@@ -17,7 +17,7 @@ from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import CLIPTokenizer
-from torchvision import transforms
+from torchvision.transforms import v2 as transforms
 
 from signal_diffusion.diffusion.eval_utils import compute_kid_score, save_image_grid
 
@@ -346,13 +346,14 @@ def build_image_caption_dataloader(
 
     train_transforms = transforms.Compose(
         [
+            transforms.ToImage(),
             transforms.Resize(getattr(args, "resolution", 512), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.CenterCrop(getattr(args, "resolution", 512))
             if getattr(args, "center_crop", False)
             else transforms.RandomCrop(getattr(args, "resolution", 512)),
             transforms.RandomHorizontalFlip() if getattr(args, "random_flip", False) else transforms.Lambda(lambda x: x),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
+            transforms.ToDtype(torch.float32, scale=True),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
 

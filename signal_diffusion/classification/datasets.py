@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from torchvision import transforms
+from torchvision.transforms import v2 as transforms
 
 from signal_diffusion.config import Settings
 from signal_diffusion.data import (
@@ -22,7 +22,8 @@ _DATASET_CLS: Mapping[str, type] = {
 
 _DEFAULT_TRANSFORM = transforms.Compose(
     [
-        transforms.ToTensor(),
+        transforms.ToImage(),
+        transforms.ToDtype(torch.float32, scale=True),
         transforms.Normalize([0.5], [0.5]),
     ]
 )

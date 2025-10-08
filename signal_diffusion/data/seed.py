@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 from PIL import Image
 from scipy.signal import decimate
-from torchvision import transforms
+from torchvision.transforms import v2 as transforms
 
 from common.multichannel_spectrograms import multichannel_spectrogram
 from signal_diffusion.data.channel_maps import seed_channels
@@ -373,7 +373,7 @@ class SEEDDataset:
         self.dataset_settings: DatasetSettings = settings.dataset("seed")
         self.split = split
         self.transform = transform or transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize([0.5], [0.5])]
+            [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True), transforms.Normalize([0.5], [0.5])]
         )
         self.tasks = tuple(tasks)
         for name in self.tasks:
