@@ -309,7 +309,7 @@ class HourglassAdapter:
         if self._use_gradient_checkpointing and accelerator.is_main_process:
             self._logger.info("Enabled gradient checkpointing for Hourglass denoiser")
 
-        params = list(model.param_groups())
+        params = list(model.param_groups(base_lr=cfg.optimizer.learning_rate))
         modules = DiffusionModules(
             denoiser=model,
             noise_scheduler=noise_scheduler,
