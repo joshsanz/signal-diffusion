@@ -219,20 +219,62 @@ class HourglassAdapter:
             raise ValueError("Karras augmentation not supported")
 
         if cfg.model.pretrained:
-            checkpoint_path = Path(cfg.model.pretrained)
-            state_dict = torch.load(checkpoint_path, map_location="cpu")
-            if isinstance(state_dict, dict) and "state_dict" in state_dict:
-                state_dict = state_dict["state_dict"]
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
-            if missing or unexpected:
-                self._logger.warning(
-                    "Loaded checkpoint from %s with missing=%s unexpected=%s",
-                    checkpoint_path,
-                    missing,
-                    unexpected,
-                )
+            self._load_pretrained_weights(model, cfg.model.pretrained)
 
         return model
+
+    def _load_pretrained_weights(self, model: Hourglass2DModel, source: str | Path) -> None:
+        checkpoint_path = Path(source).expanduser()
+        candidate_files: list[Path]
+
+        if checkpoint_path.is_dir():
+            preferred_names = [
+                "hourglass_model.pt",
+                "pytorch_model.bin",
+                "diffusion_pytorch_model.bin",
+                "model.bin",
+                "model.pt",
+                "model.pth",
+                "model.safetensors",
+            ]
+            candidate_files = [checkpoint_path / name for name in preferred_names if (checkpoint_path / name).is_file()]
+            if not candidate_files:
+                candidate_files = sorted(
+                    [path for path in checkpoint_path.iterdir() if path.suffix in {".pt", ".pth", ".bin", ".safetensors"}]
+                )
+        else:
+            candidate_files = [checkpoint_path]
+
+        if not candidate_files:
+            raise FileNotFoundError(f"Could not locate checkpoint file under {checkpoint_path}")
+
+        checkpoint_file = candidate_files[0]
+        if not checkpoint_file.is_file():
+            raise FileNotFoundError(f"Checkpoint file {checkpoint_file} does not exist")
+        if checkpoint_file.suffix == ".safetensors":
+            try:
+                from safetensors.torch import load_file as load_safetensors  # type: ignore
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise ImportError(
+                    f"Loading safetensors checkpoint {checkpoint_file} requires 'safetensors' to be installed."
+                ) from exc
+            state_dict = load_safetensors(str(checkpoint_file))
+        else:
+            state_dict = torch.load(checkpoint_file, map_location="cpu")
+
+        if isinstance(state_dict, dict) and "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            self._logger.warning(
+                "Loaded checkpoint from %s with missing=%s unexpected=%s",
+                checkpoint_file,
+                missing,
+                unexpected,
+            )
+        else:
+            self._logger.info("Loaded hourglass weights from %s", checkpoint_file)
 
     def build_modules(
         self,
