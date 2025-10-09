@@ -136,6 +136,8 @@ runs/
 test/
 *.pt
 *.png
+*.jpg
+*.jpeg
 wandb/
 tensorboard_logs*/
 *.pkl

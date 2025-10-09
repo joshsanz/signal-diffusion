@@ -21,6 +21,7 @@ num_classes = 102
 name = "hourglass"
 sample_size = 128
 conditioning = "classes"
+pretrained = "runs/diffusion/flowers/final/hourglass_model.pt"
 
 [model.extras]
 mapping_width = 256
@@ -57,8 +58,8 @@ weight_decay = 1e-4
 betas = [0.9, 0.99]
 
 [scheduler]
-name = "constant_with_warmup"
-warmup_steps = 100
+name = "linear"
+warmup_steps = 200
 
 [training]
 seed = 42
@@ -76,12 +77,17 @@ eval_gen_seed = 1234
 eval_batch_size = 256
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
+ema_use_warmup = true
+ema_inv_gamma = 1 # always 1
+ema_power = 0.75 # 0.75 reaches decay 0.999 ~10k steps, 0.667 ~30k steps
+ema_decay = 0.999 # if use_warmup=false
+ema_update_after_step = 1000 # if use_warmup=false
 
 [logging]
 tensorboard = true
-log_dir = "runs/diffusion/tensorboard"
+log_dir = "runs/diffusion/tensorboard/hourglass"
 run_name = "flowers_hourglass"
 
 [inference]
-denoising_steps = 30
+denoising_steps = 25
 cfg_scale = 1.0

@@ -123,8 +123,9 @@ class TrainingConfig:
     gradient_clip_norm: float | None = 1.0
     ema_decay: float | None = 0.999
     ema_power: float = 0.75
-    ema_warmup: bool = True
-    ema_update_after_step: int = 0
+    ema_inv_gamma: float = 1.0
+    ema_update_after_step: int = 5000
+    ema_use_ema_warmup: bool = True
     allow_tf32: bool = True
     snr_gamma: float | None = None
     eval_num_examples: int = 0
@@ -319,6 +320,12 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
     strategy_value = section.get("eval_strategy", "epoch")
     strategy = str(strategy_value).strip().lower() or "epoch"
 
+    raw_ema_decay = section.get("ema_decay", 0.999)
+    ema_decay = float(raw_ema_decay) if raw_ema_decay is not None else None
+    ema_use_warmup_default = section.get("ema_use_ema_warmup")
+    if ema_use_warmup_default is None:
+        ema_use_warmup_default = section.get("ema_warmup", True)
+
     return TrainingConfig(
         seed=int(section.get("seed", 42)),
         output_dir=output_dir,
@@ -331,10 +338,11 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         checkpoint_total_limit=section.get("checkpoint_total_limit"),
         resume=str(resume) if resume else None,
         gradient_clip_norm=section.get("gradient_clip_norm"),
-        ema_decay=section.get("ema_decay"),
+        ema_decay=ema_decay,
         ema_power=float(section.get("ema_power", 0.75)),
-        ema_warmup=bool(section.get("ema_warmup", True)),
-        ema_update_after_step=int(section.get("ema_update_after_step", 0)),
+        ema_inv_gamma=float(section.get("ema_inv_gamma", 1.0)),
+        ema_update_after_step=int(section.get("ema_update_after_step", 5000)),
+        ema_use_ema_warmup=bool(ema_use_warmup_default),
         allow_tf32=bool(section.get("allow_tf32", True)),
         snr_gamma=section.get("snr_gamma"),
         eval_num_examples=int(section.get("eval_num_examples", 0)),

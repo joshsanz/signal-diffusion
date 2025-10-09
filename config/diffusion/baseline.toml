@@ -52,21 +52,34 @@ warmup_steps = 100
 [training]
 seed = 42
 epochs = 1
+mixed_precision = "bf16"
 gradient_accumulation_steps = 1
-log_every_steps = 10
-checkpoint_interval = 0
-checkpoint_total_limit = 3
-
-mixed_precision = "fp16"
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
+
+log_every_steps = 10
+checkpoint_interval = 1000
+checkpoint_total_limit = 3
+
 eval_strategy = "steps" # or "epoch"
 eval_num_steps = 100
 eval_num_examples = 8
 eval_mmd_samples = 100
 eval_mmd_fallback_ntrain = 1000
 
+ema_use_warmup = true
+ema_inv_gamma = 1 # always 1
+ema_power = 0.75 # 0.75 reaches decay 0.999 ~10k steps, 0.667 ~30k steps
+ema_decay = 0.999 # if use_warmup=false
+ema_update_after_step = 1000 # if use_warmup=false
+
 [logging]
 tensorboard = true
+run_name = "baseline"
+log_dir = "runs/diffusion/tensorboard/base"
 # wandb_project = "your-project-name"
-# run_name = "baseline"
+
+
+[inference]
+denoising_steps = 25
+cfg_scale = 1.0

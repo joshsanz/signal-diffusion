@@ -67,13 +67,18 @@ eval_gen_seed = 1234
 eval_batch_size = 256
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
+ema_use_warmup = true
+ema_inv_gamma = 1 # always 1
+ema_power = 0.75 # 0.75 reaches decay 0.999 ~10k steps, 0.667 ~30k steps
+ema_decay = 0.999 # if use_warmup=false
+ema_update_after_step = 1000 # if use_warmup=false
 
 [logging]
 tensorboard = true
-log_dir = "runs/diffusion/tensorboard"
+log_dir = "runs/diffusion/tensorboard/flowers"
 run_name = "flowers_testing"
 # wandb_project = "your-project-name"
 
 [inference]
-denoising_steps = 20
+denoising_steps = 25
 cfg_scale = 7.5

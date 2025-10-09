@@ -7,6 +7,7 @@ import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager, nullcontext
 from typing import Any, Optional
 
 import torch
@@ -16,6 +17,7 @@ from accelerate.utils import LoggerType
 from accelerate.utils import ProjectConfiguration
 from accelerate.utils import set_seed
 from diffusers.optimization import get_scheduler
+from diffusers.training_utils import EMAModel
 from tqdm.auto import tqdm
 
 from signal_diffusion.diffusion import load_diffusion_config
@@ -36,6 +38,24 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
 LOGGER = get_logger(__name__)
+
+
+def ema_weights_context(accelerator: Accelerator, modules: Any):
+    if getattr(modules, "ema", None) is None:
+        return nullcontext()
+
+    unwrapped = accelerator.unwrap_model(modules.denoiser)
+
+    @contextmanager
+    def _apply_ema():
+        modules.ema.store(unwrapped.parameters())
+        modules.ema.copy_to(unwrapped.parameters())
+        try:
+            yield
+        finally:
+            modules.ema.restore(unwrapped.parameters())
+
+    return _apply_ema()
 
 
 @app.command()
@@ -133,6 +153,29 @@ def train(
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
 
+    ema_model: EMAModel | None = None
+    if cfg.training.ema_decay is not None and cfg.training.ema_decay > 0:
+        ema_model = EMAModel(
+            modules.denoiser.parameters(),
+            decay=float(cfg.training.ema_decay),
+            inv_gamma=float(cfg.training.ema_inv_gamma),
+            power=float(cfg.training.ema_power),
+            update_after_step=int(cfg.training.ema_update_after_step),
+            use_ema_warmup=bool(cfg.training.ema_use_ema_warmup),
+            model_cls=type(modules.denoiser),
+            model_config=getattr(modules.denoiser, "config", None),
+        )
+        modules.ema = ema_model
+        if accelerator.is_main_process:
+            LOGGER.info(
+                "Initialized EMA with decay=%.5f inv_gamma=%.3f power=%.3f update_after_step=%d warmup=%s",
+                float(cfg.training.ema_decay),
+                float(cfg.training.ema_inv_gamma),
+                float(cfg.training.ema_power),
+                int(cfg.training.ema_update_after_step),
+                bool(cfg.training.ema_use_ema_warmup),
+            )
+
     optimizer = build_optimizer(modules.parameters, cfg)
 
     num_update_steps_per_epoch = math.ceil(len(train_loader) / cfg.training.gradient_accumulation_steps)
@@ -171,6 +214,10 @@ def train(
 
     modules.parameters = [param for group in optimizer.param_groups for param in group["params"]]
 
+    if modules.ema is not None:
+        modules.ema.to(accelerator.device)
+        accelerator.register_for_checkpointing(modules.ema)
+
 
     if accelerator.is_main_process:
         with (run_dir / "config.json").open("w", encoding="utf-8") as fp:
@@ -201,16 +248,17 @@ def train(
     if accelerator.is_main_process:
         LOGGER.info("Running initial evaluation...")
         torch.cuda.empty_cache()
-        eval_metrics = run_evaluation(
-            accelerator=accelerator,
-            adapter=adapter,
-            cfg=cfg,
-            modules=modules,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            run_dir=run_dir,
-            global_step=0,
-        )
+        with ema_weights_context(accelerator, modules):
+            eval_metrics = run_evaluation(
+                accelerator=accelerator,
+                adapter=adapter,
+                cfg=cfg,
+                modules=modules,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                run_dir=run_dir,
+                global_step=0,
+            )
         torch.cuda.empty_cache()
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
@@ -225,6 +273,8 @@ def train(
             raise ValueError(f"Checkpoint path {resume_from_checkpoint} is not a directory.")
 
         accelerator.load_state(resume_from_checkpoint)
+        if modules.ema is not None:
+            modules.ema.to(accelerator.device)
         LOGGER.info(f"Resumed from checkpoint: {resume_from_checkpoint}")
 
         # Extract global_step from the checkpoint path
@@ -270,6 +320,9 @@ def train(
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+
+            if modules.ema is not None and accelerator.sync_gradients:
+                modules.ema.step(accelerator.unwrap_model(modules.denoiser).parameters())
 
             if accelerator.sync_gradients:
                 global_step += 1
@@ -333,16 +386,17 @@ def train(
                 if run_eval_now:
                     if accelerator.is_main_process:
                         torch.cuda.empty_cache()
-                        eval_metrics = run_evaluation(
-                            accelerator=accelerator,
-                            adapter=adapter,
-                            cfg=cfg,
-                            modules=modules,
-                            train_loader=train_loader,
-                            val_loader=val_loader,
-                            run_dir=run_dir,
-                            global_step=global_step,
-                        )
+                        with ema_weights_context(accelerator, modules):
+                            eval_metrics = run_evaluation(
+                                accelerator=accelerator,
+                                adapter=adapter,
+                                cfg=cfg,
+                                modules=modules,
+                                train_loader=train_loader,
+                                val_loader=val_loader,
+                                run_dir=run_dir,
+                                global_step=global_step,
+                            )
                         torch.cuda.empty_cache()
                     accelerator.wait_for_everyone()
                     if eval_metrics and accelerator.is_main_process:
@@ -364,16 +418,17 @@ def train(
     if accelerator.is_main_process:
         LOGGER.info("Running final evaluation...")
         torch.cuda.empty_cache()
-        eval_metrics = run_evaluation(
-            accelerator=accelerator,
-            adapter=adapter,
-            cfg=cfg,
-            modules=modules,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            run_dir=run_dir,
-            global_step=global_step,
-        )
+        with ema_weights_context(accelerator, modules):
+            eval_metrics = run_evaluation(
+                accelerator=accelerator,
+                adapter=adapter,
+                cfg=cfg,
+                modules=modules,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                run_dir=run_dir,
+                global_step=global_step,
+            )
         torch.cuda.empty_cache()
         if eval_metrics:
             accelerator.log(eval_metrics, step=global_step)
@@ -385,6 +440,11 @@ def train(
         final_dir.mkdir(parents=True, exist_ok=True)
         adapter.save_checkpoint(accelerator, cfg, modules, str(final_dir))
         LOGGER.info("Saved final checkpoint to %s", final_dir)
+        if modules.ema is not None:
+            ema_dir = final_dir / "ema"
+            with ema_weights_context(accelerator, modules):
+                adapter.save_checkpoint(accelerator, cfg, modules, str(ema_dir))
+            LOGGER.info("Saved EMA checkpoint to %s", ema_dir)
         LOGGER.info("Completed training after %d steps", global_step)
         if progress_bar is not None:
             progress_bar.close()

@@ -7,6 +7,7 @@ from typing import Iterable, Mapping, Protocol
 import torch
 from accelerate import Accelerator
 from diffusers import AutoencoderKL
+from diffusers.training_utils import EMAModel
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from transformers import PreTrainedTokenizerBase, CLIPTextModel
 
@@ -25,7 +26,7 @@ class DiffusionModules:
     text_encoder: CLIPTextModel | None = None
     tokenizer: PreTrainedTokenizerBase | None = None
     extra_conditioning: Mapping[str, torch.Tensor] | None = None
-    ema: torch.nn.Module | None = None
+    ema: EMAModel | None = None
     parameters: Iterable[torch.nn.Parameter] = field(default_factory=list)
     clip_grad_norm_target: Iterable[torch.nn.Parameter] | None = None
 
