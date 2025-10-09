@@ -21,7 +21,7 @@ num_classes = 102
 name = "hourglass"
 sample_size = 128
 conditioning = "classes"
-pretrained = "runs/diffusion/flowers/final/hourglass_model.pt"
+# pretrained = "runs/diffusion/flowers/final/hourglass_model.pt"
 
 [model.extras]
 mapping_width = 256
@@ -29,8 +29,8 @@ mapping_depth = 2
 mapping_d_ff = 768
 mapping_cond_dim = 0
 mapping_dropout_rate = 0.0
-depths = [4, 4, 4]
-widths = [128, 384, 768]
+depths = [3, 3, 4]
+widths = [128, 256, 512]
 d_ffs = [768, 768, 768]
 self_attns = [
     { type = "neighborhood", d_head = 64, kernel_size = 7 },
@@ -69,6 +69,7 @@ log_every_steps = 10
 checkpoint_interval = 500
 checkpoint_total_limit = 3
 mixed_precision = "bf16"
+gradient_checkpointing = false
 gradient_clip_norm = 1.0
 eval_strategy = "steps"
 eval_num_steps = 1000

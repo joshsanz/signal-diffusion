@@ -58,6 +58,7 @@ log_every_steps = 10
 checkpoint_interval = 100
 checkpoint_total_limit = 3
 mixed_precision = "bf16"
+gradient_checkpointing = false
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
 eval_strategy = "steps" # or "epoch"
