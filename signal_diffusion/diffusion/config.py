@@ -113,6 +113,7 @@ class TrainingConfig:
     seed: int = 42
     output_dir: Path | None = None
     mixed_precision: str | None = "fp16"
+    gradient_checkpointing: bool = False
     gradient_accumulation_steps: int = 1
     epochs: int = 1
     max_train_steps: int | None = None
@@ -330,6 +331,9 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         seed=int(section.get("seed", 42)),
         output_dir=output_dir,
         mixed_precision=section.get("mixed_precision", "fp16"),
+        gradient_checkpointing=bool(
+            section.get("gradient_checkpointing", section.get("grad_checkpointing", False))
+        ),
         gradient_accumulation_steps=int(section.get("gradient_accumulation_steps", 1)),
         epochs=int(section.get("epochs", 1)),
         max_train_steps=section.get("max_train_steps"),
