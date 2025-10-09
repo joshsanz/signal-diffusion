@@ -118,6 +118,65 @@ def train(
         log_with=log_with if log_with else None,
     )
 
+    best_eval_dir = run_dir / "best_eval"
+    best_eval_metadata_path = best_eval_dir / "metadata.json"
+    best_kid_checkpoints: list[tuple[float, int]] = []
+
+    if accelerator.is_main_process:
+        best_eval_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_best_eval_metadata() -> None:
+        if not accelerator.is_main_process:
+            return
+        payload = [{"step": step, "kid_mean": score} for score, step in best_kid_checkpoints]
+        with best_eval_metadata_path.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2)
+
+    if accelerator.is_main_process:
+        stored_entries: list[dict[str, Any]] = []
+        if best_eval_metadata_path.exists():
+            try:
+                with best_eval_metadata_path.open("r", encoding="utf-8") as fp:
+                    data = json.load(fp)
+                if isinstance(data, list):
+                    stored_entries = data
+            except (json.JSONDecodeError, OSError) as exc:
+                LOGGER.warning("Failed to load existing best-eval metadata from %s: %s", best_eval_metadata_path, exc)
+        elif best_eval_dir.exists():
+            for checkpoint_dir in sorted(
+                (
+                    d
+                    for d in best_eval_dir.iterdir()
+                    if d.is_dir() and d.name.startswith("checkpoint-")
+                ),
+                key=lambda path: int(path.name.split("-")[-1]) if path.name.split("-")[-1].isdigit() else 0,
+            ):
+                metrics_path = checkpoint_dir / "metrics.json"
+                if not metrics_path.exists():
+                    continue
+                try:
+                    with metrics_path.open("r", encoding="utf-8") as fp:
+                        metrics_payload = json.load(fp)
+                    stored_entries.append(metrics_payload)
+                except (OSError, json.JSONDecodeError):
+                    continue
+        for entry in stored_entries:
+            try:
+                step = int(entry["step"])
+                kid_mean = float(entry["kid_mean"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(kid_mean):
+                best_kid_checkpoints.append((kid_mean, step))
+        best_kid_checkpoints.sort(key=lambda item: (item[0], item[1]))
+        if len(best_kid_checkpoints) > 3:
+            for _, stale_step in best_kid_checkpoints[3:]:
+                stale_dir = best_eval_dir / f"checkpoint-{stale_step}"
+                if stale_dir.exists():
+                    shutil.rmtree(stale_dir)
+            del best_kid_checkpoints[3:]
+            write_best_eval_metadata()
+
     if accelerator.is_main_process and log_with:
         # A simple dict of hyperparameters for logging
         project_name = cfg.logging.wandb_project or "signal_diffusion"
@@ -177,6 +236,71 @@ def train(
                 int(cfg.training.ema_update_after_step),
                 bool(cfg.training.ema_use_ema_warmup),
             )
+
+    def save_best_checkpoint(step: int, kid_mean: float) -> None:
+        if not accelerator.is_main_process:
+            return
+        best_eval_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_dir = best_eval_dir / f"checkpoint-{step}"
+        if checkpoint_dir.exists():
+            shutil.rmtree(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        adapter.save_checkpoint(accelerator, cfg, modules, str(checkpoint_dir))
+        if modules.ema is not None:
+            ema_dir = checkpoint_dir / "ema"
+            with ema_weights_context(accelerator, modules):
+                adapter.save_checkpoint(accelerator, cfg, modules, str(ema_dir))
+        metrics_path = checkpoint_dir / "metrics.json"
+        with metrics_path.open("w", encoding="utf-8") as fp:
+            json.dump({"step": step, "kid_mean": kid_mean}, fp, indent=2)
+        LOGGER.info(
+            "Saved best-eval checkpoint (step=%d, kid_mean=%.6f) to %s",
+            step,
+            kid_mean,
+            checkpoint_dir,
+        )
+
+    def update_best_checkpoints(kid_mean: float | None, step: int) -> None:
+        if not accelerator.is_main_process or kid_mean is None:
+            return
+        try:
+            kid_value = float(kid_mean)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(kid_value):
+            return
+        existing_index: int | None = None
+        existing_score: float | None = None
+        for idx, (stored_score, stored_step) in enumerate(best_kid_checkpoints):
+            if stored_step == step:
+                existing_index = idx
+                existing_score = stored_score
+                break
+        if existing_score is not None and kid_value >= existing_score:
+            return
+        if existing_index is not None:
+            del best_kid_checkpoints[existing_index]
+        should_add = len(best_kid_checkpoints) < 3
+        if not should_add and best_kid_checkpoints:
+            worst_score, worst_step = best_kid_checkpoints[-1]
+            if kid_value < worst_score or (math.isclose(kid_value, worst_score) and step < worst_step):
+                should_add = True
+        if not should_add:
+            return
+        best_kid_checkpoints.append((kid_value, step))
+        best_kid_checkpoints.sort(key=lambda item: (item[0], item[1]))
+        while len(best_kid_checkpoints) > 3:
+            removed_score, removed_step = best_kid_checkpoints.pop()
+            stale_dir = best_eval_dir / f"checkpoint-{removed_step}"
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
+                LOGGER.info(
+                    "Removed stale best-eval checkpoint at step %d (kid_mean=%.6f)",
+                    removed_step,
+                    removed_score,
+                )
+        save_best_checkpoint(step, kid_value)
+        write_best_eval_metadata()
 
     optimizer = build_optimizer(modules.parameters, cfg)
 
@@ -265,6 +389,7 @@ def train(
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
             LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
+            update_best_checkpoints(eval_metrics.get("eval/kid_mean"), 0)
     accelerator.wait_for_everyone()
 
     first_epoch = 0
@@ -404,6 +529,7 @@ def train(
                     if eval_metrics and accelerator.is_main_process:
                         accelerator.log(eval_metrics, step=global_step)
                         kid_score = eval_metrics.get("eval/kid_mean")
+                        update_best_checkpoints(kid_score, global_step)
                         if kid_score is not None:
                             postfix_payload["kid"] = f"{kid_score:.4f}"
                 if accelerator.is_main_process and progress_bar is not None:
@@ -435,6 +561,7 @@ def train(
         if eval_metrics:
             accelerator.log(eval_metrics, step=global_step)
             LOGGER.info("Final evaluation metrics: %s", eval_metrics)
+            update_best_checkpoints(eval_metrics.get("eval/kid_mean"), global_step)
     accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
