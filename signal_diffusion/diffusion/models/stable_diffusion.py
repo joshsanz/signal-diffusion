@@ -80,6 +80,18 @@ class StableDiffusionAdapterV15:
         if accelerator.is_main_process:
             self._logger.info("Using %s scheduler with prediction_type=epsilon", type(noise_scheduler).__name__)
 
+        if cfg.training.gradient_checkpointing:
+            if hasattr(unet, "enable_gradient_checkpointing"):
+                unet.enable_gradient_checkpointing()
+            elif hasattr(unet, "set_gradient_checkpointing"):
+                unet.set_gradient_checkpointing(True)  # type: ignore[attr-defined]
+            else:
+                self._logger.warning("Gradient checkpointing requested but unsupported by %s", type(unet).__name__)
+            if self._extras.train_text_encoder and hasattr(text_encoder, "gradient_checkpointing_enable"):
+                text_encoder.gradient_checkpointing_enable()
+            if accelerator.is_main_process:
+                self._logger.info("Enabled gradient checkpointing on Stable Diffusion modules")
+
         if cfg.training.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
             if accelerator.is_main_process:

@@ -149,6 +149,8 @@ def train(
             cfg.dataset.batch_size,
             cfg.training.eval_batch_size or cfg.dataset.batch_size,
         )
+        if cfg.training.gradient_checkpointing:
+            LOGGER.info("Gradient checkpointing is enabled")
 
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)

@@ -1,6 +1,7 @@
 """Hourglass Diffusion Transformer (HDiT) adapter."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -21,6 +22,7 @@ from signal_diffusion.diffusion.train_utils import (
     sample_timestep_logitnorm,
     verify_scheduler,
 )
+from .hourglass_model import flags
 from .hourglass_model.hourglass_2d_transformer import (
     GlobalAttentionSpec,
     Hourglass2DModel,
@@ -67,6 +69,7 @@ class HourglassAdapter:
         self._logger = get_logger(__name__)
         self._extras = HourglassExtras()
         self._num_dataset_classes = 0
+        self._use_gradient_checkpointing = False
 
     def create_tokenizer(self, cfg: DiffusionConfig):  # noqa: D401 - protocol compliance
         return None
@@ -285,6 +288,7 @@ class HourglassAdapter:
         del tokenizer  # hourglass does not use text inputs
         self._extras = self._parse_extras(cfg)
         self._num_dataset_classes = cfg.dataset.num_classes
+        self._use_gradient_checkpointing = bool(cfg.training.gradient_checkpointing)
 
         if accelerator.is_main_process:
             self._logger.info("Building Hourglass2DModel with extras=%s", self._extras)
@@ -301,6 +305,9 @@ class HourglassAdapter:
             weight_dtype = torch.bfloat16
 
         model.to(accelerator.device, dtype=weight_dtype)
+
+        if self._use_gradient_checkpointing and accelerator.is_main_process:
+            self._logger.info("Enabled gradient checkpointing for Hourglass denoiser")
 
         params = list(model.param_groups())
         modules = DiffusionModules(
@@ -329,6 +336,11 @@ class HourglassAdapter:
             mask = torch.rand_like(labels.float()) < self._extras.cfg_dropout
             labels = torch.where(mask, dropout_token, labels)
         return labels
+
+    def _checkpoint_context(self):
+        if self._use_gradient_checkpointing and torch.is_grad_enabled():
+            return flags.checkpointing(True)
+        return nullcontext()
 
     def training_step(
         self,
@@ -371,7 +383,8 @@ class HourglassAdapter:
             raise ValueError(f"Unsupported prediction type {cfg.objective.prediction_type} for DiT")
 
         # TODO: text cond
-        model_pred = model(z_t, sigma=sigmas, class_cond=class_labels)
+        with self._checkpoint_context():
+            model_pred = model(z_t, sigma=sigmas, class_cond=class_labels)
         loss = torch.nn.functional.mse_loss(model_pred.float(), target.float(), reduction="none")
         loss = loss.mean(dim=list(range(1, loss.ndim)))
         weights = apply_min_gamma_snr(
@@ -486,9 +499,10 @@ class HourglassAdapter:
                 else:
                     class_input = class_labels
 
-                model_output = modules.denoiser(
-                    model_input, sigma=sigmas, class_cond=class_input
-                )
+                with self._checkpoint_context():
+                    model_output = modules.denoiser(
+                        model_input, sigma=sigmas, class_cond=class_input
+                    )
 
                 if classifier_free and unconditional_labels is not None:
                     model_output_uncond, model_output_cond = model_output.chunk(2)

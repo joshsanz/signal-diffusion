@@ -139,6 +139,15 @@ class DiTAdapter:
             kwargs["num_embeds_ada_norm"] = num_embeds_ada_norm
             model = DiTTransformer2DModel(**kwargs)
 
+        if cfg.training.gradient_checkpointing:
+            if hasattr(model, "enable_gradient_checkpointing"):
+                model.enable_gradient_checkpointing()
+            elif hasattr(model, "set_gradient_checkpointing"):
+                model.set_gradient_checkpointing(True)  # type: ignore[attr-defined]
+            else:
+                self._logger.warning("Gradient checkpointing requested but unsupported by %s", type(model).__name__)
+            if accelerator.is_main_process:
+                self._logger.info("Enabled gradient checkpointing on DiT denoiser")
         if cfg.model.lora.enabled:
             raise NotImplementedError("LoRA for DiT models is not yet implemented")
 
