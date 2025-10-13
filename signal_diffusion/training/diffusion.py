@@ -248,6 +248,7 @@ def train(
         adapter.save_checkpoint(accelerator, cfg, modules, str(checkpoint_dir))
         if modules.ema is not None:
             ema_dir = checkpoint_dir / "ema"
+            ema_dir.mkdir(exist_ok=True)
             with ema_weights_context(accelerator, modules):
                 adapter.save_checkpoint(accelerator, cfg, modules, str(ema_dir))
         metrics_path = checkpoint_dir / "metrics.json"
