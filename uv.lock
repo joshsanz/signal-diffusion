@@ -2698,7 +2698,6 @@ dependencies = [
     { name = "datasets", extra = ["vision"] },
     { name = "diffusers" },
     { name = "einops" },
-    { name = "flash-attn" },
     { name = "ipywidgets" },
     { name = "librosa" },
     { name = "matplotlib" },
@@ -2718,6 +2717,11 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
     { name = "typer" },
+]
+
+[package.optional-dependencies]
+gpu = [
+    { name = "flash-attn" },
     { name = "xformers" },
 ]
 
@@ -2739,7 +2743,7 @@ requires-dist = [
     { name = "datasets", extras = ["vision"] },
     { name = "diffusers", specifier = ">=0.35.1" },
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "flash-attn", specifier = "<=2.8.2" },
+    { name = "flash-attn", marker = "extra == 'gpu'", specifier = "<=2.8.2" },
     { name = "ipywidgets", specifier = ">=8.1.7" },
     { name = "librosa" },
     { name = "matplotlib" },
@@ -2759,8 +2763,9 @@ requires-dist = [
     { name = "tqdm" },
     { name = "transformers", specifier = ">=4.56.2" },
     { name = "typer" },
-    { name = "xformers", specifier = ">=0.0.32.post2" },
+    { name = "xformers", marker = "extra == 'gpu'", specifier = ">=0.0.32.post2" },
 ]
+provides-extras = ["gpu"]
 
 [package.metadata.requires-dev]
 dev = [

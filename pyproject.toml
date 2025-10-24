@@ -30,24 +30,32 @@ dependencies = [
     "diffusers>=0.35.1",
     "ipywidgets>=8.1.7",
     "coloredlogs>=15.0.1",
-    "xformers>=0.0.32.post2",
     "transformers>=4.56.2",
     "peft>=0.17.1",
-    #"natten==0.21.0+torch280cu128",  # Unable to use pre-built wheels for torch==2.8
     "torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@1121d4dbb7497deaa38c8e67688bd1d373320082",
     "einops>=0.8.1",
+]
+
+# Optional GPU-accelerated packages (CUDA-dependent)
+# Install with: pip install signal-diffusion[gpu]
+[project.optional-dependencies]
+gpu = [
     "flash-attn<=2.8.2",
+    "xformers>=0.0.32.post2",
+    # "natten==0.21.0+torch280cu128",  # Unable to use pre-built wheels for torch==2.8
 ]
 
 [tool.uv]
 no-build-isolation = true
 
+# GPU-only package index (CUDA-dependent)
 [[tool.uv.index]]
 name = "NATTEN"
 url = "https://whl.natten.org"
 explicit = true
 
 [tool.uv.sources]
+# natten is GPU-only; uncomment and add to optional-dependencies[gpu] if needed
 natten = { index = "NATTEN" }
 
 [dependency-groups]
