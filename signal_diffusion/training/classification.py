@@ -14,9 +14,8 @@ from torch.utils.data import DataLoader
 
 import typer
 
-from signal_diffusion.classification import build_dataset, build_task_specs
+from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
-from signal_diffusion.models import ClassifierConfig, TaskSpec, build_classifier
 
 
 class EvaluationManager:

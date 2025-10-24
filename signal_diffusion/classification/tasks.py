@@ -10,7 +10,7 @@ from signal_diffusion.data import (
     SEED_LABELS,
 )
 from signal_diffusion.data.specs import LabelRegistry
-from signal_diffusion.models import TaskSpec, tasks_from_registry
+from .factory import TaskSpec, tasks_from_registry
 
 _DATASET_LABELS: Mapping[str, LabelRegistry] = {
     "math": MATH_LABELS,
