@@ -61,4 +61,4 @@ docs = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["signal_diffusion*", "common*"]
+include = ["signal_diffusion*"]

@@ -21,9 +21,9 @@ def lin_dftmtx(N):
 
 # Cache DFT matrices to avoid recomputing
 @lru_cache(maxsize=32)
-def log_dftmtx(N, min_exponent=-2):
+def log_dftmtx(N, min_exponent=-3):
     is_odd = N % 2 == 1
-    neg_freqs = [-(10 ** i) for i in np.linspace(np.log10(0.5), -3, N // 2, endpoint=True)]
+    neg_freqs = [-(10 ** i) for i in np.linspace(np.log10(0.5), min_exponent, N // 2, endpoint=True)]
     freqs = np.array(neg_freqs + [0] + [-f for f in neg_freqs[not is_odd:][::-1]])
     omega = np.exp(-2j * np.pi / N)
     W = omega ** (np.outer(np.fft.ifftshift(freqs) * N, np.arange(N))) / np.sqrt(N)

@@ -16,7 +16,7 @@ from PIL import Image
 from scipy.signal import decimate
 from torchvision.transforms import v2 as transforms
 
-from common.multichannel_spectrograms import multichannel_spectrogram
+from signal_diffusion.data.utils.multichannel_spectrograms import multichannel_spectrogram
 from signal_diffusion.data.channel_maps import seed_channels
 
 from signal_diffusion.config import DatasetSettings, Settings
