@@ -128,7 +128,7 @@ def main(
                 reference_tensor = (
                     pixel_values.detach().cpu()
                     if isinstance(pixel_values, torch.Tensor)
-                    else transforms.ToTensor()(pixel_values) * 2.0 - 1.0
+                    else transforms.ToImage()(pixel_values) * 2.0 - 1.0
                 )
                 break
         if reference_tensor is None:

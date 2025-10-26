@@ -874,8 +874,17 @@ def _build_optimizer(model: nn.Module, training_cfg: TrainingConfig) -> torch.op
 
 def _to_device_tensor(value: Any, device: torch.device) -> torch.Tensor:
     if isinstance(value, torch.Tensor):
-        return value.to(device)
-    return torch.as_tensor(value, device=device)
+        tensor = value
+    else:
+        tensor = torch.as_tensor(value)
+
+    # Ensure MPS-compatible dtypes: float64 -> float32, int64 -> int32
+    if tensor.dtype == torch.float64:
+        tensor = tensor.to(torch.float32)
+    elif tensor.dtype == torch.int64:
+        tensor = tensor.to(torch.int32)
+
+    return tensor.to(device)
 
 
 def _resolve_task_weights(tasks: Iterable[str], weights: Mapping[str, float]) -> dict[str, float]:

@@ -1,10 +1,11 @@
-"""Generate a re-weighted meta-dataset on disk.
+"""Generate a re-weighted meta-dataset as parquet files.
 
-The script copies spectrogram files according to the sampling weights emitted by
-``MetaSampler`` so downstream training code can consume a class-balanced dataset
-without relying on per-epoch sampling tricks. The result folder contains the
-copied spectrograms, an aggregated ``metadata.csv``, a weight diagnostic plot,
-and a README documenting configuration details.
+The script loads spectrogram files according to the sampling weights emitted by
+``MetaSampler`` and saves them as HuggingFace parquet datasets so downstream
+training code can consume a class-balanced dataset without relying on per-epoch
+sampling tricks. The result folder contains parquet files (one per split) with
+embedded images and enriched metadata, weight diagnostic plots, and a README
+documenting configuration details.
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from datasets import Dataset, Image as DatasetImage
+from PIL import Image
 from tqdm.auto import tqdm
 
 from signal_diffusion.config import Settings, load_settings
@@ -206,8 +209,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--copy-splits",
         type=str,
-        default="train,test",
-        help="Comma-separated dataset splits to materialise in the weighted output (e.g. 'train,test').",
+        default="train,val,test",
+        help="Comma-separated dataset splits to materialise in the weighted output (e.g. 'train,val,test').",
     )
     parser.add_argument(
         "--output-dir",
@@ -247,6 +250,49 @@ def parse_copy_splits(raw: str) -> tuple[str, ...]:
     if not splits:
         raise ValueError("--copy-splits must include at least one split name.")
     return splits
+
+
+def validate_splits_compatibility(
+    preprocess: bool,
+    splits: dict[str, float] | None,
+    copy_splits: tuple[str, ...],
+) -> None:
+    """Warn if copy-splits doesn't match splits when preprocessing is enabled.
+
+    Args:
+        preprocess: Whether preprocessing will be run
+        splits: Dict of splits that will be created (e.g., {"train": 0.8, "val": 0.1, "test": 0.1})
+        copy_splits: Tuple of splits to copy to output
+    """
+    if not preprocess or splits is None:
+        return
+
+    preprocessed_split_names = set(splits.keys())
+    copy_split_names = set(copy_splits)
+
+    # Check if copy_splits contains splits that won't be created
+    missing_splits = copy_split_names - preprocessed_split_names
+    if missing_splits:
+        logger.warning(
+            "Requested copy-splits %s but preprocessing only creates splits %s. "
+            "The following splits will not be found: %s. "
+            "Update --copy-splits to match --splits, or remove unused splits.",
+            copy_splits,
+            tuple(preprocessed_split_names),
+            tuple(missing_splits),
+        )
+
+    # Check if some preprocessed splits won't be copied
+    unused_splits = preprocessed_split_names - copy_split_names
+    if unused_splits:
+        logger.warning(
+            "Preprocessing will create splits %s but copy-splits is %s. "
+            "The following splits will be created but not copied to output: %s. "
+            "Update --copy-splits to include these splits, or they will be wasted.",
+            tuple(preprocessed_split_names),
+            copy_splits,
+            tuple(unused_splits),
+        )
 
 
 def prepare_output_dir(output_dir: Path, *, overwrite: bool) -> None:
@@ -357,20 +403,16 @@ def assign_copies(weight: float, count: int) -> list[int]:
     return copies
 
 
-def copy_weighted_samples(
+def load_weighted_samples(
     dataset: MetaDataset,
     scaled_weights: torch.Tensor,
-    output_dir: Path,
     split: str,
-) -> tuple[list[pd.Series], dict[str, DatasetStats], dict[float, WeightStats]]:
-    """Copy spectrogram files according to their weights for a specific split."""
+) -> tuple[list[dict[str, Any]], dict[str, DatasetStats], dict[float, WeightStats]]:
+    """Load spectrogram images and metadata according to their weights for a specific split."""
     cumulative_sizes = dataset.cumulative_sizes
-    all_metadata: list[pd.Series] = []
+    all_examples: list[dict[str, Any]] = []
     dataset_stats: dict[str, DatasetStats] = {}
     weight_stats: dict[float, WeightStats] = {}
-
-    split_dir = output_dir / split
-    split_dir.mkdir(parents=True, exist_ok=True)
 
     for ds in dataset.datasets:
         name = ds.dataset_settings.name if hasattr(ds, "dataset_settings") else getattr(ds, "name", "unknown")
@@ -378,7 +420,7 @@ def copy_weighted_samples(
 
     # Get unique weight values to process each weight bucket separately
     unique_weights = torch.unique(scaled_weights)
-    progress = tqdm(total=len(scaled_weights), desc="Copying samples", unit="sample")
+    progress = tqdm(total=len(scaled_weights), desc="Loading samples", unit="sample")
 
     # Process each unique weight value
     for weight_tensor in torch.sort(unique_weights).values:
@@ -405,7 +447,7 @@ def copy_weighted_samples(
             sample_offset = index if dataset_idx == 0 else index - cumulative_sizes[dataset_idx - 1]
             source_dataset = dataset.datasets[dataset_idx]
 
-            # Get dataset name for organizing output files
+            # Get dataset name
             dataset_name = (
                 source_dataset.dataset_settings.name
                 if hasattr(source_dataset, "dataset_settings")
@@ -419,31 +461,29 @@ def copy_weighted_samples(
             source_root = Path(source_dataset.root)
             source_path = source_root / relative_source
 
-            inner_relative = relative_source
-            if inner_relative.parts and inner_relative.parts[0] in {"train", "val", "test"}:
-                remaining_parts = inner_relative.parts[1:]
-                inner_relative = Path(*remaining_parts) if remaining_parts else Path(inner_relative.name)
-
-            source_filename = relative_source.name
-            source_stem = Path(source_filename).stem
-            source_suffix = Path(source_filename).suffix
-            inner_parent = inner_relative.parent if inner_relative.parent != Path('.') else Path()
-
             # Create the specified number of copies for this sample
             for copy_index in range(copies):
-                new_filename = f"{source_stem}_copy{copy_index}{source_suffix}"
-                relative_output = Path(split) / dataset_name / inner_parent / new_filename
-                destination_path = output_dir / relative_output
-                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                # Load the image
+                if not source_path.exists():
+                    logger.warning("Skipping missing source file: %s", source_path)
+                    continue
 
-                # Update metadata for this copy and add to collection
+                try:
+                    pil_image = Image.open(source_path).convert("RGB")
+                except Exception as e:
+                    logger.warning("Failed to load image %s: %s", source_path, e)
+                    continue
+
+                # Update metadata for this copy
                 metadata_copy = metadata_row.copy()
-                metadata_copy["file_name"] = relative_output.as_posix()
-
                 enriched = enrich_metadata(metadata_copy, split=split)
-                all_metadata.append(enriched)
-                # Copy the actual file
-                copy_file(source_path, destination_path)
+                enriched_dict = enriched.to_dict()
+
+                # Add image to example
+                example = enriched_dict.copy()
+                example["image"] = pil_image
+
+                all_examples.append(example)
 
             # Update statistics
             dataset_stats[dataset_name].generated_samples += copies
@@ -451,21 +491,31 @@ def copy_weighted_samples(
             progress.update(1)
 
     progress.close()
-    return all_metadata, dataset_stats, weight_stats
+    return all_examples, dataset_stats, weight_stats
 
 
-def copy_file(source_path: Path, destination_path: Path) -> None:
-    if not source_path.exists():
-        raise FileNotFoundError(f"Missing source file for copy: {source_path}")
-    shutil.copy2(source_path, destination_path)
+def save_parquet_dataset(
+    examples: list[dict[str, Any]],
+    output_dir: Path,
+    split: str,
+) -> Path:
+    """Save examples to parquet dataset using HuggingFace datasets library."""
+    # Create DataFrame to validate and align columns
+    df = pd.DataFrame([{k: v for k, v in ex.items() if k != "image"} for ex in examples])
 
+    # Convert to HuggingFace Dataset with Image feature
+    dataset_dict = {k: list(df[k]) if k in df.columns else [] for k in df.columns}
+    dataset_dict["image"] = [ex["image"] for ex in examples]
 
-def save_metadata(metadata_rows: list[pd.Series], output_dir: Path, *, split: str | None = None) -> Path:
-    metadata = pd.DataFrame(metadata_rows)
-    filename = "metadata.csv" if split is None else f"{split}-metadata.csv"
-    metadata_path = output_dir / filename
-    metadata.to_csv(metadata_path, index=False)
-    return metadata_path
+    hf_dataset = Dataset.from_dict(dataset_dict)
+    # Cast image column to HuggingFace Image type
+    hf_dataset = hf_dataset.cast_column("image", DatasetImage())
+
+    # Save as parquet file
+    output_path = output_dir / f"{split}.parquet"
+    hf_dataset.to_parquet(str(output_path))
+    logger.info("Saved %d samples to %s", len(hf_dataset), output_path)
+    return output_path
 
 
 def save_weights_plot(scaled_weights: torch.Tensor, output_dir: Path, *, split: str | None = None) -> Path:
@@ -596,7 +646,9 @@ def write_readme(
         [
             "",
             "## Notes",
-            "- metadata.csv aggregates the copied files and mirrors the original metadata columns.",
+            "- Parquet files (`train.parquet`, `val.parquet`, `test.parquet`) contain the weighted spectrograms with HuggingFace Image feature and enriched metadata columns.",
+            "- Each parquet file has a maximum shard size of 5GB.",
+            "- Load datasets with: `from datasets import load_dataset; ds = load_dataset('parquet', data_files='train.parquet')`",
             "- Weight diagnostic plots (`weights.png` or `<split>_weights.png`) show the relative scaling applied to the sampler outputs.",
             "- Copy counts are derived from the MetaSampler weights after normalising by the minimum weight.",
         ]
@@ -639,6 +691,8 @@ def main() -> None:
     # Run preprocessing if requested (creates spectrograms from raw data)
     if args.preprocess:
         splits = parse_splits(args.splits)
+        # Validate that copy_splits matches the splits that will be created
+        validate_splits_compatibility(args.preprocess, splits, copy_splits)
         logger.info("Running MetaPreprocessor with splits: %s", splits)
         run_preprocessor(
             settings,
@@ -652,13 +706,12 @@ def main() -> None:
             overwrite=args.overwrite,
         )
 
-    metadata_rows_all: list[pd.Series] = []
-    metadata_rows_by_split: dict[str, list[pd.Series]] = {}
     dataset_stats_total: dict[str, DatasetStats] = {}
     dataset_stats_by_split: dict[str, dict[str, DatasetStats]] = {}
     weight_stats_total: dict[float, WeightStats] = {}
     weight_stats_by_split: dict[str, dict[float, WeightStats]] = {}
     plot_paths: dict[str, Path] = {}
+    parquet_paths: dict[str, Path] = {}
 
     for split in copy_splits:
         logger.info("Processing split '%s'", split)
@@ -689,19 +742,19 @@ def main() -> None:
             plot_split_arg = None if plot_label == "all" else split
             plot_paths[plot_label] = save_weights_plot(scaled_weights, output_dir, split=plot_split_arg)
 
-        split_metadata_rows, split_dataset_stats, split_weight_stats = copy_weighted_samples(
+        split_examples, split_dataset_stats, split_weight_stats = load_weighted_samples(
             meta_dataset,
             scaled_weights,
-            output_dir,
             split,
         )
 
-        if not split_metadata_rows:
-            logger.warning("Split '%s' produced no copied samples; skipping.", split)
+        if not split_examples:
+            logger.warning("Split '%s' produced no loaded samples; skipping.", split)
             continue
 
-        metadata_rows_by_split[split] = split_metadata_rows
-        metadata_rows_all.extend(split_metadata_rows)
+        # Save split as parquet
+        parquet_paths[split] = save_parquet_dataset(split_examples, output_dir, split)
+
         dataset_stats_by_split[split] = split_dataset_stats
         weight_stats_by_split[split] = split_weight_stats
 
@@ -723,13 +776,8 @@ def main() -> None:
             ",".join(f"{name}:{stat.generated_samples}" for name, stat in split_dataset_stats.items()),
         )
 
-    if not metadata_rows_all:
-        raise RuntimeError("No samples were copied across the requested splits; verify dataset metadata and sampler configuration.")
-
-    metadata_paths: dict[str, Path] = {}
-    for split, rows in metadata_rows_by_split.items():
-        metadata_paths[split] = save_metadata(rows, output_dir, split=split)
-    aggregate_metadata_path = save_metadata(metadata_rows_all, output_dir)
+    if not parquet_paths:
+        raise RuntimeError("No samples were loaded across the requested splits; verify dataset metadata and sampler configuration.")
 
     readme_path, _ = write_readme(
         output_dir,
@@ -745,11 +793,10 @@ def main() -> None:
     total_generated = sum(stats.generated_samples for stats in dataset_stats_total.values())
     logger.info("Generated %d samples into %s", total_generated, output_dir)
     for split in copy_splits:
-        if split in metadata_paths:
-            logger.info("Wrote %s metadata to %s", split, metadata_paths[split])
+        if split in parquet_paths:
+            logger.info("Saved %s dataset to %s", split, parquet_paths[split])
         else:
-            logger.info("No metadata written for split '%s'", split)
-    logger.info("Wrote aggregate metadata to %s", aggregate_metadata_path)
+            logger.info("No parquet dataset saved for split '%s'", split)
     if plot_paths:
         for label, path in plot_paths.items():
             logger.info("Saved weight diagnostics (%s) to %s", label, path)

@@ -53,6 +53,23 @@ class ClassifierConfig:
         return data
 
 
+class MLP(nn.Module):
+    """Simple multi-layer perceptron with one hidden layer."""
+
+    def __init__(self, input_dim: int, output_dim: int, hidden_dim: int | None = None) -> None:
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = max(32, input_dim // 2)
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class MultiTaskClassifier(nn.Module):
     """Classifier with a shared backbone and multiple prediction heads."""
 
@@ -66,7 +83,7 @@ class MultiTaskClassifier(nn.Module):
             raise AttributeError("Backbone must expose 'embedding_dim' attribute")
         embedding_dim = getattr(backbone, "embedding_dim")
         heads = {
-            task.name: nn.Linear(embedding_dim, task.output_dim) for task in self.tasks
+            task.name: MLP(embedding_dim, task.output_dim, 2 * embedding_dim) for task in self.tasks
         }
         self.heads = nn.ModuleDict(heads)
 

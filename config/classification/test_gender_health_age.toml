@@ -6,11 +6,11 @@ config = "~/git/signal-diffusion/config/default.toml"
 trainer = "classification"
 
 [dataset]
-name = "parkinsons"
+name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
 train_split = "train"
-val_split = "val"
+val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 16
+batch_size = 32
 num_workers = 4
 shuffle = true
 

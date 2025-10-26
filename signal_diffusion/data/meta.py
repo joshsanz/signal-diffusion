@@ -21,17 +21,17 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _encode_gender(row: Mapping[str, object]) -> int:
+def _encode_gender(row: Mapping[str, object]) -> np.int32:
     value = str(row.get("gender", "")).strip().upper()
-    return 1 if value.startswith("F") else 0
+    return np.int32(1 if value.startswith("F") else 0)
 
 
-def _encode_health(row: Mapping[str, object]) -> int:
+def _encode_health(row: Mapping[str, object]) -> np.int32:
     value = str(row.get("health", "")).strip().upper()
-    return 1 if value in {"PD", "PARKINSONS", "1", "TRUE"} else 0
+    return np.int32(1 if value in {"PD", "PARKINSONS", "1", "TRUE"} else 0)
 
 
-def _encode_age(row: Mapping[str, object]) -> float:
+def _encode_age(row: Mapping[str, object]) -> np.float32:
     value = row.get("age", row.get("Age"))
     if value is None:
         raise ValueError("Missing age value in metadata")
@@ -41,7 +41,7 @@ def _encode_age(row: Mapping[str, object]) -> float:
         raise ValueError(f"Invalid age value {value!r}") from exc
     if age < 0:
         raise ValueError(f"Age must be non-negative, received {age}")
-    return age
+    return np.float32(age)
 
 
 def _decode_gender(value: object) -> str:

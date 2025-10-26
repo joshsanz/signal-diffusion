@@ -12,6 +12,7 @@ import coloredlogs
 import mne
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 from scipy.signal import decimate
 from torchvision.transforms import v2 as transforms
@@ -100,6 +101,48 @@ MATH_LABELS.register(
         decoder=_decode_math_condition,
     )
 )
+
+
+def _encode_health(row: Mapping[str, object]) -> int:
+    """Math dataset participants are healthy (no Parkinson's)."""
+    return 0
+
+
+def _decode_health(value: object) -> str:
+    return "healthy" if int(value) == 0 else "parkinsons"
+
+
+def _encode_age(row: Mapping[str, object]) -> float:
+    value = row.get("age", row.get("Age"))
+    if value is None:
+        raise ValueError("Missing age value in metadata")
+    try:
+        age = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid age value {value!r}") from exc
+    if age < 0:
+        raise ValueError(f"Age must be non-negative, received {age}")
+    return age
+
+
+MATH_LABELS.register(
+    LabelSpec(
+        name="health",
+        num_classes=2,
+        encoder=_encode_health,
+        description="0: healthy, 1: parkinsons",
+        decoder=_decode_health,
+    )
+)
+MATH_LABELS.register(
+    LabelSpec(
+        name="age",
+        encoder=_encode_age,
+        description="Participant age in years",
+        task_type="regression",
+    )
+)
+
 
 def _normalize_gender(value: object) -> str:
     text = str(value).strip().lower()
