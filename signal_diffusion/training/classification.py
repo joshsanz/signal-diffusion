@@ -11,6 +11,7 @@ import tomllib
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 import typer
 
@@ -397,6 +398,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         shuffle=dataset_cfg.shuffle,
         num_workers=dataset_cfg.num_workers,
         pin_memory=use_pin_memory,
+        persistent_workers=dataset_cfg.num_workers > 0,  # Keep workers alive
+        prefetch_factor=2 if dataset_cfg.num_workers > 0 else None,  # Prefetch batches
     )
     val_loader = DataLoader(
         val_dataset,
@@ -404,6 +407,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         shuffle=False,
         num_workers=dataset_cfg.num_workers,
         pin_memory=use_pin_memory,
+        persistent_workers=dataset_cfg.num_workers > 0,  # Keep workers alive
+        prefetch_factor=2 if dataset_cfg.num_workers > 0 else None,  # Prefetch batches
     )
 
     run_dir = _prepare_run_dir(config)
@@ -449,9 +454,17 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     max_best_checkpoints = training_cfg.max_best_checkpoints
     global_step = 0
 
+    progress_bar = tqdm(
+        total=training_cfg.epochs,
+        desc="Training",
+        dynamic_ncols=True,
+    )
+
     for epoch in range(1, training_cfg.epochs + 1):
         if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
             break
+
+        progress_bar.set_description(f"Epoch {epoch}/{training_cfg.epochs}")
 
         train_result, global_step = _run_epoch(
             model,
@@ -576,13 +589,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
         valid_acc = [acc for acc in val_accuracy.values() if acc is not None]
         mean_val_acc = (sum(valid_acc) / len(valid_acc)) if valid_acc else None
-        val_loss_display = f"{val_loss:.4f}" if val_loss is not None else "n/a"
-        mean_val_display = f"{mean_val_acc:.4f}" if mean_val_acc is not None else "n/a"
-        print(
-            f"Epoch {epoch}/{training_cfg.epochs}: "
-            f"train_loss={train_result['loss']:.4f} val_loss={val_loss_display} "
-            f"val_acc_mean={mean_val_display}"
-        )
+
         for task_name in tasks:
             train_value = train_accuracy[task_name]
             train_acc_display = f"{train_value:.4f}" if train_value is not None else "n/a"
@@ -600,6 +607,20 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         val_loss_line = ", ".join(val_loss_entries)
         print(f"    train_losses: {train_loss_line}")
         print(f"    val_losses: {val_loss_line}")
+
+        postfix_payload: dict[str, str] = {
+            "train_loss": f"{train_result['loss']:.4f}",
+        }
+        valid_acc = [acc for acc in train_accuracy.values() if acc is not None]
+        if valid_acc:
+            mean_train_acc = sum(valid_acc) / len(valid_acc)
+            postfix_payload["train_acc"] = f"{mean_train_acc:.4f}"
+        if val_loss is not None:
+            postfix_payload["val_loss"] = f"{val_loss:.4f}"
+        if mean_val_acc is not None:
+            postfix_payload["val_acc"] = f"{mean_val_acc:.4f}"
+        progress_bar.set_postfix(**postfix_payload)
+        progress_bar.update(1)
 
         if training_cfg.checkpoint_every and epoch % training_cfg.checkpoint_every == 0:
             torch.save(model.state_dict(), checkpoints_dir / f"epoch-{epoch:03d}.pt")
@@ -620,6 +641,8 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
 
     if metrics_logger is not None:
         metrics_logger.close()
+
+    progress_bar.close()
 
     resolved_best_metric = None if best_metric == float("-inf") else float(best_metric)
     summary = TrainingSummary(
@@ -707,6 +730,16 @@ def _run_epoch(
     grad_norm_sum = 0.0
     grad_norm_count = 0
 
+    batch_progress_bar = None
+    if log_every > 0 or not train:  # Show progress for validation always
+        phase = "train" if train else "val"
+        batch_progress_bar = tqdm(
+            total=len(data_loader),
+            desc=f"  {phase}",
+            dynamic_ncols=True,
+            leave=False,
+        )
+
     for batch_idx, batch in enumerate(data_loader, start=1):
         if max_steps > 0 and global_step >= max_steps:
             break
@@ -782,7 +815,7 @@ def _run_epoch(
             loss_value = float(task_loss_tensor.detach().item())
             task_loss_sums[name] += loss_value * batch_size
 
-        if log_every > 0 and batch_idx % log_every == 0:
+        if batch_progress_bar is not None:
             mean_loss = total_loss / total_examples if total_examples else 0.0
             classification_values = [
                 stats["correct"] / max(stats["total"], 1)
@@ -793,11 +826,8 @@ def _run_epoch(
                 if classification_values
                 else 0.0
             )
-            phase = "train" if train else "eval"
-            print(
-                f"[{phase}] step {batch_idx}/{len(data_loader)} loss={mean_loss:.4f} "
-                f"acc={mean_acc:.4f}"
-            )
+            batch_progress_bar.set_postfix(loss=f"{mean_loss:.4f}", acc=f"{mean_acc:.4f}")
+            batch_progress_bar.update(1)
 
     if train and eval_manager is not None:
         triggered = eval_manager.on_epoch_end(global_step)
@@ -820,6 +850,10 @@ def _run_epoch(
     metrics = {"loss": mean_loss, "accuracy": accuracy, "losses": per_task_mean}
     if train and grad_norm_count > 0:
         metrics["grad_norm"] = grad_norm_sum / grad_norm_count
+
+    if batch_progress_bar is not None:
+        batch_progress_bar.close()
+
     return metrics, (global_step if train else None)
 
 

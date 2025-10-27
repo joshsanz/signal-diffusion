@@ -10,7 +10,7 @@ name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs12
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 32
+batch_size = 64
 num_workers = 4
 shuffle = true
 
@@ -21,8 +21,8 @@ embedding_dim = 256
 dropout = 0.3
 
 [training]
-epochs = 1
-max_steps = 200
+epochs = 3
+max_steps = -1
 optimizer = "adamw"
 learning_rate = 3e-4
 weight_decay = 1e-4
@@ -30,6 +30,7 @@ clip_grad_norm = 1.0
 log_every_batches = 10
 tensorboard = true
 eval_strategy = "epoch"
+eval_steps = 50
 checkpoint_every = 0
 checkpoint_total_limit = 3
 
