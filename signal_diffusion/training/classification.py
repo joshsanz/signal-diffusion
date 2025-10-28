@@ -17,6 +17,7 @@ import typer
 
 from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
+from signal_diffusion.training.schedulers import create_scheduler
 
 
 class EvaluationManager:
@@ -124,6 +125,14 @@ class MetricsLogger:
             if value is None:
                 continue
             scalars[f"{phase}/accuracy/{name}"] = float(value)
+        for name, value in metrics.get("mae", {}).items():
+            if value is None:
+                continue
+            scalars[f"{phase}/mae/{name}"] = float(value)
+        for name, value in metrics.get("mse", {}).items():
+            if value is None:
+                continue
+            scalars[f"{phase}/mse/{name}"] = float(value)
         if epoch is not None:
             scalars[f"{phase}/epoch"] = float(epoch)
 
@@ -189,14 +198,30 @@ class ModelConfig:
 
 
 @dataclass(slots=True)
+class OptimizerConfig:
+    """Configuration for optimizer."""
+
+    name: str = "adamw"
+    learning_rate: float = 3e-4
+    weight_decay: float = 1e-4
+    betas: tuple[float, float] = (0.9, 0.999)
+
+
+@dataclass(slots=True)
+class SchedulerConfig:
+    """Configuration for learning rate scheduler."""
+
+    name: str = "constant"
+    warmup_steps: int = 0
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class TrainingConfig:
     """Optimisation and runtime configuration."""
 
     epochs: int = 25
     max_steps: int = -1
-    optimizer: str = "adamw"
-    learning_rate: float = 3e-4
-    weight_decay: float = 1e-4
     clip_grad_norm: float | None = 1.0
     device: str | None = None
     log_every_batches: int = 10
@@ -225,6 +250,8 @@ class ClassificationExperimentConfig:
     settings_path: Path
     dataset: DatasetConfig
     model: ModelConfig
+    optimizer: OptimizerConfig
+    scheduler: SchedulerConfig
     training: TrainingConfig
 
 
@@ -304,13 +331,25 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         extras=dict(model_section.get("extras", {})),
     )
 
+    optimizer_section = data.get("optimizer", {})
+    optimizer = OptimizerConfig(
+        name=str(optimizer_section.get("name", "adamw")).lower(),
+        learning_rate=float(optimizer_section.get("learning_rate", 3e-4)),
+        weight_decay=float(optimizer_section.get("weight_decay", 1e-4)),
+        betas=tuple(optimizer_section.get("betas", [0.9, 0.999])),
+    )
+
+    scheduler_section = data.get("scheduler", {})
+    scheduler = SchedulerConfig(
+        name=str(scheduler_section.get("name", "constant")).lower(),
+        warmup_steps=int(scheduler_section.get("warmup_steps", 0)),
+        kwargs=dict(scheduler_section.get("kwargs", {})),
+    )
+
     training_section = data.get("training", {})
     training = TrainingConfig(
         epochs=int(training_section.get("epochs", 25)),
         max_steps=int(training_section.get("max_steps", -1)),
-        optimizer=str(training_section.get("optimizer", "adamw")).lower(),
-        learning_rate=float(training_section.get("learning_rate", 3e-4)),
-        weight_decay=float(training_section.get("weight_decay", 1e-4)),
         clip_grad_norm=_optional_float(training_section.get("clip_grad_norm", 1.0)),
         device=training_section.get("device"),
         log_every_batches=int(training_section.get("log_every_batches", training_section.get("log_every", 10))),
@@ -340,6 +379,8 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         settings_path=settings_path,
         dataset=dataset,
         model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
         training=training,
     )
 
@@ -415,7 +456,20 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
     checkpoints_dir = run_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    optimizer = _build_optimizer(model, training_cfg)
+    optimizer = _build_optimizer(model, config.optimizer)
+
+    # Create learning rate scheduler (always configured, defaults to constant with 0 warmup)
+    num_training_steps = training_cfg.epochs * len(train_loader)
+    if training_cfg.max_steps > 0:
+        num_training_steps = min(num_training_steps, training_cfg.max_steps)
+    lr_scheduler = create_scheduler(
+        optimizer,
+        scheduler_type=config.scheduler.name,
+        num_warmup_steps=config.scheduler.warmup_steps,
+        num_training_steps=num_training_steps,
+        **config.scheduler.kwargs,
+    )
+
     scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
     criteria: dict[str, nn.Module] = {}
     for name in tasks:
@@ -423,7 +477,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         if spec.task_type == "classification":
             criteria[name] = nn.CrossEntropyLoss()
         else:
-            criteria[name] = nn.MSELoss()
+            criteria[name] = nn.HuberLoss(delta=2.0)
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
 
     def run_validation() -> dict[str, Any]:
@@ -474,6 +528,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             task_specs=task_lookup,
             device=device,
             optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
             scaler=scaler,
             clip_grad=training_cfg.clip_grad_norm,
             log_every=training_cfg.log_every_batches,
@@ -574,7 +629,7 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
             val_losses = {name: None for name in tasks}
             val_accuracy = {name: None for name in tasks}
 
-        lr = optimizer.param_groups[0].get("lr", training_cfg.learning_rate)
+        lr = optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
         epoch_metrics = EpochMetrics(
             epoch=epoch,
             train_loss=train_result["loss"],
@@ -591,13 +646,31 @@ def train_from_config(config: ClassificationExperimentConfig) -> TrainingSummary
         mean_val_acc = (sum(valid_acc) / len(valid_acc)) if valid_acc else None
 
         for task_name in tasks:
+            spec = task_lookup[task_name]
             train_value = train_accuracy[task_name]
-            train_acc_display = f"{train_value:.4f}" if train_value is not None else "n/a"
+            train_display = f"{train_value:.4f}" if train_value is not None else "n/a"
             val_value = val_accuracy[task_name]
-            val_acc_display = f"{val_value:.4f}" if val_value is not None else "n/a"
-            print(
-                f"  - {task_name}: train_acc={train_acc_display} val_acc={val_acc_display}"
-            )
+            val_display = f"{val_value:.4f}" if val_value is not None else "n/a"
+
+            if spec.task_type == "regression":
+                # For regression, show both MAE and MSE
+                metric_label = "mae"
+                print(
+                    f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
+                )
+                # Also show MSE if available
+                train_mse = train_result.get("mse", {}).get(task_name)
+                train_mse_display = f"{train_mse:.4f}" if train_mse is not None else "n/a"
+                val_mse = latest_val.get("mse", {}).get(task_name) if latest_val else None
+                val_mse_display = f"{val_mse:.4f}" if val_mse is not None else "n/a"
+                print(
+                    f"         train_mse={train_mse_display} val_mse={val_mse_display}"
+                )
+            else:
+                metric_label = "acc"
+                print(
+                    f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
+                )
 
         train_loss_line = ", ".join(f"{name}: {train_losses[name]:.4f}" for name in tasks)
         val_loss_entries = []
@@ -691,7 +764,6 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
-
 def _run_epoch(
     model: nn.Module,
     *,
@@ -701,7 +773,8 @@ def _run_epoch(
     task_specs: Mapping[str, TaskSpec],
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
-    scaler: torch.amp.GradScaler | None,
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scaler: torch.amp.GradScaler | None = None,
     clip_grad: float | None,
     log_every: int,
     train: bool,
@@ -726,6 +799,11 @@ def _run_epoch(
         name: {"correct": 0, "total": 0}
         for name, spec in task_specs.items()
         if spec.task_type == "classification"
+    }
+    regression_stats = {
+        name: {"abs_error_sum": 0.0, "squared_error_sum": 0.0, "total": 0}
+        for name, spec in task_specs.items()
+        if spec.task_type == "regression"
     }
     grad_norm_sum = 0.0
     grad_norm_count = 0
@@ -784,6 +862,10 @@ def _run_epoch(
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
                 optimizer.step()
 
+            # Step the learning rate scheduler if configured
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+
             if grad_norm is not None:
                 grad_norm_sum += grad_norm.item()
                 grad_norm_count += 1
@@ -803,13 +885,21 @@ def _run_epoch(
 
         for name, logits in outputs.items():
             spec = task_specs[name]
-            if spec.task_type != "classification":
-                continue
-            preds = logits.argmax(dim=1)
-            correct = (preds == targets[name]).sum().item()
-            stats = classification_stats[name]
-            stats["correct"] += correct
-            stats["total"] += batch_size
+            if spec.task_type == "classification":
+                preds = logits.argmax(dim=1)
+                correct = (preds == targets[name]).sum().item()
+                stats = classification_stats[name]
+                stats["correct"] += correct
+                stats["total"] += batch_size
+            elif spec.task_type == "regression":
+                # Compute absolute error for MAE and squared error for MSE
+                error = logits.squeeze() - targets[name].squeeze()
+                abs_error = torch.abs(error).sum().item()
+                squared_error = (error ** 2).sum().item()
+                stats = regression_stats[name]
+                stats["abs_error_sum"] += abs_error
+                stats["squared_error_sum"] += squared_error
+                stats["total"] += batch_size
 
         for name, task_loss_tensor in per_task_batch.items():
             loss_value = float(task_loss_tensor.detach().item())
@@ -836,11 +926,21 @@ def _run_epoch(
 
     mean_loss = total_loss / max(total_examples, 1)
     accuracy: dict[str, float | None] = {}
+    mae_metrics: dict[str, float | None] = {}
+    mse_metrics: dict[str, float | None] = {}
     for name in task_weights:
         spec = task_specs[name]
         if spec.task_type == "classification":
             stats = classification_stats[name]
             accuracy[name] = stats["correct"] / max(stats["total"], 1)
+        elif spec.task_type == "regression":
+            # For regression, compute both MAE and MSE
+            stats = regression_stats[name]
+            num_examples = max(stats["total"], 1)
+            mae_metrics[name] = stats["abs_error_sum"] / num_examples
+            mse_metrics[name] = stats["squared_error_sum"] / num_examples
+            # Store MAE in accuracy for backward compatibility
+            accuracy[name] = mae_metrics[name]
         else:
             accuracy[name] = None
     per_task_mean = {
@@ -848,6 +948,10 @@ def _run_epoch(
         for name in task_loss_sums
     }
     metrics = {"loss": mean_loss, "accuracy": accuracy, "losses": per_task_mean}
+    if mae_metrics:
+        metrics["mae"] = mae_metrics
+    if mse_metrics:
+        metrics["mse"] = mse_metrics
     if train and grad_norm_count > 0:
         metrics["grad_norm"] = grad_norm_sum / grad_norm_count
 
@@ -889,19 +993,19 @@ def _compute_loss(
 
 
 
-def _build_optimizer(model: nn.Module, training_cfg: TrainingConfig) -> torch.optim.Optimizer:
+def _build_optimizer(model: nn.Module, optimizer_cfg: OptimizerConfig) -> torch.optim.Optimizer:
     params = model.parameters()
-    name = training_cfg.optimizer
-    lr = training_cfg.learning_rate
-    wd = training_cfg.weight_decay
+    name = optimizer_cfg.name
+    lr = optimizer_cfg.learning_rate
+    wd = optimizer_cfg.weight_decay
     if name == "adamw":
-        return torch.optim.AdamW(params, lr=lr, weight_decay=wd)
+        return torch.optim.AdamW(params, lr=lr, weight_decay=wd, betas=optimizer_cfg.betas)
     if name == "adam":
-        return torch.optim.Adam(params, lr=lr, weight_decay=wd)
+        return torch.optim.Adam(params, lr=lr, weight_decay=wd, betas=optimizer_cfg.betas)
     if name == "sgd":
         momentum = 0.9
         return torch.optim.SGD(params, lr=lr, weight_decay=wd, momentum=momentum)
-    raise ValueError(f"Unsupported optimizer '{training_cfg.optimizer}'")
+    raise ValueError(f"Unsupported optimizer '{optimizer_cfg.name}'")
 
 
 
@@ -949,6 +1053,8 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
     dataset_dict = asdict(config.dataset)
     dataset_dict["tasks"] = list(dataset_dict.get("tasks", ()))
     model_dict = asdict(config.model)
+    optimizer_dict = asdict(config.optimizer)
+    scheduler_dict = asdict(config.scheduler)
     training_dict = asdict(config.training)
     for key in ("output_dir", "log_dir", "metrics_summary_path"):
         if training_dict.get(key) is not None:
@@ -961,6 +1067,8 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
         "settings_path": str(config.settings_path),
         "dataset": dataset_dict,
         "model": model_dict,
+        "optimizer": optimizer_dict,
+        "scheduler": scheduler_dict,
         "training": training_dict,
     }
     with (run_dir / "config_resolved.json").open("w", encoding="utf-8") as handle:
@@ -1051,6 +1159,8 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
     history = summary.history
     per_task_best_loss: dict[str, dict[str, float | int]] = {}
     per_task_best_accuracy: dict[str, dict[str, float | int]] = {}
+    per_task_best_mae: dict[str, dict[str, float | int]] = {}
+    per_task_best_mse: dict[str, dict[str, float | int]] = {}
 
     for epoch_metrics in history:
         for task_name, loss in epoch_metrics.val_losses.items():
@@ -1068,6 +1178,15 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
                     "accuracy": float(accuracy),
                     "epoch": epoch_metrics.epoch,
                 }
+        # Track best MAE and MSE for regression tasks (MAE should be minimized, as should MSE)
+        # Note: accuracy values for regression tasks actually contain MAE
+        for task_name, mae in epoch_metrics.val_accuracy.items():
+            if mae is None:
+                continue
+            # Assuming task is regression if in val_accuracy (simplified logic)
+            best_mae_entry = per_task_best_mae.get(task_name)
+            if best_mae_entry is None or mae < best_mae_entry["mae"]:
+                per_task_best_mae[task_name] = {"mae": float(mae), "epoch": epoch_metrics.epoch}
 
     payload: dict[str, Any] = {
         "run_dir": str(summary.run_dir),
@@ -1089,6 +1208,7 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
         "per_task_best": {
             "accuracy": per_task_best_accuracy,
             "loss": per_task_best_loss,
+            "mae": per_task_best_mae,
         },
     }
 

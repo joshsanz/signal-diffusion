@@ -19,15 +19,41 @@ input_channels = 1
 embedding_dim = 256
 dropout = 0.3
 
+[optimizer]
+name = "adamw"
+learning_rate = 3e-4
+weight_decay = 1e-4
+betas = [0.9, 0.999]
+
+[scheduler]
+# Available scheduler types:
+#   - "constant": Constant LR after warmup
+#   - "linear": Linear decay after warmup (supports min_lr_ratio)
+#   - "cosine": Cosine annealing after warmup (recommended)
+name = "constant"
+warmup_steps = 0
+
+# Example scheduler configurations:
+#
+# Cosine with warmup (recommended for most training):
+# name = "cosine"
+# warmup_steps = 500
+# [scheduler.kwargs]
+# num_cycles = 0.5  # Default: 0.5 (half cosine cycle)
+# min_lr_ratio = 0.0  # Default: 0.0 (decay to 0)
+#
+# Linear decay with warmup:
+# name = "linear"
+# warmup_steps = 100
+# [scheduler.kwargs]
+# min_lr_ratio = 0.1  # Decay to 10% of initial LR (default: 0.0)
+
 [training]
 tensorboard = false
 # wandb_project = "your-project-name"
 # run_name = "baseline"
 epochs = 25
 max_steps = -1
-optimizer = "adamw"
-learning_rate = 3e-4
-weight_decay = 1e-4
 clip_grad_norm = 1.0
 checkpoint_total_limit = 3
 

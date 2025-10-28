@@ -20,22 +20,33 @@ input_channels = 1
 embedding_dim = 256
 dropout = 0.3
 
-[training]
-epochs = 3
-max_steps = -1
-optimizer = "adamw"
+[optimizer]
+name = "adamw"
 learning_rate = 3e-4
 weight_decay = 1e-4
+betas = [0.9, 0.999]
+
+[scheduler]
+# Available: "constant", "linear", "cosine"
+name = "linear"
+warmup_steps = 50
+
+[scheduler.kwargs]
+# num_cycles = 0.5  # For cosine
+min_lr_ratio = 0.01  # For linear or cosine
+
+[training]
+epochs = 5
+max_steps = -1
 clip_grad_norm = 1.0
-log_every_batches = 10
+log_every_batches = 5
 tensorboard = true
 eval_strategy = "epoch"
 eval_steps = 50
 checkpoint_every = 0
 checkpoint_total_limit = 3
 
-
 [training.task_weights]
 gender = 1.0
 health = 1.0
-age = 1.0
+age = 0.05  # Reduced to ~1/20 to balance with classification losses (~0.1-0.8) vs age MSE (~20-180)
