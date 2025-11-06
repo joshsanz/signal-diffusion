@@ -106,7 +106,8 @@ class CNNBackbone(nn.Module):
         x = self.blocks(x)
         x = self.global_avgpool(x)
         x = self.flatten(x)
-        return x
+        # Ensure contiguous output for torch.compile() compatibility
+        return x.contiguous()
 
 
 class TransformerBackbone(nn.Module):
@@ -161,4 +162,6 @@ class TransformerBackbone(nn.Module):
             pooled = encoded.mean(dim=dim)
         else:  # cls token pooling
             pooled = encoded[:, 0] if self.batch_first else encoded[0]
-        return self.output_proj(pooled)
+        output = self.output_proj(pooled)
+        # Ensure contiguous output for torch.compile() compatibility
+        return output.contiguous()

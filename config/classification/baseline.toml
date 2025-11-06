@@ -48,6 +48,8 @@ eval_steps = 100
 checkpoint_strategy = "steps"
 checkpoint_steps = 100
 checkpoint_total_limit = 3
+compile_model = false
+compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 
 [training.task_weights]
 gender = 2.0

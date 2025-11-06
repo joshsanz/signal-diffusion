@@ -24,6 +24,7 @@ from signal_diffusion.training.classification import (
     train_from_config,
     ClassificationExperimentConfig,
 )
+from signal_diffusion.classification import build_task_specs
 
 # Setup logging
 coloredlogs.install(level='INFO', fmt='%(levelname)s:%(name)s - %(message)s')
@@ -113,34 +114,57 @@ def run_training_trial(
             final_epoch = summary.history[-1]
             val_loss = final_epoch.val_loss if final_epoch.val_loss is not None else float('inf')
 
-            # Compute task-weighted mean accuracy for optimization objective
-            # This respects task_weights from config to handle imbalanced tasks
-            task_weights = config.training.task_weights or {}
-            weighted_sum = 0.0
-            weight_total = 0.0
-            task_accuracies = {}
+            # Build task specs to identify task types (classification vs regression)
+            task_specs = build_task_specs(config.dataset.name, config.dataset.tasks)
+            task_spec_dict = {spec.name: spec for spec in task_specs}
 
-            for task_name, accuracy in final_epoch.val_accuracy.items():
-                if accuracy is not None:
-                    # Each task contributes to weighted sum proportional to its weight
-                    weight = float(task_weights.get(task_name, 1.0))
-                    weighted_sum += accuracy * weight
-                    weight_total += weight
-                    task_accuracies[task_name] = accuracy
+            # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
+            # No task weighting applied - all tasks contribute equally to the objective
+            scores = []
+            task_results = {}
 
-            # Compute final weighted accuracy: Σ(accuracy_i × weight_i) / Σ(weight_i)
-            mean_accuracy = weighted_sum / weight_total if weight_total > 0 else 0.0
+            for task_name in config.dataset.tasks:
+                spec = task_spec_dict.get(task_name)
+                if spec is None:
+                    continue
+
+                if spec.task_type == "classification":
+                    # Classification: use validation accuracy directly
+                    accuracy = final_epoch.val_accuracy.get(task_name)
+                    if accuracy is not None:
+                        scores.append(float(accuracy))
+                        task_results[task_name] = {
+                            "type": "classification",
+                            "accuracy": float(accuracy),
+                        }
+                else:
+                    # Regression: normalize MSE to [0, 1] scale using 1/(1+mse)
+                    mse = final_epoch.val_mse.get(task_name)
+                    if mse is not None:
+                        mse_val = max(0.0, float(mse))
+                        normalized_score = 1.0 / (1.0 + mse_val)
+                        scores.append(normalized_score)
+                        task_results[task_name] = {
+                            "type": "regression",
+                            "mse": mse_val,
+                            "normalized_score": normalized_score,
+                        }
+
+            # Compute final combined objective as unweighted mean across all tasks
+            combined_objective = sum(scores) / len(scores) if scores else 0.0
         else:
             # No training history (shouldn't happen with proper training)
-            mean_accuracy = 0.0
+            combined_objective = 0.0
             val_loss = float('inf')
-            task_accuracies = {}
+            task_results = {}
 
         # Log trial results with both overall metric and per-task breakdown
-        logger.info(f"Trial {trial.number} completed - Loss: {val_loss:.4f}, Weighted Accuracy: {mean_accuracy:.4f}")
-        for task_name, accuracy in task_accuracies.items():
-            weight = float(config.training.task_weights.get(task_name, 1.0)) if config.training.task_weights else 1.0
-            logger.info(f"  {task_name}: accuracy={accuracy:.4f}, weight={weight:.4f}")
+        logger.info(f"Trial {trial.number} completed - Loss: {val_loss:.4f}, Combined Objective: {combined_objective:.4f}")
+        for task_name, result in task_results.items():
+            if result["type"] == "classification":
+                logger.info(f"  {task_name} (classification): accuracy={result['accuracy']:.4f}")
+            else:
+                logger.info(f"  {task_name} (regression): mse={result['mse']:.4f}, score={result['normalized_score']:.4f}")
 
         # Explicitly release GPU memory to prevent accumulation across sequential trials
         gc.collect()
@@ -148,9 +172,9 @@ def run_training_trial(
             torch.cuda.empty_cache()
 
         return {
-            "mean_accuracy": mean_accuracy,
+            "combined_objective": combined_objective,
             "val_loss": val_loss,
-            "task_accuracies": task_accuracies,
+            "task_results": task_results,
             "best_metric": summary.best_metric,
             "best_epoch": summary.best_epoch,
             "success": True,
@@ -158,8 +182,8 @@ def run_training_trial(
 
     except optuna.TrialPruned:
         # Trial was pruned due to poor intermediate performance
-        # Return the most recent objective value (accuracy) reported before pruning
-        recent_accuracy = 0.0
+        # Return the most recent objective value reported before pruning
+        recent_objective = 0.0
         pruned_step = 0
 
         try:
@@ -168,17 +192,17 @@ def run_training_trial(
             if current_trial.intermediate_values:
                 # Get the most recent step (highest step number)
                 pruned_step = max(current_trial.intermediate_values.keys())
-                recent_accuracy = current_trial.intermediate_values[pruned_step]
+                recent_objective = current_trial.intermediate_values[pruned_step]
         except (AttributeError, IndexError, KeyError):
             # Fallback if we can't access intermediate values
             pass
 
-        logger.warning(f"Trial {trial.number} was pruned (last accuracy: {recent_accuracy:.4f})")
+        logger.warning(f"Trial {trial.number} was pruned (last objective: {recent_objective:.4f})")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return {
-            "mean_accuracy": recent_accuracy,
+            "combined_objective": recent_objective,
             "val_loss": float('inf'),
             "success": False,
             "pruned": True,
@@ -192,7 +216,7 @@ def run_training_trial(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return {
-            "mean_accuracy": 0.0,
+            "combined_objective": 0.0,
             "val_loss": float('inf'),
             "success": False,
             "error": str(e),
@@ -203,7 +227,8 @@ def create_objective(base_config: ClassificationExperimentConfig):
     """Create closure that returns an Optuna-compatible objective function.
 
     The returned objective function samples hyperparameters from SEARCH_SPACE,
-    runs training, and returns the task-weighted accuracy for optimization.
+    runs training, and returns the combined objective (classification accuracy +
+    normalized regression MSE) for optimization.
 
     Args:
         base_config: Base configuration to clone and modify per trial
@@ -215,14 +240,16 @@ def create_objective(base_config: ClassificationExperimentConfig):
     def objective(trial: optuna.Trial) -> float:
         """Optuna objective function for hyperparameter optimization.
 
-        Samples hyperparameters, runs training, and returns the weighted accuracy
-        metric for Optuna to maximize.
+        Samples hyperparameters, runs training, and returns a combined objective:
+        - For classification tasks: uses validation accuracy directly
+        - For regression tasks: uses 1/(1+mse) to normalize MSE to [0, 1]
+        - Overall: unweighted mean of all task scores
 
         Args:
             trial: Optuna Trial object for sampling and reporting
 
         Returns:
-            Weighted mean accuracy (higher is better)
+            Combined objective score (higher is better, range ~[0, 1])
         """
         # Sample hyperparameters from search space with log scaling for rates
         learning_rate = trial.suggest_float(
@@ -279,14 +306,18 @@ def create_objective(base_config: ClassificationExperimentConfig):
         results = run_training_trial(config, trial)
 
         # Store all results as trial user attributes for post-hoc analysis
-        trial.set_user_attr("weighted_accuracy", results["mean_accuracy"])
+        trial.set_user_attr("combined_objective", results["combined_objective"])
         trial.set_user_attr("val_loss", results["val_loss"])
         trial.set_user_attr("success", results["success"])
 
-        # Store individual task accuracies for debugging and analysis
-        if "task_accuracies" in results:
-            for task_name, accuracy in results["task_accuracies"].items():
-                trial.set_user_attr(f"task_{task_name}_accuracy", accuracy)
+        # Store individual task results (both classification and regression) for debugging
+        if "task_results" in results:
+            for task_name, task_result in results["task_results"].items():
+                if task_result["type"] == "classification":
+                    trial.set_user_attr(f"task_{task_name}_accuracy", task_result["accuracy"])
+                else:
+                    trial.set_user_attr(f"task_{task_name}_mse", task_result["mse"])
+                    trial.set_user_attr(f"task_{task_name}_normalized_score", task_result["normalized_score"])
 
         # Store training metadata
         if "best_metric" in results:
@@ -294,9 +325,9 @@ def create_objective(base_config: ClassificationExperimentConfig):
         if "best_epoch" in results:
             trial.set_user_attr("best_epoch", results["best_epoch"])
 
-        # Return weighted mean accuracy for optimization
-        # Optuna will maximize this value (higher accuracy is better)
-        return results["mean_accuracy"]
+        # Return combined objective for optimization
+        # Optuna will maximize this value (higher is better)
+        return results["combined_objective"]
 
     return objective
 
@@ -405,16 +436,23 @@ def main():
     # Log summary of hyperparameter optimization results
     logger.info("Hyperparameter tuning completed!")
     logger.info(f"Best trial: {study.best_trial.number}")
-    logger.info(f"Best weighted accuracy: {study.best_value:.4f}")
+    logger.info(f"Best combined objective: {study.best_value:.4f}")
     logger.info(f"Best parameters: {study.best_params}")
 
-    # Log individual per-task accuracies for the best performing trial
+    # Log individual per-task metrics for the best performing trial
     # This helps understand which tasks benefited from the optimal hyperparameters
     best_attrs = study.best_trial.user_attrs
-    for attr_name, attr_value in sorted(best_attrs.items()):
+    for attr_name in sorted(best_attrs.keys()):
+        attr_value = best_attrs[attr_name]
         if attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
             task_name = attr_name.replace("task_", "").replace("_accuracy", "")
-            logger.info(f"  {task_name} accuracy: {attr_value:.4f}")
+            logger.info(f"  {task_name} (classification) accuracy: {attr_value:.4f}")
+        elif attr_name.startswith("task_") and attr_name.endswith("_mse"):
+            task_name = attr_name.replace("task_", "").replace("_mse", "")
+            logger.info(f"  {task_name} (regression) mse: {attr_value:.4f}")
+        elif attr_name.startswith("task_") and attr_name.endswith("_normalized_score"):
+            task_name = attr_name.replace("task_", "").replace("_normalized_score", "")
+            logger.info(f"  {task_name} (regression) normalized_score: {attr_value:.4f}")
 
     # Save complete HPO results to JSON for further analysis
     results_path = Path("hpo_study_results.json")
@@ -422,7 +460,7 @@ def main():
         json.dump(
             {
                 "best_trial": study.best_trial.number,
-                "best_mean_accuracy": study.best_value,
+                "best_combined_objective": study.best_value,
                 "best_params": study.best_params,
                 "best_user_attrs": study.best_trial.user_attrs,
                 # Include all trials for trend analysis and debugging

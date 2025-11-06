@@ -71,7 +71,9 @@ class MLP(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        output = self.net(x)
+        # Ensure contiguous output for torch.compile() compatibility
+        return output.contiguous()
 
 
 class MultiTaskClassifier(nn.Module):

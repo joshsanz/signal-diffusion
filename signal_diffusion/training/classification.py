@@ -276,6 +276,8 @@ class TrainingConfig:
     max_best_checkpoints: int = 1
     early_stopping: bool = False
     early_stopping_patience: int = 5
+    compile_model: bool = True
+    compile_mode: str = "default"
 
 
 @dataclass(slots=True)
@@ -302,6 +304,8 @@ class EpochMetrics:
     val_losses: dict[str, float | None]
     train_accuracy: dict[str, float | None]
     val_accuracy: dict[str, float | None]
+    train_mse: dict[str, float | None]
+    val_mse: dict[str, float | None]
     lr: float
 
 
@@ -407,6 +411,8 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         max_best_checkpoints=int(training_section.get("max_best_checkpoints", 1)),
         early_stopping=bool(training_section.get("early_stopping", False)),
         early_stopping_patience=int(training_section.get("early_stopping_patience", 5)),
+        compile_model=bool(training_section.get("compile_model", True)),
+        compile_mode=str(training_section.get("compile_mode", "default")).lower(),
     )
 
     _validate_eval_config(training)
@@ -467,6 +473,12 @@ def train_from_config(
     else:
         device = torch.device("cpu")
     model.to(device)
+
+    # Compile model if requested
+    if training_cfg.compile_model:
+        LOGGER.info(f"Compiling model with torch.compile(mode='{training_cfg.compile_mode}', dynamic=True, fullgraph=False)...")
+        model = torch.compile(model, mode=training_cfg.compile_mode, dynamic=True, fullgraph=False)
+        LOGGER.info("Model compilation successful")
 
     train_dataset = build_dataset(
         settings,
@@ -755,9 +767,12 @@ def train_from_config(
                 latest_val = eval_manager.latest_result if eval_manager else None
             train_losses = {name: float(train_result["losses"][name]) for name in tasks}
             train_accuracy: dict[str, float | None] = {}
+            train_mse: dict[str, float | None] = {}
             for name in tasks:
                 value = train_result["accuracy"].get(name)
                 train_accuracy[name] = float(value) if value is not None else None
+                mse_value = train_result.get("mse", {}).get(name)
+                train_mse[name] = float(mse_value) if mse_value is not None else None
 
             if latest_val is not None:
                 val_loss: float | None = float(latest_val["loss"])
@@ -765,13 +780,17 @@ def train_from_config(
                     name: float(latest_val["losses"][name]) for name in tasks
                 }
                 val_accuracy: dict[str, float | None] = {}
+                val_mse: dict[str, float | None] = {}
                 for name in tasks:
                     value = latest_val["accuracy"].get(name)
                     val_accuracy[name] = float(value) if value is not None else None
+                    mse_value = latest_val.get("mse", {}).get(name)
+                    val_mse[name] = float(mse_value) if mse_value is not None else None
             else:
                 val_loss = None
                 val_losses = {name: None for name in tasks}
                 val_accuracy = {name: None for name in tasks}
+                val_mse = {name: None for name in tasks}
 
             lr = optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
             epoch_metrics = EpochMetrics(
@@ -782,6 +801,8 @@ def train_from_config(
                 val_losses=val_losses,
                 train_accuracy=train_accuracy,
                 val_accuracy=val_accuracy,
+                train_mse=train_mse,
+                val_mse=val_mse,
                 lr=lr,
             )
             history.append(epoch_metrics)
@@ -959,6 +980,48 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def _compute_combined_objective(
+    task_specs: Mapping[str, TaskSpec],
+    val_accuracy: dict[str, float | None],
+    val_mse: dict[str, float | None],
+) -> float:
+    """Compute combined objective score for mixed classification and regression tasks.
+
+    For classification tasks: uses accuracy directly (higher is better)
+    For regression tasks: uses 1/(1+mse) transformation (higher is better)
+    Returns: unweighted mean of all task scores
+
+    Args:
+        task_specs: Mapping of task names to TaskSpec objects
+        val_accuracy: Dict of validation accuracy/MAE values per task
+        val_mse: Dict of validation MSE values per task
+
+    Returns:
+        Combined objective score in [0, 1] range
+    """
+    scores = []
+    for task_name, spec in task_specs.items():
+        if spec.task_type == "classification":
+            # Classification: use accuracy directly
+            accuracy = val_accuracy.get(task_name)
+            if accuracy is not None:
+                scores.append(float(accuracy))
+        else:
+            # Regression: normalize MSE to [0, 1] scale using 1/(1+mse)
+            mse = val_mse.get(task_name)
+            if mse is not None:
+                # Ensure MSE is non-negative and compute normalized score
+                mse_val = max(0.0, float(mse))
+                normalized_score = 1.0 / (1.0 + mse_val)
+                scores.append(normalized_score)
+
+    if not scores:
+        # No valid metrics available
+        return 0.0
+
+    return sum(scores) / len(scores)
+
+
 def _report_and_check_pruning(
     trial: Any,
     mean_accuracy: float,
@@ -1046,7 +1109,7 @@ def _run_epoch(
     for batch_idx, batch in enumerate(data_loader, start=1):
         if max_steps > 0 and global_step >= max_steps:
             break
-        images = batch["image"].to(device)
+        images = batch["image"].to(device).contiguous()
         targets = {}
         for name in task_weights:
             tensor = _to_device_tensor(batch["targets"][name], device)
@@ -1108,17 +1171,17 @@ def _run_epoch(
                 # Validation was triggered - immediately check for Optuna pruning
                 # This allows early stopping of poor-performing trials during training
                 if eval_manager.latest_result is not None:
-                    accuracy_values = [
-                        value for value in eval_manager.latest_result["accuracy"].values()
-                        if value is not None
-                    ]
-                    if accuracy_values:
-                        mean_eval_acc = sum(accuracy_values) / len(accuracy_values)
-                    else:
-                        # Fallback: use negative loss if no accuracy metrics available
-                        mean_eval_acc = -eval_manager.latest_result["loss"]
+                    # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
+                    val_accuracy = eval_manager.latest_result.get("accuracy", {})
+                    val_mse = eval_manager.latest_result.get("mse", {})
+                    combined_objective = _compute_combined_objective(task_specs, val_accuracy, val_mse)
+
+                    # Fallback if no valid metrics available
+                    if combined_objective == 0.0:
+                        combined_objective = -eval_manager.latest_result["loss"]
+
                     # Report to Optuna and check if trial should be pruned
-                    _report_and_check_pruning(trial, mean_eval_acc, global_step)
+                    _report_and_check_pruning(trial, combined_objective, global_step)
                 model.train()
 
         # Accumulate batch metrics for epoch-level reporting
@@ -1174,17 +1237,17 @@ def _run_epoch(
             # Validation was triggered - immediately check for Optuna pruning
             # This allows early stopping of poor-performing trials after epoch completes
             if eval_manager.latest_result is not None:
-                accuracy_values = [
-                    value for value in eval_manager.latest_result["accuracy"].values()
-                    if value is not None
-                ]
-                if accuracy_values:
-                    mean_eval_acc = sum(accuracy_values) / len(accuracy_values)
-                else:
-                    # Fallback: use negative loss if no accuracy metrics available
-                    mean_eval_acc = -eval_manager.latest_result["loss"]
+                # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
+                val_accuracy = eval_manager.latest_result.get("accuracy", {})
+                val_mse = eval_manager.latest_result.get("mse", {})
+                combined_objective = _compute_combined_objective(task_specs, val_accuracy, val_mse)
+
+                # Fallback if no valid metrics available
+                if combined_objective == 0.0:
+                    combined_objective = -eval_manager.latest_result["loss"]
+
                 # Report to Optuna and check if trial should be pruned
-                _report_and_check_pruning(trial, mean_eval_acc, global_step)
+                _report_and_check_pruning(trial, combined_objective, global_step)
             model.train()
 
     # Compute final epoch-level metrics from accumulated statistics
@@ -1321,7 +1384,7 @@ def _to_device_tensor(value: Any, device: torch.device) -> torch.Tensor:
     elif tensor.dtype == torch.int64:
         tensor = tensor.to(torch.int32)
 
-    return tensor.to(device)
+    return tensor.to(device).contiguous()
 
 
 def _resolve_task_weights(tasks: Iterable[str], weights: Mapping[str, float]) -> dict[str, float]:
@@ -1417,6 +1480,8 @@ def _save_history(history: list[EpochMetrics], path: Path) -> None:
             "val_losses": item.val_losses,
             "train_accuracy": item.train_accuracy,
             "val_accuracy": item.val_accuracy,
+            "train_mse": item.train_mse,
+            "val_mse": item.val_mse,
             "lr": item.lr,
         }
         for item in history

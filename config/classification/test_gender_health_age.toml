@@ -47,6 +47,8 @@ eval_strategy = "epoch"
 eval_steps = 50
 checkpoint_strategy = "epoch"
 checkpoint_total_limit = 3
+compile_model = true
+compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 
 [training.task_weights]
 gender = 1.0
