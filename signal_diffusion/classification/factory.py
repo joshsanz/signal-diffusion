@@ -1,7 +1,7 @@
 """Classifier factory building blocks for Signal Diffusion."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Iterable, Mapping, MutableMapping, Sequence
 
 import torch
@@ -37,16 +37,20 @@ class ClassifierConfig:
     embedding_dim: int = 256
     dropout: float = 0.3
     activation: str = "gelu"
+    depth: int = 3
+    layer_repeats: int = 2
     extras: MutableMapping[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         data: dict[str, object] = {
             "backbone": self.backbone,
             "input_channels": self.input_channels,
-            "tasks": [task.__dict__ for task in self.tasks],
+            "tasks": [asdict(task) for task in self.tasks],
             "embedding_dim": self.embedding_dim,
             "dropout": self.dropout,
             "activation": self.activation,
+            "depth": self.depth,
+            "layer_repeats": self.layer_repeats,
         }
         if self.extras:
             data["extras"] = dict(self.extras)
@@ -122,6 +126,8 @@ def build_classifier(config: ClassifierConfig) -> MultiTaskClassifier:
             activation=config.activation,
             dropout=config.dropout,
             embedding_dim=config.embedding_dim,
+            depth=config.depth,
+            layer_repeats=config.layer_repeats,
             **extras,
         )
     elif config.backbone == "transformer":

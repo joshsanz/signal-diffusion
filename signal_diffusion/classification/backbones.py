@@ -24,72 +24,88 @@ def _make_activation(name: str) -> nn.Module:
 
 
 class CNNBackbone(nn.Module):
-    """Convolutional feature extractor used by spectrogram classifiers."""
+    """Convolutional feature extractor with configurable block-based architecture."""
 
     def __init__(
         self,
         in_channels: int,
         *,
-        conv_kernels: Sequence[tuple[int, int]] | None = None,
-        conv_channels: Sequence[int] | None = None,
-        conv_strides: Sequence[int] | None = None,
-        conv_padding: Sequence[tuple[int, int]] | None = None,
-        pool_kernels: Sequence[tuple[int, int]] | None = None,
-        pool_strides: Sequence[tuple[int, int]] | None = None,
-        linear_dims: Sequence[int] | None = None,
+        depth: int = 3,
+        layer_repeats: int = 2,
         activation: str = "gelu",
         dropout: float = 0.3,
         embedding_dim: int = 256,
     ) -> None:
         super().__init__()
-        conv_kernels = conv_kernels or [(5, 5), (3, 3), (3, 3)]
-        conv_channels = conv_channels or [8, 16, 32]
-        conv_strides = conv_strides or [1, 1, 1]
-        conv_padding = conv_padding or [(2, 2), (1, 1), (1, 1)]
-        pool_kernels = pool_kernels or [(2, 2), (2, 2), (2, 2)]
-        pool_strides = pool_strides or [(2, 2), (2, 2), (2, 2)]
-        linear_dims = tuple(linear_dims or (512, 128))
-
-        if not (len(conv_kernels) == len(conv_channels) == len(conv_strides) == len(conv_padding) == len(pool_kernels) == len(pool_strides)):
-            raise ValueError("Convolution and pooling configuration lengths must match")
+        if depth < 1:
+            raise ValueError("depth must be at least 1")
+        if layer_repeats < 1:
+            raise ValueError("layer_repeats must be at least 1")
 
         self.activation_name = activation.lower()
-        activation_fn = _make_activation(self.activation_name)
-
-        conv_in_channels = [in_channels] + list(conv_channels[:-1])
-        conv_layers: list[nn.Module] = []
-        for idx, (kernel, out_channels, stride, padding, pool_kernel, pool_stride) in enumerate(
-            zip(conv_kernels, conv_channels, conv_strides, conv_padding, pool_kernels, pool_strides)
-        ):
-            conv_layers.append(
-                nn.Conv2d(conv_in_channels[idx], out_channels, kernel_size=kernel, stride=stride, padding=padding)
-            )
-            conv_layers.append(_make_activation(self.activation_name))
-            conv_layers.append(nn.MaxPool2d(kernel_size=pool_kernel, stride=pool_stride))
-        self.convs = nn.Sequential(*conv_layers)
-
-        linear_layers: list[nn.Module] = [nn.Flatten(), nn.Dropout(dropout)]
-        if linear_dims:
-            linear_layers.append(nn.LazyLinear(linear_dims[0]))
-            for idx in range(len(linear_dims) - 1):
-                linear_layers.append(_make_activation(self.activation_name))
-                linear_layers.append(nn.Dropout(dropout))
-                linear_layers.append(nn.Linear(linear_dims[idx], linear_dims[idx + 1]))
-            last_dim = linear_dims[-1]
-        else:
-            linear_layers.append(_make_activation(self.activation_name))
-            last_dim = None
-        self.linear_stack = nn.Sequential(*linear_layers)
-        if last_dim is None:
-            self.projection = nn.LazyLinear(embedding_dim)
-        else:
-            self.projection = nn.Linear(last_dim, embedding_dim)
         self.embedding_dim = embedding_dim
 
+        # Determine channel growth factor and input conv channels
+        # The first block should have input_conv_channels * growth_factor
+        # The final block should have embedding_dim
+        # So: input_conv_channels * growth_factor^depth = embedding_dim
+        growth_4x_start = embedding_dim / (4 ** depth)
+        if growth_4x_start >= 8:
+            growth_factor = 4
+            input_conv_channels = int(growth_4x_start)
+        else:
+            growth_factor = 2
+            input_conv_channels = int(embedding_dim / (2 ** depth))
+
+        # Build channel list for each block (starting from growth_factor × input_conv_channels)
+        channels = [input_conv_channels * (growth_factor ** (i + 1)) for i in range(depth)]
+
+        # Input 5x5 convolution (separate from blocks)
+        input_conv_layers: list[nn.Module] = [
+            nn.Conv2d(in_channels, input_conv_channels, kernel_size=5, stride=1, padding=2),
+            _make_activation(self.activation_name),
+            nn.GroupNorm(num_groups=1, num_channels=input_conv_channels),
+            nn.Dropout(dropout),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+        ]
+        self.input_conv = nn.Sequential(*input_conv_layers)
+
+        # Build identical blocks
+        blocks: list[nn.Module] = []
+        current_in_channels = input_conv_channels
+
+        for block_idx, out_channels in enumerate(channels):
+            block_layers: list[nn.Module] = []
+
+            # GroupNorm at block start
+            block_layers.append(nn.GroupNorm(num_groups=1, num_channels=current_in_channels))
+
+            # Add layer_repeats 3x3 convolutions (first one may change channels)
+            for repeat_idx in range(layer_repeats):
+                conv_in = current_in_channels if repeat_idx == 0 else out_channels
+                block_layers.append(
+                    nn.Conv2d(conv_in, out_channels, kernel_size=3, stride=1, padding=1)
+                )
+                block_layers.append(_make_activation(self.activation_name))
+
+            # Dropout at end of block
+            block_layers.append(nn.Dropout(dropout))
+
+            # Pooling at end of block
+            block_layers.append(nn.AvgPool2d(kernel_size=2, stride=2))
+
+            blocks.append(nn.Sequential(*block_layers))
+            current_in_channels = out_channels
+
+        self.blocks = nn.Sequential(*blocks)
+        self.global_avgpool = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.convs(x)
-        x = self.linear_stack(x)
-        x = self.projection(x)
+        x = self.input_conv(x)
+        x = self.blocks(x)
+        x = self.global_avgpool(x)
+        x = self.flatten(x)
         return x
 
 
@@ -146,4 +162,3 @@ class TransformerBackbone(nn.Module):
         else:  # cls token pooling
             pooled = encoded[:, 0] if self.batch_first else encoded[0]
         return self.output_proj(pooled)
-

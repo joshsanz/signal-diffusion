@@ -19,6 +19,8 @@ backbone = "cnn_light"
 input_channels = 1
 embedding_dim = 256
 dropout = 0.3
+depth = 3
+layer_repeats = 2
 
 [optimizer]
 name = "adamw"
@@ -43,7 +45,7 @@ log_every_batches = 5
 tensorboard = true
 eval_strategy = "epoch"
 eval_steps = 50
-checkpoint_every = 0
+checkpoint_strategy = "epoch"
 checkpoint_total_limit = 3
 
 [training.task_weights]
