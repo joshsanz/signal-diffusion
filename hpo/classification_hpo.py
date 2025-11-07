@@ -37,9 +37,30 @@ SEARCH_SPACE = {
     "scheduler": ["constant", "linear", "cosine"],
     "dropout": [0.1, 0.8],
     "depth": [2, 4],
-    "layer_repeats": [1, 2],
-    "embedding_dim": [32, 64, 128, 192,],
+    "layer_repeats": [1, 3],
+    "embedding_dim": [32, 64, 128, 192, 256],
 }
+
+
+def _parse_prune_max(value: str) -> str | int:
+    """Coerce prune max resource argument into an int or 'auto'."""
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return "auto"
+
+    try:
+        max_eval = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--prune-max-evals must be an integer or 'auto'"
+        ) from exc
+
+    if max_eval <= 0:
+        raise argparse.ArgumentTypeError(
+            "--prune-max-evals must be positive or 'auto'"
+        )
+
+    return max_eval
 
 
 def load_base_config(config_path: str | Path) -> ClassificationExperimentConfig:
@@ -375,9 +396,9 @@ def parse_args():
     )
     parser.add_argument(
         "--prune-max-evals",
-        type=int,
-        default=30,
-        help="Maximum number of evaluations (HyperbandPruner max_resource)",
+        type=_parse_prune_max,
+        default=_parse_prune_max("auto"),
+        help="Maximum number of evaluations (HyperbandPruner max_resource: int or 'auto')",
     )
     parser.add_argument(
         "--reduction-factor",
