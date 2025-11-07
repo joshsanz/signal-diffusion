@@ -6,11 +6,12 @@ config = "~/git/signal-diffusion/config/default.toml"
 trainer = "classification"
 
 [dataset]
-name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
+# name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
+name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 32
+batch_size = 64
 num_workers = 2
 shuffle = true
 
@@ -38,7 +39,7 @@ warmup_steps = 100
 min_lr_ratio = 0.03  # For linear or cosine
 
 [training]
-epochs = 5
+epochs = 10
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 5
@@ -48,7 +49,7 @@ eval_steps = 100
 checkpoint_strategy = "steps"
 checkpoint_steps = 100
 checkpoint_total_limit = 3
-compile_model = false
+compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 
 [training.task_weights]

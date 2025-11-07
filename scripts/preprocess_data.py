@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None, help="Path to the config file.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing data.")
-    parser.add_argument("datasets", nargs="*", default=["math", "parkinsons", "seed"], help="Datasets to preprocess.")
+    parser.add_argument("datasets", nargs="*", default=["math", "parkinsons", "seed", "longitudinal"], help="Datasets to preprocess.")
     args = parser.parse_args()
 
     settings = load_settings(args.config)

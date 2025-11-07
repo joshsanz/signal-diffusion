@@ -472,12 +472,19 @@ def train_from_config(
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
+
+    # Enable TF32 for faster matmul on Ampere+ GPUs with minimal accuracy impact
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        LOGGER.info("TF32 enabled for CUDA matmul and cuDNN operations")
+
     model.to(device)
 
     # Compile model if requested
     if training_cfg.compile_model:
-        LOGGER.info(f"Compiling model with torch.compile(mode='{training_cfg.compile_mode}', dynamic=True, fullgraph=False)...")
-        model = torch.compile(model, mode=training_cfg.compile_mode, dynamic=True, fullgraph=False)
+        LOGGER.info(f"Compiling model with torch.compile(mode='{training_cfg.compile_mode}')...")
+        model = torch.compile(model, mode=training_cfg.compile_mode)
         LOGGER.info("Model compilation successful")
 
     train_dataset = build_dataset(

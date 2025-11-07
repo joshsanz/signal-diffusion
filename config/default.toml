@@ -22,3 +22,7 @@ output = "seed/stfts"
 [datasets.mit]
 root = "mit"
 output = "mit/stfts"
+
+[datasets.longitudinal]
+root = "longitudinal"
+output = "longitudinal/stfts"

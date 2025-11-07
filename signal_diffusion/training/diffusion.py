@@ -118,6 +118,13 @@ def train(
         log_with=log_with if log_with else None,
     )
 
+    # Enable TF32 for faster matmul on Ampere+ GPUs with minimal accuracy impact
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        if accelerator.is_main_process:
+            LOGGER.info("TF32 enabled for CUDA matmul and cuDNN operations")
+
     best_eval_dir = run_dir / "best_eval"
     best_eval_metadata_path = best_eval_dir / "metadata.json"
     best_kid_checkpoints: list[tuple[float, int]] = []

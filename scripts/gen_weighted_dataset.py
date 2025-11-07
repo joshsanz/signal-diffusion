@@ -34,7 +34,7 @@ from signal_diffusion.log_setup import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_DATASETS: tuple[str, ...] = ("math", "parkinsons", "seed")
+DEFAULT_DATASETS: tuple[str, ...] = ("math", "parkinsons", "seed", "longitudinal")
 DEFAULT_TASKS: tuple[str, ...] = ("gender",)
 
 
