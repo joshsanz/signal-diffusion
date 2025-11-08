@@ -52,12 +52,12 @@ def _parse_prune_max(value: str) -> str | int:
         max_eval = int(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            "--prune-max-evals must be an integer or 'auto'"
+            "--prune-max-steps must be an integer or 'auto'"
         ) from exc
 
     if max_eval <= 0:
         raise argparse.ArgumentTypeError(
-            "--prune-max-evals must be positive or 'auto'"
+            "--prune-max-steps must be positive or 'auto'"
         )
 
     return max_eval
@@ -389,16 +389,16 @@ def parse_args():
         help="Random seed for reproducibility",
     )
     parser.add_argument(
-        "--prune-min-evals",
+        "--prune-min-steps",
         type=int,
         default=3,
-        help="Minimum number of evaluations before pruning (HyperbandPruner min_resource)",
+        help="Minimum number of steps before pruning (HyperbandPruner min_resource)",
     )
     parser.add_argument(
-        "--prune-max-evals",
+        "--prune-max-steps",
         type=_parse_prune_max,
         default=_parse_prune_max("auto"),
-        help="Maximum number of evaluations (HyperbandPruner max_resource: int or 'auto')",
+        help="Maximum number of steps (HyperbandPruner max_resource: int or 'auto')",
     )
     parser.add_argument(
         "--reduction-factor",
@@ -422,8 +422,8 @@ def main():
     # Create Optuna study with TPE sampler and Hyperband pruner
     sampler = TPESampler(seed=args.seed)
     pruner = HyperbandPruner(
-        min_resource=args.prune_min_evals,
-        max_resource=args.prune_max_evals,
+        min_resource=args.prune_min_steps,
+        max_resource=args.prune_max_steps,
         reduction_factor=args.reduction_factor,
     )
 
