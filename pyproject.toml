@@ -35,6 +35,8 @@ dependencies = [
     "torch-fidelity @ git+https://github.com/toshas/torch-fidelity.git@1121d4dbb7497deaa38c8e67688bd1d373320082",
     "einops>=0.8.1",
     "optuna>=4.5.0",
+    "causal-conv1d>=1.5.3.post1",
+    "mamba-ssm>2",
 ]
 
 # Optional GPU-accelerated packages (CUDA-dependent)

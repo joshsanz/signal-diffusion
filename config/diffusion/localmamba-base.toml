@@ -1,0 +1,88 @@
+# Base configuration for the LocalMamba diffusion adapter (wider feature dims).
+
+[settings]
+config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
+
+[dataset]
+name = "nkirschi/oxford-flowers"
+train_split = "train"
+val_split = "test"
+batch_size = 64
+num_workers = 4
+resolution = 64
+center_crop = true
+random_flip = true
+image_column = "image"
+class_column = "label"
+num_classes = 102
+
+[model]
+name = "localmamba"
+sample_size = 64
+conditioning = "classes" # none, caption, classes
+
+[model.extras]
+depths = [2, 2, 9, 2]
+dims = [128, 256, 512, 1024]
+d_state = 16
+ssm_ratio = 2.0
+mlp_ratio = 4.0
+scan_directions = ["h", "v", "w7"]
+mapping_width = 256
+mapping_depth = 2
+mapping_dropout_rate = 0.0
+patch_size = [2, 2]
+in_channels = 3
+out_channels = 3
+dropout_rate = 0.1
+cfg_dropout = 0.1
+
+[model.lora]
+enabled = false
+
+[objective]
+prediction_type = "vector_field"
+flow_match_timesteps = 1000
+
+[optimizer]
+name = "adamw"
+learning_rate = 3e-4
+weight_decay = 0.01
+betas = [0.9, 0.99]
+
+[scheduler]
+name = "constant_with_warmup"
+warmup_steps = 1000
+
+[training]
+seed = 42
+epochs = 200
+gradient_accumulation_steps = 1
+gradient_checkpointing = true
+mixed_precision = "bf16"
+gradient_clip_norm = 1.0
+log_every_steps = 10
+checkpoint_interval = 1000
+checkpoint_total_limit = 3
+eval_strategy = "steps"
+eval_num_steps = 1000
+eval_num_examples = 8
+eval_gen_seed = 1234
+eval_batch_size = 256
+eval_mmd_samples = 1000
+eval_mmd_fallback_ntrain = 5000
+ema_use_warmup = true
+ema_inv_gamma = 1
+ema_power = 0.75
+ema_decay = 0.999
+ema_update_after_step = 1000
+
+[logging]
+tensorboard = true
+log_dir = "runs/diffusion/tensorboard/localmamba-base"
+run_name = "localmamba_base"
+
+[inference]
+denoising_steps = 25
+cfg_scale = 3.0
