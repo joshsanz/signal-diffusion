@@ -185,17 +185,21 @@ def train(
             write_best_eval_metadata()
 
     if accelerator.is_main_process and log_with:
-        # A simple dict of hyperparameters for logging
         project_name = cfg.logging.wandb_project or "signal_diffusion"
-        hps = flatten_and_sanitize_hparams(asdict(cfg))
+        init_kwargs: dict[str, Any] = {}
+        if cfg.logging.wandb_project:
+            init_kwargs["wandb"] = {"run_name": run_name}
         accelerator.init_trackers(
             project_name,
-            config=hps,
-            init_kwargs={
-                # "tensorboard": {"logging_dir": log_dir},
-                "wandb": {"run_name": run_name},
-            },
+            init_kwargs=init_kwargs or None,
         )
+        if cfg.logging.wandb_project:
+            hps = flatten_and_sanitize_hparams(asdict(cfg))
+            wandb_tracker = accelerator.get_tracker("wandb")
+            if wandb_tracker is not None:
+                wandb_run = getattr(wandb_tracker, "run", None)
+                if wandb_run is not None:
+                    wandb_run.config.update(hps, allow_val_change=True)
     set_seed(cfg.training.seed)
 
     if accelerator.is_main_process:
