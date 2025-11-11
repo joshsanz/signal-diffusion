@@ -191,7 +191,7 @@ def train(
             init_kwargs["wandb"] = {"run_name": run_name}
         accelerator.init_trackers(
             project_name,
-            init_kwargs=init_kwargs or None,
+            init_kwargs=init_kwargs,
         )
         if cfg.logging.wandb_project:
             hps = flatten_and_sanitize_hparams(asdict(cfg))
