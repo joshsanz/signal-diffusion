@@ -17,6 +17,7 @@
 - `metrics/`: evaluation scripts such as `calculate-metrics.py` plus VAE data tooling.
 - `eeg_classification/`: historical CNN/transformer trainers and archived checkpoints under `bestmodels/`.
 - `vae/`: STFT VAE prototypes (`train_vae.py`, decoder notebooks). Keep exploratory notebooks beside the modules they touch; store derived assets in `tensorboard_logs/` or dataset-specific folders.
+- `signal_diffusion/diffusion/models/localmamba.py` & `signal_diffusion/diffusion/models/localmamba_model/`: LocalMamba diffusion adapter plus SS2D/VSS blocks (LocalVMamba port updated for `mamba-ssm` v2.0).
 
 ## Build, Test, and Development Commands
 
@@ -25,7 +26,15 @@
 - `uv run python scripts/preprocess_data.py --help`: inspect preprocessing options before generating spectrograms.
 - `uv run python -m signal_diffusion.training.diffusion config/diffusion/flowers.toml --output-dir runs/diffusion/flowers`: launch diffusion training.
 - `uv run python -m signal_diffusion.training.classification config/classification/test_gender_health_age.toml --output-dir runs/classification/baseline`: train the EEG classifier with the unified entry point.
+- `uv run python -m signal_diffusion.training.diffusion config/diffusion/localmamba-baseline.toml --output-dir runs/diffusion/localmamba`: run the LocalMamba adapter with the baseline config (see `config/diffusion/localmamba-*.toml` variants).
 - `uv run tensorboard --logdir runs`: monitor experiments and metric trends.
+
+## LocalMamba Integration Notes
+
+- LocalMamba mirrors the hourglass adapter API but swaps in hierarchical selective-scan (VSS) blocks; conditioning flows through AdaRMSNorm inside each `ConditionedVSSBlock`.
+- `config/diffusion/localmamba-{tiny,small,baseline}.toml` define ready-to-train specs (depths, dims, scan directions). Keep encoder/decoder depths aligned when editing.
+- Refer to `docs/localmamba_architecture.md` for the end-to-end diagram, selective scan explanation, and validation checklist.
+- Selective scanning now uses `mamba_ssm.ops.selective_scan_fn`; avoid calling legacy CUDA kernels directly.
 
 ## Coding Style & Naming Conventions
 

@@ -8,7 +8,7 @@ trainer = "diffusion"
 name = "nkirschi/oxford-flowers"
 train_split = "train"
 val_split = "test"
-batch_size = 32
+batch_size = 16
 num_workers = 4
 resolution = 128
 center_crop = true
@@ -23,7 +23,7 @@ sample_size = 64
 conditioning = "classes" # none, caption, classes
 
 [model.extras]
-depths = [2, 2, 5, 2]
+depths = [2, 3, 4, 2]
 dims = [96, 192, 384, 768]
 d_state = 16
 ssm_ratio = 2.0
@@ -58,15 +58,15 @@ warmup_steps = 1000
 [training]
 seed = 42
 epochs = 200
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 8
 gradient_checkpointing = true
 mixed_precision = "bf16"
 gradient_clip_norm = 1.0
 log_every_steps = 10
-checkpoint_interval = 1000
+checkpoint_interval = 500
 checkpoint_total_limit = 3
 eval_strategy = "steps"
-eval_num_steps = 1000
+eval_num_steps = 500
 eval_num_examples = 8
 eval_gen_seed = 1234
 eval_batch_size = 256
