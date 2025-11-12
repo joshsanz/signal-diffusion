@@ -82,6 +82,7 @@ class LocalMambaAdapter:
         data = dict(cfg.model.extras)
 
         def _ensure_list(value: Any, *, length: int | None = None, item_type=float, name: str = "") -> list:
+            """Normalize scalar/sequence config entries into a list of fixed length."""
             if isinstance(value, (list, tuple)):
                 result = [item_type(item) for item in value]
             elif value is None:
@@ -238,23 +239,7 @@ class LocalMambaAdapter:
         checkpoint_path = Path(source).expanduser()
         candidate_files: list[Path]
 
-        if checkpoint_path.is_dir():
-            preferred_names = [
-                "localmamba_model.pt",
-                "pytorch_model.bin",
-                "diffusion_pytorch_model.bin",
-                "model.bin",
-                "model.pt",
-                "model.pth",
-                "model.safetensors",
-            ]
-            candidate_files = [checkpoint_path / name for name in preferred_names if (checkpoint_path / name).is_file()]
-            if not candidate_files:
-                candidate_files = sorted(
-                    [path for path in checkpoint_path.iterdir() if path.suffix in {".pt", ".pth", ".bin", ".safetensors"}]
-                )
-        else:
-            candidate_files = [checkpoint_path]
+        candidate_files = self._resolve_checkpoint_candidates(checkpoint_path)
 
         if not candidate_files:
             raise FileNotFoundError(f"Could not locate checkpoint file under {checkpoint_path}")
@@ -287,6 +272,27 @@ class LocalMambaAdapter:
             )
         else:
             self._logger.info("Loaded LocalMamba weights from %s", checkpoint_file)
+
+    def _resolve_checkpoint_candidates(self, checkpoint_path: Path) -> list[Path]:
+        """Return ordered candidate checkpoints for paths/files supplied via config."""
+        if checkpoint_path.is_dir():
+            preferred_names = [
+                "localmamba_model.pt",
+                "pytorch_model.bin",
+                "diffusion_pytorch_model.bin",
+                "model.bin",
+                "model.pt",
+                "model.pth",
+                "model.safetensors",
+            ]
+            candidate_files = [checkpoint_path / name for name in preferred_names if (checkpoint_path / name).is_file()]
+            if not candidate_files:
+                candidate_files = sorted(
+                    [path for path in checkpoint_path.iterdir() if path.suffix in {".pt", ".pth", ".bin", ".safetensors"}]
+                )
+        else:
+            candidate_files = [checkpoint_path]
+        return candidate_files
 
     def build_modules(
         self,
@@ -346,6 +352,8 @@ class LocalMambaAdapter:
                 f"Class labels must be in [0, {self._num_dataset_classes - 1}] for LocalMamba adapter"
             )
         if self._extras.cfg_dropout > 0:
+            # Randomly replace labels with the dropout token so the model
+            # learns unconditional predictions for CFG at training time.
             dropout_token = torch.full_like(labels, self._num_dataset_classes)
             mask = torch.rand_like(labels.float()) < self._extras.cfg_dropout
             labels = torch.where(mask, dropout_token, labels)
@@ -391,6 +399,7 @@ class LocalMambaAdapter:
         z_t = scheduler.scale_noise(images, timesteps, noise)  # type: ignore
         snr = get_snr(scheduler, timesteps, device=device)
 
+        # Map scheduler target semantics to the requested prediction type.
         if cfg.objective.prediction_type == "epsilon":
             target = noise
         elif cfg.objective.prediction_type == "vector_field":
@@ -477,33 +486,17 @@ class LocalMambaAdapter:
         sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
         dropout_label = self._num_dataset_classes
 
-        if conditioning is None:
-            class_labels = torch.full((num_images,), dropout_label, device=device, dtype=torch.long)
-            unconditional_labels = None
-            classifier_free = False
-        elif isinstance(conditioning, torch.Tensor):
-            classifier_free = True
-            class_labels = conditioning.to(device=device, dtype=torch.long)
-            if class_labels.ndim != 1:
-                raise ValueError("Class-label conditioning tensor must be 1D with shape (num_images,)")
-            if class_labels.shape[0] == 1 and num_images > 1:
-                class_labels = class_labels.expand(num_images)
-            if class_labels.shape[0] != num_images:
-                raise ValueError("Number of class labels must match num_images")
-            if class_labels.numel() == 0:
-                raise ValueError("Class-label conditioning tensor must be non-empty")
-            if class_labels.min() < 0 or class_labels.max() >= self._num_dataset_classes:
-                raise ValueError(
-                    f"Class labels must be in [0, {self._num_dataset_classes - 1}] for LocalMamba adapter"
-                )
-            unconditional_labels = torch.full_like(class_labels, dropout_label)
-        elif isinstance(conditioning, str) or isinstance(conditioning, Iterable):
-            raise NotImplementedError("LocalMamba caption conditioning is not implemented yet")
-        else:
-            raise TypeError("Unsupported conditioning value for LocalMamba sampling")
+        class_labels, unconditional_labels, classifier_free = self._prepare_sampling_conditioning(
+            conditioning=conditioning,
+            num_images=num_images,
+            dropout_label=dropout_label,
+            device=device,
+        )
 
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
+                # Duplicate batch when classifier-free guidance is active so both
+                # unconditional and conditional predictions share the same noise.
                 if classifier_free and unconditional_labels is not None:
                     model_input = torch.cat([sample, sample], dim=0)
                 else:
@@ -531,6 +524,57 @@ class LocalMambaAdapter:
                 step_output = scheduler.step(model_output, timestep, sample, return_dict=True)
                 sample = step_output.prev_sample  # type: ignore
 
+        return self._finalize_generated_sample(sample, device=device, vae=vae)
+
+    def _prepare_sampling_conditioning(
+        self,
+        *,
+        conditioning: torch.Tensor | str | Iterable[str] | None,
+        num_images: int,
+        dropout_label: int,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, bool]:
+        """Normalize sampling-time conditioning inputs.
+
+        Returns:
+            class_labels: labels fed to the denoiser
+            unconditional_labels: dropout tokens for CFG (or None if unused)
+            classifier_free: whether classifier-free guidance is active
+        """
+        if conditioning is None:
+            class_labels = torch.full((num_images,), dropout_label, device=device, dtype=torch.long)
+            return class_labels, None, False
+
+        if isinstance(conditioning, torch.Tensor):
+            class_labels = conditioning.to(device=device, dtype=torch.long)
+            if class_labels.ndim != 1:
+                raise ValueError("Class-label conditioning tensor must be 1D with shape (num_images,)")
+            if class_labels.shape[0] == 1 and num_images > 1:
+                class_labels = class_labels.expand(num_images)
+            if class_labels.shape[0] != num_images:
+                raise ValueError("Number of class labels must match num_images")
+            if class_labels.numel() == 0:
+                raise ValueError("Class-label conditioning must be non-empty")
+            if class_labels.min() < 0 or class_labels.max() >= self._num_dataset_classes:
+                raise ValueError(
+                    f"Class labels must be in [0, {self._num_dataset_classes - 1}] for LocalMamba adapter"
+                )
+            unconditional_labels = torch.full_like(class_labels, dropout_label)
+            return class_labels, unconditional_labels, True
+
+        if isinstance(conditioning, (str, Iterable)):
+            raise NotImplementedError("LocalMamba caption conditioning is not implemented yet")
+
+        raise TypeError("Unsupported conditioning value for LocalMamba sampling")
+
+    def _finalize_generated_sample(
+        self,
+        sample: torch.Tensor,
+        *,
+        device: torch.device,
+        vae: Any | None,
+    ) -> torch.Tensor:
+        """Convert latent samples back to pixel space if required."""
         if self._extras.latent_space:
             if vae is None:
                 raise RuntimeError("VAE expected for latent-space LocalMamba sampling")

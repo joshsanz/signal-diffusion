@@ -124,35 +124,10 @@ class MultiScanVSSM(nn.Module):
         """
         H, W = self.token_size
         if len(x.shape) == 3:
-            if direction == 'h':
-                return x.transpose(-2, -1)
-            elif direction == 'h_flip':
-                return x.transpose(-2, -1).flip([-1])
-            elif direction == 'v':
-                return rearrange(x, 'b (h w) d -> b d (w h)', h=H, w=W)
-            elif direction == 'v_flip':
-                return rearrange(x, 'b (h w) d -> b d (w h)', h=H, w=W).flip([-1])
-            elif direction.startswith('w'):
-                K = int(direction[1:].split('_')[0])
-                flip = direction.endswith('flip')
-                return local_scan(x, K, H, W, flip=flip)
-            else:
-                raise RuntimeError(f'Direction {direction} not found.')
-        elif len(x.shape) == 4:
-            if direction == 'h':
-                return x.flatten(2)
-            elif direction == 'h_flip':
-                return x.flatten(2).flip([-1])
-            elif direction == 'v':
-                return rearrange(x, 'b d h w -> b d (w h)', h=H, w=W)
-            elif direction == 'v_flip':
-                return rearrange(x, 'b d h w -> b d (w h)', h=H, w=W).flip([-1])
-            elif direction.startswith('w'):
-                K = int(direction[1:].split('_')[0])
-                flip = direction.endswith('flip')
-                return local_scan_bchw(x, K, H, W, flip=flip)
-            else:
-                raise RuntimeError(f'Direction {direction} not found.')
+            return self._scan_tokens(x, direction, H, W)
+        if len(x.shape) == 4:
+            return self._scan_images(x, direction, H, W)
+        raise RuntimeError(f'Unexpected tensor rank {len(x.shape)} for scan')
 
     def reverse(self, x, direction='h'):
         """Reverse a single scan direction.
@@ -183,6 +158,40 @@ class MultiScanVSSM(nn.Module):
     def __repr__(self):
         scans = ', '.join(self.choices)
         return super().__repr__().replace('MultiScanVSSM', f'MultiScanVSSM[{scans}]')
+
+    @staticmethod
+    def _scan_tokens(x, direction, H, W):
+        """Scan flattened tokens ([B, L, D]) in the requested direction."""
+        if direction == 'h':
+            return x.transpose(-2, -1)
+        if direction == 'h_flip':
+            return x.transpose(-2, -1).flip([-1])
+        if direction == 'v':
+            return rearrange(x, 'b (h w) d -> b d (w h)', h=H, w=W)
+        if direction == 'v_flip':
+            return rearrange(x, 'b (h w) d -> b d (w h)', h=H, w=W).flip([-1])
+        if direction.startswith('w'):
+            K = int(direction[1:].split('_')[0])
+            flip = direction.endswith('flip')
+            return local_scan(x, K, H, W, flip=flip)
+        raise RuntimeError(f'Direction {direction} not found.')
+
+    @staticmethod
+    def _scan_images(x, direction, H, W):
+        """Scan feature maps ([B, C, H, W]) in the requested direction."""
+        if direction == 'h':
+            return x.flatten(2)
+        if direction == 'h_flip':
+            return x.flatten(2).flip([-1])
+        if direction == 'v':
+            return rearrange(x, 'b d h w -> b d (w h)', h=H, w=W)
+        if direction == 'v_flip':
+            return rearrange(x, 'b d h w -> b d (w h)', h=H, w=W).flip([-1])
+        if direction.startswith('w'):
+            K = int(direction[1:].split('_')[0])
+            flip = direction.endswith('flip')
+            return local_scan_bchw(x, K, H, W, flip=flip)
+        raise RuntimeError(f'Direction {direction} not found.')
 
 
 class PatchMerging2D(nn.Module):

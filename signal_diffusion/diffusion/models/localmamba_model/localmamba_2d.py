@@ -560,6 +560,9 @@ class LocalMamba2DModel(nn.Module):
         pos = pos.view(x.shape[-3], x.shape[-2], 2)
 
         # Mapping network: combine all conditioning signals
+        # When the architecture was instantiated with class or extra-conditioning
+        # heads we expect callers to feed corresponding tensors. Failing early
+        # keeps the forward pass easier to reason about than silently broadcasting.
         if class_cond is None and self.class_emb is not None:
             raise ValueError("class_cond must be specified if num_classes > 0")
         if mapping_cond is None and self.mapping_cond_in_proj is not None:
@@ -570,6 +573,8 @@ class LocalMamba2DModel(nn.Module):
         time_emb = self.time_in_proj(self.time_emb(c_noise[..., None]))
 
         # Augmentation conditioning
+        # Default to zero augmentation signal so downstream math stays uniform
+        # regardless of whether Karras-style augmentation metadata is provided.
         aug_cond = x.new_zeros([x.shape[0], 9]) if aug_cond is None else aug_cond
         aug_emb = self.aug_in_proj(self.aug_emb(aug_cond))
 
@@ -582,7 +587,8 @@ class LocalMamba2DModel(nn.Module):
             if self.mapping_cond_in_proj is not None else 0
         )
 
-        # Combine all conditioning
+        # Combine time/augmentation/class/text embeddings through the shared
+        # mapping network so every block receives the same fused context.
         cond = self.mapping(time_emb + aug_emb + class_emb + mapping_emb)
 
         # U-Net encoder with skip connections
