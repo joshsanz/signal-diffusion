@@ -158,11 +158,14 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         self.participants = self._load_participants()
 
         orig_fs = 500
-        if fs <= 0 or orig_fs % fs != 0:
+        if fs <= 0:
+            raise ValueError("fs must be positive for Parkinsons dataset")
+        decimation_ratio = orig_fs / fs
+        if not decimation_ratio.is_integer():
             raise ValueError("fs must be a positive divisor of 500 Hz")
         self.target_fs = fs
-        self.decimation = orig_fs // fs
-        self.fs = orig_fs / self.decimation
+        self.decimation = int(decimation_ratio)
+        self.fs = orig_fs / float(self.decimation)
 
         self.channel_indices = [idx for _, idx in parkinsons_channels]
         self.n_channels = len(self.channel_indices)

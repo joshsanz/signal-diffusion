@@ -167,11 +167,14 @@ class LongitudinalPreprocessor(BaseSpectrogramPreprocessor):
 
         # Original sampling rate is 1000 Hz
         orig_fs = 1000
-        if fs <= 0 or orig_fs % fs != 0:
+        if fs <= 0:
+            raise ValueError("fs must be positive for longitudinal dataset")
+        decimation_ratio = orig_fs / fs
+        if not decimation_ratio.is_integer():
             raise ValueError("fs must be a positive divisor of 1000 Hz for longitudinal dataset")
         self.target_fs = fs
-        self.decimation = orig_fs // fs
-        self.fs = orig_fs / self.decimation
+        self.decimation = int(decimation_ratio)
+        self.fs = orig_fs / float(self.decimation)
 
         # Use the standard 20-channel selection
         self.channel_indices = [idx for _, idx in longitudinal_channels]

@@ -211,11 +211,14 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         self.participants = self._load_participants()
 
         self.orig_fs = 1000
-        if fs <= 0 or self.orig_fs % fs != 0:
+        if fs <= 0:
+            raise ValueError("fs must be positive for SEED dataset")
+        decimation_ratio = self.orig_fs / fs
+        if not decimation_ratio.is_integer():
             raise ValueError("fs must be a positive divisor of 1000 Hz")
         self.target_fs = fs
-        self.decimation = self.orig_fs // fs
-        self.fs = self.orig_fs / self.decimation
+        self.decimation = int(decimation_ratio)
+        self.fs = self.orig_fs / float(self.decimation)
 
         self.channel_indices = [idx for _, idx in seed_channels]
         self.n_channels = len(self.channel_indices)

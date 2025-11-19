@@ -182,11 +182,14 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         self.subject_table = self._load_subject_table()
 
         self.orig_fs = 500
-        if fs <= 0 or self.orig_fs % fs != 0:
+        if fs <= 0:
+            raise ValueError("fs must be positive for Math dataset")
+        decimation_ratio = self.orig_fs / fs
+        if not decimation_ratio.is_integer():
             raise ValueError("fs must be a positive divisor of 500 Hz for Math dataset")
         self.target_fs = fs
-        self.decimation = self.orig_fs // fs
-        self.fs = self.orig_fs / self.decimation
+        self.decimation = int(decimation_ratio)
+        self.fs = self.orig_fs / float(self.decimation)
 
         self.states: Sequence[int] = (1, 2) if include_math_trials else (1,)
         self._subject_ids: Sequence[str] | None = None
