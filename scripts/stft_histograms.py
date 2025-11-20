@@ -4,7 +4,9 @@ Compute raw STFT dB histograms and CDFs for all EEG datasets.
 The script mirrors each dataset preprocessor's windowing (nsamps, overlap,
 sampling rate, bin spacing) to produce dB-valued STFTs before clipping and
 scaling. Histograms (rounded to 1 dB) are saved to disk alongside summary
-statistics and recommended clip ranges for 8-bit quantization.
+statistics and recommended clip ranges for 8-bit quantization. Quantization
+metadata (dB shift/scale and linear reconstruction hints) is recorded so that
+uint8 dB bins can be mapped back to their bin-center magnitudes.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import inspect
 import json
 import logging
 import pkgutil
+from dataclasses import dataclass
 from collections import Counter
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
@@ -39,9 +42,72 @@ except Exception:  # pragma: no cover - plotting is optional
 mne.set_log_level("WARNING")
 
 logger = logging.getLogger("stft_histograms")
-LOWER_PCT_SWEEP = [float(i) for i in range(16)]  # 0%, 1%, ..., 15%
-UPPER_PCT_SWEEP = [100.0 - 0.5 * i for i in range(11)]
-HISTOGRAM_BINS = 512
+LOWER_PCT_SWEEP = [float(i) for i in range(50)]  # 0%, 1%, ..., 49%
+UPPER_PCT_SWEEP = [100.0 - 0.5 * i for i in range(5)]
+HISTOGRAM_BINS = 1000
+
+
+@dataclass(frozen=True)
+class Uint8DbQuantizer:
+    """Clip dB values to a range and map them to/from uint8 bin centers."""
+
+    lower_db: float
+    upper_db: float
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(self.lower_db) or not np.isfinite(self.upper_db):
+            raise ValueError("Quantizer bounds must be finite.")
+        if self.upper_db <= self.lower_db:
+            raise ValueError("Quantizer upper_db must exceed lower_db.")
+
+    @property
+    def span_db(self) -> float:
+        return float(self.upper_db - self.lower_db)
+
+    @property
+    def step_db(self) -> float:
+        return float(self.span_db / 255.0)
+
+    @property
+    def scale_db_to_uint8(self) -> float:
+        """Multiplicative factor that maps dB deltas into [0, 255] bins."""
+        return float(255.0 / self.span_db)
+
+    def clip_db(self, value_db: float) -> float:
+        return float(min(max(value_db, self.lower_db), self.upper_db))
+
+    def to_uint8(self, value_db: float) -> int:
+        """Clip dB value then quantize to nearest uint8 bin index."""
+        clipped = self.clip_db(value_db)
+        bin_index = int(round((clipped - self.lower_db) * self.scale_db_to_uint8))
+        return int(min(max(bin_index, 0), 255))
+
+    def bin_center_db(self, bin_index: int) -> float:
+        """Return the dB value at the center of a given uint8 bin."""
+        return float(self.lower_db + self.step_db * min(max(bin_index, 0), 255))
+
+    @staticmethod
+    def db_to_magnitude(value_db: float) -> float:
+        """Convert dB back to linear magnitude."""
+        return float(10.0 ** (value_db / 20.0))
+
+    def bin_center_magnitude(self, bin_index: int) -> float:
+        return self.db_to_magnitude(self.bin_center_db(bin_index))
+
+    def metadata(self) -> dict[str, float | str | int]:
+        """Expose scale/shift to reconstruct linear magnitudes from uint8 bins."""
+        return {
+            "lower_db": self.lower_db,
+            "upper_db": self.upper_db,
+            "span_db": self.span_db,
+            "step_db_per_bin": self.step_db,
+            "scale_db_to_uint8": self.scale_db_to_uint8,
+            "uint8_zero_point": 0,
+            "uint8_max": 255,
+            "bin0_linear": self.bin_center_magnitude(0),
+            "bin255_linear": self.bin_center_magnitude(255),
+            "reconstruction": "db = lower_db + step_db_per_bin * uint8; magnitude = 10**(db/20)",
+        }
 
 
 def sliding_blocks(data: np.ndarray, nsamps: int, noverlap: int) -> Iterator[np.ndarray]:
@@ -82,6 +148,7 @@ def channel_stft_db(
         )
     else:
         raise ValueError(f"Invalid bin spacing {bin_spacing}")
+    # Convert linear magnitudes to dB without clipping; epsilon avoids log(0).
     return 20.0 * np.log10(np.abs(stft) + 1e-9)
 
 
@@ -142,27 +209,14 @@ def clip_bounds(counts: Counter[float], lower_pct: float, upper_pct: float) -> t
     return float(lower), float(upper)
 
 
-def clipped_entropy(counts: Counter[float], lower_int: float | None, upper_int: float | None) -> float | None:
-    """Compute entropy on 8-bit linear magnitudes after clipping in dB."""
-    if lower_int is None or upper_int is None:
+def build_quantizer(lower_db: float | None, upper_db: float | None) -> Uint8DbQuantizer | None:
+    """Safely construct a quantizer if bounds are valid and non-empty."""
+    if lower_db is None or upper_db is None:
         return None
-    span = upper_int - lower_int
-    if span <= 0:
+    try:
+        return Uint8DbQuantizer(float(lower_db), float(upper_db))
+    except ValueError:
         return None
-    step = span / 255.0
-    quantized_counts: Counter[float] = Counter()
-    for value, count in counts.items():
-        clipped_value = min(max(value, lower_int), upper_int)
-        bin_index = int(round((clipped_value - lower_int) / span * 255))
-        bin_index = max(0, min(255, bin_index))
-        bin_center_db = lower_int + bin_index * step
-        magnitude = 10.0 ** (bin_center_db / 20.0)
-        quantized_counts[magnitude] += count
-    total = sum(quantized_counts.values())
-    if total == 0:
-        return None
-    probs = np.fromiter(quantized_counts.values(), dtype=np.float64) / float(total)
-    return float(-np.sum(probs * np.log(probs + 1e-12)))
 
 
 def js_divergence(p: np.ndarray, q: np.ndarray) -> float:
@@ -179,27 +233,33 @@ def js_divergence(p: np.ndarray, q: np.ndarray) -> float:
 
 
 def compute_quantization_metrics(
-    counts: Counter[float], lower_int: float | None, upper_int: float | None
+    counts: Counter[float], quantizer: Uint8DbQuantizer | None
 ) -> dict[str, float] | None:
-    """Compute entropy, JS divergence, Wasserstein, and PSNR for a clip range."""
-    if lower_int is None or upper_int is None:
+    """Compute metrics after clipping to [lower, upper] then quantizing to uint8 dB bins.
+
+    Steps:
+    1) Clip incoming dB values to the quantizer bounds.
+    2) Map clipped dB values into uint8 bins with centers spaced by step_db.
+    3) Compute metrics using:
+       - entropy over quantized linear magnitudes,
+       - JS divergence between the clipped dB distribution and quantized bin centers,
+       - Wasserstein distance between those same dB distributions,
+       - PSNR between clipped dB values and their quantized bin-center reconstruction.
+    """
+    if quantizer is None:
         return None
-    span = upper_int - lower_int
-    if span <= 0:
-        return None
-    step = span / 255.0
+
     clipped_counts: Counter[int] = Counter()
     quantized_db_counts: Counter[float] = Counter()
     quantized_mag_counts: Counter[float] = Counter()
     mse_accum = 0.0
     total = 0
     for value, count in counts.items():
-        clipped_value = min(max(value, lower_int), upper_int)
+        clipped_value = quantizer.clip_db(value)
         clipped_counts[clipped_value] += count
-        bin_index = int(round((clipped_value - lower_int) / span * 255))
-        bin_index = max(0, min(255, bin_index))
-        bin_center_db = lower_int + bin_index * step
-        magnitude = 10.0 ** (bin_center_db / 20.0)
+        bin_index = quantizer.to_uint8(clipped_value)
+        bin_center_db = quantizer.bin_center_db(bin_index)
+        magnitude = quantizer.bin_center_magnitude(bin_index)
         quantized_db_counts[bin_center_db] += count
         quantized_mag_counts[magnitude] += count
         mse_accum += count * (clipped_value - bin_center_db) ** 2
@@ -234,7 +294,7 @@ def compute_quantization_metrics(
     if mse <= 0:
         psnr_val = float("inf")
     else:
-        peak = float(span)
+        peak = float(quantizer.span_db)
         psnr_val = 20.0 * np.log10(peak / np.sqrt(mse) + 1e-12)
 
     return {
@@ -280,6 +340,7 @@ class HistogramAccumulator:
         lower_pct_candidates: Iterable[float] | None = None,
         upper_pct_candidates: Iterable[float] | None = None,
     ) -> dict[str, object]:
+        """Summarize histogram stats and run quantization metric sweeps."""
         # Re-bin to fixed-width bins for downstream metrics and saved histograms.
         self.counts = rebin_counts(self.counts, bins=HISTOGRAM_BINS, min_db=self.min_db, max_db=self.max_db)
         p1 = percentile_from_counts(self.counts, 1.0)
@@ -290,10 +351,12 @@ class HistogramAccumulator:
             if lower_int is not None and upper_int is not None
             else 0.0
         )
-        span = (upper_int - lower_int) if (lower_int is not None and upper_int is not None) else None
-        step = (span / 255.0) if span else None
-        entropy_candidates: list[dict[str, float | int]] = []
-        best_by_metric: dict[str, dict[str, float | int] | None] = {
+        # Track the exact uint8↔dB mapping so metric calculations and reconstructions are transparent.
+        quantizer = build_quantizer(lower_int, upper_int)
+        quantization_info = quantizer.metadata() if quantizer else None
+        step = quantizer.step_db if quantizer else None
+        entropy_candidates: list[dict[str, object]] = []
+        best_by_metric: dict[str, dict[str, object] | None] = {
             "entropy": None,
             "js_divergence": None,
             "wasserstein_db": None,
@@ -304,14 +367,16 @@ class HistogramAccumulator:
             for lower_candidate in lower_pct_candidates:
                 for upper_candidate in upper_candidates:
                     cand_lower_int, cand_upper_int = clip_bounds(self.counts, lower_candidate, upper_candidate)
-                    metrics = compute_quantization_metrics(self.counts, cand_lower_int, cand_upper_int)
+                    cand_quantizer = build_quantizer(cand_lower_int, cand_upper_int)
+                    metrics = compute_quantization_metrics(self.counts, cand_quantizer)
                     if metrics is None:
                         continue
-                    candidate_record: dict[str, float | int] = {
+                    candidate_record: dict[str, object] = {
                         "lower_percentile": lower_candidate,
                         "upper_percentile": upper_candidate,
                         "lower_db": cand_lower_int,
                         "upper_db": cand_upper_int,
+                        "quantization": cand_quantizer.metadata() if cand_quantizer else None,
                         "entropy": metrics["entropy"],
                         "js_divergence": metrics["js_divergence"],
                         "wasserstein_db": metrics["wasserstein_db"],
@@ -354,6 +419,7 @@ class HistogramAccumulator:
                 "upper_db": upper_int,
                 "coverage": coverage,
                 "step_db_per_bin": step,
+                "quantization": quantization_info,
             },
             "entropy_sweep": {
                 "upper_percentile": upper_pct,
@@ -589,14 +655,15 @@ def summarize_best_by_metric(results: list[dict[str, object]]) -> list[tuple[str
     return sorted(best_per_metric.items())
 
 
-def _format_tenths(value: object) -> str:
-    """Format numeric values to one decimal place for table output."""
+def _format_rounded(value: object, decimals: int = 1) -> str:
+    """Format numeric values to nearest decimal place for table output."""
     if value is None:
         return "n/a"
     if isinstance(value, str):
         return value
     try:
-        return f"{float(value):.1f}"
+        value = round(float(value), decimals)
+        return f"{value}"
     except (TypeError, ValueError):
         return str(value)
 
@@ -618,13 +685,13 @@ def print_metric_recommendations(results: list[dict[str, object]]) -> None:
         for row in rows:
             print(
                 f"    {row['dataset']:<14}"
-                f"{_format_tenths(row.get('lower_percentile')):>12}"
-                f"{_format_tenths(row.get('upper_percentile')):>12}"
-                f"{_format_tenths(row.get('lower_db')):>12}"
-                f"{_format_tenths(row.get('upper_db')):>12}"
-                f"{_format_tenths(row.get('min_db')):>10}"
-                f"{_format_tenths(row.get('max_db')):>10}"
-                f"{_format_tenths(row.get('value')):>14}"
+                f"{_format_rounded(row.get('lower_percentile')):>12}"
+                f"{_format_rounded(row.get('upper_percentile')):>12}"
+                f"{_format_rounded(row.get('lower_db'), 2):>12}"
+                f"{_format_rounded(row.get('upper_db'), 2):>12}"
+                f"{_format_rounded(row.get('min_db'), 2):>10}"
+                f"{_format_rounded(row.get('max_db'), 2):>10}"
+                f"{_format_rounded(row.get('value'), 4):>14}"
             )
         print()
 
@@ -869,7 +936,10 @@ def print_dataset_summary(summary: dict[str, object], output_dir: Path) -> None:
     lower = clip.get("lower_db")
     upper = clip.get("upper_db")
     coverage = clip.get("coverage", 0.0)
-    step = clip.get("step_db_per_bin")
+    quantization = clip.get("quantization") or {}
+    step = quantization.get("step_db_per_bin") or clip.get("step_db_per_bin")
+    linear_min = quantization.get("bin0_linear")
+    linear_max = quantization.get("bin255_linear")
     best_clips = summary.get("best_clips") or {}
     best_entropy = best_clips.get("entropy") or {}
     best_js = best_clips.get("js_divergence") or {}
@@ -925,6 +995,14 @@ def print_dataset_summary(summary: dict[str, object], output_dir: Path) -> None:
         if best_psnr.get("psnr_db") is not None
         else "n/a",
     )
+    if quantization:
+        logger.info(
+            "[%s] uint8 mapping: db = lower_db + step_db_per_bin * uint8; magnitude = 10**(db/20) "
+            "(linear range≈[%s,%s])",
+            summary.get("dataset"),
+            f"{linear_min:.3e}" if linear_min is not None else "n/a",
+            f"{linear_max:.3e}" if linear_max is not None else "n/a",
+        )
     dataset_label = summary.get("dataset")
     print(
         f"{dataset_label}: requested_clip(lower_pct={requested_lower_pct}, upper_pct={requested_upper_pct}) "
@@ -953,6 +1031,12 @@ def print_dataset_summary(summary: dict[str, object], output_dir: Path) -> None:
         f"upper_pct={best_psnr.get('upper_percentile', 'n/a')}) "
         f"psnr_db={best_psnr.get('psnr_db', 'n/a')}"
     )
+    if quantization:
+        print(
+            f"{dataset_label}: uint8 quantization uses db = {lower} + {step} * uint8 "
+            f"(linear≈[{linear_min if linear_min is not None else 'n/a'},"
+            f"{linear_max if linear_max is not None else 'n/a'}])"
+        )
 
 
 def parse_args() -> argparse.Namespace:
