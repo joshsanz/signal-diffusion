@@ -589,6 +589,18 @@ def summarize_best_by_metric(results: list[dict[str, object]]) -> list[tuple[str
     return sorted(best_per_metric.items())
 
 
+def _format_tenths(value: object) -> str:
+    """Format numeric values to one decimal place for table output."""
+    if value is None:
+        return "n/a"
+    if isinstance(value, str):
+        return value
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def print_metric_recommendations(results: list[dict[str, object]]) -> None:
     """Print metric-grouped recommendations across datasets as a table."""
     tables = metric_tables(results)
@@ -606,13 +618,13 @@ def print_metric_recommendations(results: list[dict[str, object]]) -> None:
         for row in rows:
             print(
                 f"    {row['dataset']:<14}"
-                f"{row.get('lower_percentile', 'n/a'):>12}"
-                f"{row.get('upper_percentile', 'n/a'):>12}"
-                f"{row.get('lower_db', 'n/a'):>12}"
-                f"{row.get('upper_db', 'n/a'):>12}"
-                f"{row.get('min_db', 'n/a'):>10}"
-                f"{row.get('max_db', 'n/a'):>10}"
-                f"{row.get('value', 'n/a'):>14}"
+                f"{_format_tenths(row.get('lower_percentile')):>12}"
+                f"{_format_tenths(row.get('upper_percentile')):>12}"
+                f"{_format_tenths(row.get('lower_db')):>12}"
+                f"{_format_tenths(row.get('upper_db')):>12}"
+                f"{_format_tenths(row.get('min_db')):>10}"
+                f"{_format_tenths(row.get('max_db')):>10}"
+                f"{_format_tenths(row.get('value')):>14}"
             )
         print()
 
