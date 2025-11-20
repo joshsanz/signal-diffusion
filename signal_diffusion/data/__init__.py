@@ -6,12 +6,6 @@ from .math import (
     MathDataset,
     MathPreprocessor,
 )
-from .mit import (
-    MIT_CONDITION_CLASSES,
-    MIT_LABELS,
-    MITDataset,
-    MITPreprocessor,
-)
 from .parkinsons import (
     PARKINSONS_CONDITION_CLASSES,
     PARKINSONS_LABELS,
@@ -33,10 +27,6 @@ __all__ = [
     "MathDataset",
     "MATH_LABELS",
     "MATH_CONDITION_CLASSES",
-    "MITPreprocessor",
-    "MITDataset",
-    "MIT_LABELS",
-    "MIT_CONDITION_CLASSES",
     "ParkinsonsPreprocessor",
     "ParkinsonsDataset",
     "PARKINSONS_LABELS",

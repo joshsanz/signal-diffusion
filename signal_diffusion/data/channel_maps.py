@@ -97,37 +97,10 @@ longitudinal_channels: ChannelMap = [
     ("TP10", 21),
 ]
 
-mit_channels: ChannelMap = [
-    ("FP1-F7", 0),
-    ("FP1-F3", 4),
-    ("FP2-F4", 8),
-    ("FP2-F8", 12),
-    ("F3-C3", 5),
-    ("FZ-CZ", 16),
-    ("F7-T7", 1),
-    ("C3-P3", 6),
-    ("C4-P4", 10),
-    ("CZ-PZ", 17),
-    ("P3-O1", 7),
-    ("P4-O2", 11),
-    ("T7-FT9", 19),
-    ("T7-P7", 2),
-    ("T8-P8", 14),
-    ("T8-P8", 22),
-    ("P8-O2", 15),
-    ("P7-O1", 3),
-    ("F4-C4", 9),
-    ("F8-T8", 13),
-    ("P7-T7", 18),
-    ("FT9-FT10", 20),
-    ("FT10-T8", 21),
-]
-
 __all__ = [
     "ChannelMap",
     "math_channels",
     "parkinsons_channels",
     "seed_channels",
     "longitudinal_channels",
-    "mit_channels",
 ]

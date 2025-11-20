@@ -23,7 +23,7 @@ The configuration is loaded using the `signal_diffusion.config.load_settings()` 
 The following are the main configuration sections and options available:
 
 -   **`[data]`**: Contains settings related to data paths and preprocessing.
--   **`[datasets]`**: Contains settings for specific datasets, such as `math`, `parkinsons`, `seed`, and `mit`.
+-   **`[datasets]`**: Contains settings for specific datasets, such as `math`, `parkinsons`, and `seed`.
 -   **`[model]`**: Contains settings for the model architecture, such as the backbone, number of channels, and embedding dimension.
 -   **`[training]`**: Contains settings for the training process, such as the number of epochs, batch size, learning rate, and optimizer.
 -   **`[logging]`**: Contains settings for logging, such as TensorBoard and Weights & Biases.

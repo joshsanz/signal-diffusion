@@ -8,7 +8,6 @@ from pathlib import Path
 
 from signal_diffusion.config import load_settings
 from signal_diffusion.data.parkinsons import ParkinsonsDataset
-from signal_diffusion.data.mit import MITDataset
 from signal_diffusion.data.seed import SEEDDataset
 from signal_diffusion.data.math import MathDataset
 
@@ -19,7 +18,6 @@ def load_metadata(settings, dataset_names):
     dataset_classes = {
         "parkinsons": ParkinsonsDataset,
         "math": MathDataset,
-        "mit": MITDataset,
         "seed": SEEDDataset,
     }
 
@@ -187,7 +185,7 @@ def main():
     """Main function to run the analysis."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None, help="Path to the config file.")
-    parser.add_argument("datasets", nargs="*", default=["math", "parkinsons", "seed", "mit"], help="Datasets to analyze.")
+    parser.add_argument("datasets", nargs="*", default=["math", "parkinsons", "seed"], help="Datasets to analyze.")
     args = parser.parse_args()
 
     output_dir = Path("analysis_plots")

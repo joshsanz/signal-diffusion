@@ -12,7 +12,6 @@ from torchvision.transforms import v2 as transforms
 from signal_diffusion.config import Settings
 from signal_diffusion.data import (
     MathDataset,
-    MITDataset,
     ParkinsonsDataset,
     SEEDDataset,
 )
@@ -22,7 +21,6 @@ _DATASET_CLS: Mapping[str, type] = {
     "math": MathDataset,
     "parkinsons": ParkinsonsDataset,
     "seed": SEEDDataset,
-    "mit": MITDataset,
 }
 
 _DEFAULT_TRANSFORM = transforms.Compose(

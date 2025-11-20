@@ -19,10 +19,6 @@ output = "parkinsons/stfts"
 root = "seed"
 output = "seed/stfts"
 
-[datasets.mit]
-root = "mit"
-output = "mit/stfts"
-
 [datasets.oklahoma]
 root = "oklahoma"
 output = "oklahoma/stfts"

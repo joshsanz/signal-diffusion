@@ -125,7 +125,7 @@ class MetaPreprocessor:
         for name in self.dataset_names:
             logger.info(f"Preprocessing {name} dataset...")
             module = importlib.import_module(f"signal_diffusion.data.{name}")
-            if name in ("mit", "seed"):
+            if name == "seed":
                 preprocessor_class_name = f"{name.upper()}Preprocessor"
             else:
                 preprocessor_class_name = f"{name.capitalize()}Preprocessor"
@@ -146,7 +146,7 @@ class MetaDataset(ConcatDataset):
         datasets = []
         for name in self.dataset_names:
             module = importlib.import_module(f"signal_diffusion.data.{name}")
-            if name in ("mit", "seed"):
+            if name == "seed":
                 dataset_class_name = f"{name.upper()}Dataset"
             else:
                 dataset_class_name = f"{name.capitalize()}Dataset"

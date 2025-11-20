@@ -6,7 +6,6 @@ from typing import Iterable, Mapping
 
 from signal_diffusion.data import (
     MATH_LABELS,
-    MIT_LABELS,
     PARKINSONS_LABELS,
     SEED_LABELS,
 )
@@ -18,7 +17,6 @@ _DATASET_LABELS: Mapping[str, LabelRegistry] = {
     "math": MATH_LABELS,
     "parkinsons": PARKINSONS_LABELS,
     "seed": SEED_LABELS,
-    "mit": MIT_LABELS,
 }
 
 
@@ -44,4 +42,3 @@ def available_tasks(dataset_name: str) -> tuple[str, ...]:
 def build_task_specs(dataset_name: str, task_names: Iterable[str]) -> list[TaskSpec]:
     registry = label_registry(dataset_name)
     return tasks_from_registry(registry, task_names)
-
