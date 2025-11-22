@@ -110,6 +110,7 @@ def create_trial_config(
 def run_training_trial(
     config: ClassificationExperimentConfig,
     trial: optuna.Trial,
+    optimize_task: str = "combined",
 ) -> Dict[str, Any]:
     """Run a single training trial with given configuration.
 
@@ -120,6 +121,9 @@ def run_training_trial(
     Args:
         config: Configuration for this trial's training run
         trial: Optuna Trial object for reporting metrics and pruning
+        optimize_task: Task to optimize for. 'combined' (default) optimizes the mean of all
+                      task scores. Specify a task name (e.g., 'gender') to optimize only
+                      that task's metric.
 
     Returns:
         Dictionary with trial results including weighted accuracy, loss, and per-task scores
@@ -171,8 +175,24 @@ def run_training_trial(
                             "normalized_score": normalized_score,
                         }
 
-            # Compute final combined objective as unweighted mean across all tasks
-            combined_objective = sum(scores) / len(scores) if scores else 0.0
+            # Select objective based on optimization target
+            if optimize_task == "combined":
+                # Current behavior: mean of all task scores
+                combined_objective = sum(scores) / len(scores) if scores else 0.0
+            else:
+                # Specific task: use only that task's score
+                if optimize_task not in task_results:
+                    logger.warning(
+                        f"Task '{optimize_task}' not found in trial results. "
+                        f"Available tasks: {list(task_results.keys())}"
+                    )
+                    combined_objective = 0.0
+                else:
+                    result = task_results[optimize_task]
+                    if result["type"] == "classification":
+                        combined_objective = result["accuracy"]
+                    else:
+                        combined_objective = result["normalized_score"]
         else:
             # No training history (shouldn't happen with proper training)
             combined_objective = 0.0
@@ -244,15 +264,18 @@ def run_training_trial(
         }
 
 
-def create_objective(base_config: ClassificationExperimentConfig):
+def create_objective(base_config: ClassificationExperimentConfig, optimize_task: str = "combined"):
     """Create closure that returns an Optuna-compatible objective function.
 
     The returned objective function samples hyperparameters from SEARCH_SPACE,
-    runs training, and returns the combined objective (classification accuracy +
-    normalized regression MSE) for optimization.
+    runs training, and returns the objective for optimization. The objective can be
+    either the combined metric (mean of all tasks) or a specific task's metric.
 
     Args:
         base_config: Base configuration to clone and modify per trial
+        optimize_task: Task to optimize for. 'combined' (default) optimizes the mean of all
+                      task scores. Specify a task name (e.g., 'gender') to optimize only
+                      that task's metric.
 
     Returns:
         Objective function suitable for study.optimize()
@@ -261,16 +284,17 @@ def create_objective(base_config: ClassificationExperimentConfig):
     def objective(trial: optuna.Trial) -> float:
         """Optuna objective function for hyperparameter optimization.
 
-        Samples hyperparameters, runs training, and returns a combined objective:
-        - For classification tasks: uses validation accuracy directly
-        - For regression tasks: uses 1/(1+mse) to normalize MSE to [0, 1]
-        - Overall: unweighted mean of all task scores
+        Samples hyperparameters, runs training, and returns the objective score:
+        - If optimize_task == 'combined': unweighted mean of all task scores
+          - For classification tasks: uses validation accuracy directly
+          - For regression tasks: uses 1/(1+mse) to normalize MSE to [0, 1]
+        - If optimize_task is a specific task name: uses only that task's metric
 
         Args:
             trial: Optuna Trial object for sampling and reporting
 
         Returns:
-            Combined objective score (higher is better, range ~[0, 1])
+            Objective score (higher is better, range ~[0, 1])
         """
         # Sample hyperparameters from search space with log scaling for rates
         learning_rate = trial.suggest_float(
@@ -324,7 +348,7 @@ def create_objective(base_config: ClassificationExperimentConfig):
         config = create_trial_config(trial_params, base_config)
 
         # Execute training with this trial's configuration
-        results = run_training_trial(config, trial)
+        results = run_training_trial(config, trial, optimize_task)
 
         # Store all results as trial user attributes for post-hoc analysis
         trial.set_user_attr("combined_objective", results["combined_objective"])
@@ -363,6 +387,12 @@ def parse_args():
         nargs="?",
         default="config/classification/baseline.toml",
         help="Path to base configuration TOML file",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Override output directory for all trial runs",
     )
     parser.add_argument(
         "--n-trials",
@@ -406,6 +436,12 @@ def parse_args():
         default=3,
         help="Reduction factor for HyperbandPruner",
     )
+    parser.add_argument(
+        "--optimize-task",
+        type=str,
+        default="combined",
+        help="Task to optimize for: 'combined' (default, mean of all tasks) or specific task name (e.g., 'gender', 'emotion')",
+    )
     return parser.parse_args()
 
 
@@ -418,6 +454,24 @@ def main():
 
     # Load base configuration
     base_config = load_base_config(args.config_path)
+
+    # Validate optimize_task argument
+    if args.optimize_task != "combined":
+        available_tasks = set(base_config.dataset.tasks)
+        if args.optimize_task not in available_tasks:
+            logger.error(
+                f"Task '{args.optimize_task}' not found in config tasks. "
+                f"Available tasks: {sorted(available_tasks)}"
+            )
+            sys.exit(1)
+        logger.info(f"Optimizing for task: {args.optimize_task}")
+    else:
+        logger.info(f"Optimizing for combined objective (mean of all tasks)")
+
+    # Override output directory if specified
+    if args.output_dir:
+        base_config.training.output_dir = Path(args.output_dir).resolve()
+        logger.info(f"Overriding output directory to: {base_config.training.output_dir}")
 
     # Create Optuna study with TPE sampler and Hyperband pruner
     sampler = TPESampler(seed=args.seed)
@@ -441,8 +495,8 @@ def main():
     )
     logger.info("Pruning will be performed by HyperbandPruner based on intermediate results")
 
-    # Create objective function with base config
-    objective = create_objective(base_config)
+    # Create objective function with base config and task specification
+    objective = create_objective(base_config, args.optimize_task)
 
     # Convert timeout=0 to None (unlimited)
     timeout = None if args.timeout == 0 else args.timeout
