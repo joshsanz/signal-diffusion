@@ -219,6 +219,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
     ) -> Iterable[SpectrogramExample]:
         resolution = resolution or self.DEFAULT_RESOLUTION
         hop_length = hop_length or self._derive_hop_length(resolution)
+        noise_floor_db = self.dataset_settings.min_db if self.dataset_settings.min_db is not None else -130.0
 
         subject_info = self._subject_metadata(subject_id)
         gender_code = subject_info.gender
@@ -255,6 +256,10 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
                     hop_length=hop_length,
                     win_length=resolution,
                     bin_spacing=self.bin_spacing,
+                    noise_floor_db=noise_floor_db,
+                    output_type=self.settings.output_type,
+                    min_db=self.dataset_settings.min_db,
+                    max_db=self.dataset_settings.max_db,
                 )
 
                 doing_math = int(state == 2)
@@ -355,9 +360,17 @@ class MathDataset:
         self.settings = settings
         self.dataset_settings: DatasetSettings = settings.dataset("math")
         self.split = split
-        self.transform = transform or transforms.Compose(
-            [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True), transforms.Normalize([0.5], [0.5])]
-        )
+        # Use appropriate normalization based on output_type
+        if transform is not None:
+            self.transform = transform
+        elif settings.output_type == "db-only":
+            self.transform = transforms.Compose(
+                [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True), transforms.Normalize([0.5], [0.5])]
+            )
+        else:  # db-iq or db-polar (3 channels)
+            self.transform = transforms.Compose(
+                [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
+            )
         self.tasks = tuple(tasks)
         for name in self.tasks:
             if name not in MATH_LABELS:
@@ -378,7 +391,9 @@ class MathDataset:
     def __getitem__(self, index: int):
         row = self.metadata.iloc[index]
         image_path = self.root / row["file_name"]
-        image = Image.open(image_path).convert("L")
+        # Convert to appropriate mode based on output_type
+        mode = "L" if self.settings.output_type == "db-only" else "RGB"
+        image = Image.open(image_path).convert(mode)
         image_tensor = self.transform(image) if self.transform else image
 
         targets = {name: MATH_LABELS.encode(name, row) for name in self.tasks}

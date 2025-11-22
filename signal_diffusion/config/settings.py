@@ -19,6 +19,8 @@ class DatasetSettings:
     name: str
     root: Path
     output: Path
+    min_db: float | None = None
+    max_db: float | None = None
 
     def resolve(self, *parts: os.PathLike[str] | str) -> Path:
         """Return a path inside the dataset root."""
@@ -37,6 +39,7 @@ class Settings:
     data_root: Path
     output_root: Path
     max_sampling_weight: float | None
+    output_type: str = "db-only"
     datasets: dict[str, DatasetSettings] = field(default_factory=dict)
 
     def dataset(self, name: str) -> DatasetSettings:
@@ -58,6 +61,7 @@ class Settings:
         data_root = _expand_root(data_section.get("root", "."), base=config_dir)
         output_root = _expand_root(data_section.get("output_root", data_root), base=config_dir)
         max_sampling_weight = data_section.get("max_sampling_weight", None)
+        output_type = data_section.get("output_type", "db-only")
 
         datasets_section = mapping.get("datasets", {})
         datasets: dict[str, DatasetSettings] = {}
@@ -66,6 +70,12 @@ class Settings:
                 raise TypeError(f"Dataset entry '{name}' must be a mapping, got {type(section)!r}")
             raw_root = section.get("root")
             raw_output = section.get("output")
+            min_db = _parse_db_bound(section.get("min_db"), dataset=name, field="min_db")
+            max_db = _parse_db_bound(section.get("max_db"), dataset=name, field="max_db")
+            if min_db is not None and max_db is not None and max_db <= min_db:
+                raise ValueError(
+                    f"Dataset '{name}' max_db must be greater than min_db (got {min_db}..{max_db})"
+                )
             dataset_root = _expand_dataset_path(
                 raw_root,
                 dataset=name,
@@ -80,13 +90,20 @@ class Settings:
                 default_base=output_root,
                 fallback=output_root / name,
             )
-            datasets[name] = DatasetSettings(name=name, root=dataset_root, output=dataset_output)
+            datasets[name] = DatasetSettings(
+                name=name,
+                root=dataset_root,
+                output=dataset_output,
+                min_db=min_db,
+                max_db=max_db,
+            )
 
         return cls(
             config_path=config_path,
             data_root=data_root,
             output_root=output_root,
             max_sampling_weight=max_sampling_weight,
+            output_type=output_type,
             datasets=datasets,
         )
 
@@ -155,3 +172,11 @@ def _expand_dataset_path(
         else:
             path = (default_base / path).resolve()
     return path
+
+
+def _parse_db_bound(value: Any, *, dataset: str, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise TypeError(f"Dataset '{dataset}' {field} must be numeric, got {type(value)!r}")

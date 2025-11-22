@@ -93,7 +93,42 @@ def scale_minmax(X, minval=0.0, maxval=1.0):
     return X_scaled
 
 
-def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='linear'):
+def scale_to_uint8(X, data_min: float, data_max: float) -> np.ndarray:
+    """Clip ``X`` to ``[data_min, data_max]`` and map to uint8."""
+    if data_max <= data_min:
+        return np.zeros_like(X, dtype=np.uint8)
+    clipped = np.clip(X, data_min, data_max)
+    scaled = (clipped - data_min) / (data_max - data_min)
+    return (scaled * 255).astype(np.uint8)
+
+
+def spectrogram(
+    y,
+    hop_length,
+    win_length,
+    noise_floor_db=-130,
+    bin_spacing='linear',
+    output_type='db-only',
+    min_db=None,
+    max_db=None,
+):
+    """Generate spectrogram with configurable output format.
+
+    Parameters:
+    - y: Input signal
+    - hop_length: STFT hop length
+    - win_length: STFT window length
+    - noise_floor_db: Noise floor for dB clipping (default: -130)
+    - bin_spacing: 'linear' or 'log' frequency spacing
+    - min_db: Optional lower bound (dB) for clipping and scaling (defaults to noise_floor_db)
+    - max_db: Optional upper bound (dB) for clipping and scaling (defaults to observed max)
+    - output_type: Output format - 'db-only', 'db-iq', or 'db-polar'
+
+    Returns:
+    - For 'db-only': (height, width) grayscale uint8 array
+    - For 'db-iq': (height, width, 3) RGB uint8 array [dB, I, Q]
+    - For 'db-polar': (height, width, 3) RGB uint8 array [dB, magnitude, phase]
+    """
     if bin_spacing == 'linear':
         stft = librosa.stft(
             y=y, win_length=win_length, hop_length=hop_length, n_fft=win_length * 2 - 1,
@@ -104,20 +139,83 @@ def spectrogram(y, hop_length, win_length, noise_floor_db=-100, bin_spacing='lin
         )
     else:
         raise ValueError(f"Invalid bin spacing {bin_spacing}")
-    stft = 20 * np.log10(np.abs(stft) + 1e-9)
 
-    # Set noise floor to reduce dynamic range
-    stft = np.clip(stft, noise_floor_db, None)
+    # Compute dB magnitude (channel 0 for all modes)
+    stft_db = 20 * np.log10(np.abs(stft) + 1e-9)
+    clip_min_db = noise_floor_db if min_db is None else min_db
+    clip_max_db = max_db
+    if clip_max_db is not None and clip_max_db <= clip_min_db:
+        raise ValueError("max_db must be greater than min_db when both are provided")
+    if clip_max_db is None:
+        stft_db = np.maximum(stft_db, clip_min_db)
+        scale_max_db = stft_db.max()
+    else:
+        stft_db = np.clip(stft_db, clip_min_db, clip_max_db)
+        scale_max_db = clip_max_db
+    db_channel = scale_to_uint8(stft_db, clip_min_db, scale_max_db)
+    db_channel = np.flip(db_channel, axis=0)  # put low frequencies at the bottom
 
-    # min-max scale to fit inside 8-bit range
-    img = scale_minmax(stft, 0, 255).astype(np.uint8)
-    img = np.flip(img, axis=0)  # put low frequencies at the bottom in image
-    # img = 255 - img  # invert. make black==more energy
-    return img
+    if output_type == 'db-only':
+        return db_channel
+
+    elif output_type == 'db-iq':
+        # Extract real (I) and imaginary (Q) components
+        i_channel = np.real(stft)
+        q_channel = np.imag(stft)
+
+        # Scale I and Q identically using global min/max to preserve their relationship
+        global_min = min(i_channel.min(), q_channel.min())
+        global_max = max(i_channel.max(), q_channel.max())
+
+        if global_max == global_min:
+            i_scaled = np.zeros_like(i_channel)
+            q_scaled = np.zeros_like(q_channel)
+        else:
+            i_scaled = (i_channel - global_min) / (global_max - global_min)
+            q_scaled = (q_channel - global_min) / (global_max - global_min)
+
+        i_channel = (i_scaled * 255).astype(np.uint8)
+        q_channel = (q_scaled * 255).astype(np.uint8)
+
+        # Flip to match dB orientation
+        i_channel = np.flip(i_channel, axis=0)
+        q_channel = np.flip(q_channel, axis=0)
+
+        # Stack as (height, width, 3)
+        img = np.stack([db_channel, i_channel, q_channel], axis=-1)
+        return img
+
+    elif output_type == 'db-polar':
+        # Linear magnitude (not dB)
+        magnitude = np.abs(stft)
+        magnitude_channel = scale_minmax(magnitude, 0, 255).astype(np.uint8)
+        magnitude_channel = np.flip(magnitude_channel, axis=0)
+
+        # Phase in [-π, π)
+        phase = np.angle(stft)  # Returns phase in [-π, π]
+        # Map [-π, π] to [0, 255]
+        phase_channel = scale_minmax(phase, 0, 255).astype(np.uint8)
+        phase_channel = np.flip(phase_channel, axis=0)
+
+        # Stack as (height, width, 3)
+        img = np.stack([db_channel, magnitude_channel, phase_channel], axis=-1)
+        return img
+
+    else:
+        raise ValueError(f"Invalid output_type '{output_type}'. Must be 'db-only', 'db-iq', or 'db-polar'")
 
 
-def multichannel_spectrogram(x, resolution, hop_length, win_length,
-                             noise_floor_db=-100, bin_spacing='linear'):
+def multichannel_spectrogram(
+    x,
+    resolution,
+    hop_length,
+    win_length,
+    noise_floor_db=-130,
+    bin_spacing='linear',
+    output_type='db-only',
+    min_db=None,
+    max_db=None,
+):
     """
     Create a multichannel spectrogram image from a 2D array X
 
@@ -129,15 +227,37 @@ def multichannel_spectrogram(x, resolution, hop_length, win_length,
                         enforce win_length output samples
     - noise_floor_db (float): noise floor in dB to clip the STFT output to, helps image dynamic range
     - bin_spacing (str): 'linear' or 'log', spacing of frequency bins in the STFT
+    - output_type (str): output format - 'db-only', 'db-iq', or 'db-polar'
+    - min_db (float | None): lower bound for clipping/scaling (defaults to noise_floor_db)
+    - max_db (float | None): upper bound for clipping/scaling (defaults to observed max)
     """
-    specs = [spectrogram(x[i, :], hop_length, win_length, noise_floor_db, bin_spacing) for i in range(x.shape[0])]
+    specs = [
+        spectrogram(
+            x[i, :],
+            hop_length,
+            win_length,
+            noise_floor_db,
+            bin_spacing,
+            output_type,
+            min_db,
+            max_db,
+        )
+        for i in range(x.shape[0])
+    ]
     swidth = specs[0].shape[1]
     Width = swidth * len(specs)
     assert Width <= resolution, f"Image width {Width}={len(specs)}*{swidth} is greater than resolution {resolution}"
     width_pad = (resolution - Width) // 2
-    merged = Image.new("L", (resolution, resolution))
+
+    # Determine image mode based on output_type
+    if output_type == 'db-only':
+        mode = 'L'
+    else:  # 'db-iq' or 'db-polar'
+        mode = 'RGB'
+
+    merged = Image.new(mode, (resolution, resolution))
     for i, spec in enumerate(specs):
-        merged.paste(Image.fromarray(spec, mode='L'), (width_pad + i * swidth, 0))
+        merged.paste(Image.fromarray(spec, mode=mode), (width_pad + i * swidth, 0))
     return merged
 
 

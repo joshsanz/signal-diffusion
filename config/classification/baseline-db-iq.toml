@@ -1,5 +1,6 @@
-# Example config for multi-task classifiers with db-only output type (1-channel grayscale).
-# This config is for use with output_type = "db-only" in default.toml.
+# Example config for multi-task classifiers with db-iq output type (3-channel RGB).
+# This config is for use with output_type = "db-iq" in default.toml.
+# The 3 channels are: dB-magnitude, real (I), and imaginary (Q) components.
 
 [settings]
 # Resolve relative to repository root so smoke script can run anywhere
@@ -12,27 +13,27 @@ name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 32
+batch_size = 64
 num_workers = 2
 shuffle = true
 
 [model]
 backbone = "cnn_light"
-input_channels = 1
-embedding_dim = 384
-dropout = 0.43
+input_channels = 3  # 3 channels for db-iq: dB, I, Q
+embedding_dim = 256
+dropout = 0.5
 depth = 3
-layer_repeats = 3
+layer_repeats = 2
 
 [optimizer]
 name = "adamw"
-learning_rate = 0.0002
-weight_decay = 0.009
+learning_rate = 3e-4
+weight_decay = 1e-4
 betas = [0.9, 0.995]
 
 [scheduler]
 # Available: "constant", "linear", "cosine"
-name = "cosine"
+name = "linear"
 warmup_steps = 100
 
 [scheduler.kwargs]
@@ -40,15 +41,15 @@ warmup_steps = 100
 min_lr_ratio = 0.03  # For linear or cosine
 
 [training]
-epochs = 25
+epochs = 10
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 5
 tensorboard = true
 eval_strategy = "steps"
-eval_steps = 500
+eval_steps = 100
 checkpoint_strategy = "steps"
-checkpoint_steps = 500
+checkpoint_steps = 100
 checkpoint_total_limit = 3
 compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"

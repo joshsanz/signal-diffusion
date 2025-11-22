@@ -238,31 +238,32 @@ def compute_quantization_metrics(
     """Compute metrics after clipping to [lower, upper] then quantizing to uint8 dB bins.
 
     Steps:
-    1) Clip incoming dB values to the quantizer bounds.
-    2) Map clipped dB values into uint8 bins with centers spaced by step_db.
-    3) Compute metrics using:
+    1) Convert raw dB values to linear magnitudes (unclipped).
+    2) Clip dB values to the quantizer bounds, then map to uint8 bin centers.
+    3) Convert both raw and quantized values to linear magnitudes.
+    4) Compute metrics using raw-vs-quantized linear magnitudes:
        - entropy over quantized linear magnitudes,
-       - JS divergence between the clipped dB distribution and quantized bin centers,
-       - Wasserstein distance between those same dB distributions,
-       - PSNR between clipped dB values and their quantized bin-center reconstruction.
+       - JS divergence between raw linear magnitudes and quantized bin-center magnitudes,
+       - Wasserstein distance between those same linear distributions,
+       - PSNR between raw linear magnitudes and their quantized bin-center reconstruction.
     """
     if quantizer is None:
         return None
 
-    clipped_counts: Counter[int] = Counter()
-    quantized_db_counts: Counter[float] = Counter()
     quantized_mag_counts: Counter[float] = Counter()
+    raw_linear_counts: Counter[float] = Counter()
+    quantized_linear_counts: Counter[float] = Counter()
     mse_accum = 0.0
     total = 0
     for value, count in counts.items():
-        clipped_value = quantizer.clip_db(value)
-        clipped_counts[clipped_value] += count
-        bin_index = quantizer.to_uint8(clipped_value)
-        bin_center_db = quantizer.bin_center_db(bin_index)
+        raw_linear = quantizer.db_to_magnitude(value)
+        raw_linear_counts[raw_linear] += count
+        clipped_db = quantizer.clip_db(value)
+        bin_index = quantizer.to_uint8(clipped_db)
         magnitude = quantizer.bin_center_magnitude(bin_index)
-        quantized_db_counts[bin_center_db] += count
         quantized_mag_counts[magnitude] += count
-        mse_accum += count * (clipped_value - bin_center_db) ** 2
+        quantized_linear_counts[magnitude] += count
+        mse_accum += count * (raw_linear - magnitude) ** 2
         total += count
     if total == 0:
         return None
@@ -271,30 +272,30 @@ def compute_quantization_metrics(
     entropy_probs = np.fromiter(quantized_mag_counts.values(), dtype=np.float64) / float(total)
     entropy_val = float(-np.sum(entropy_probs * np.log(entropy_probs + 1e-12)))
 
-    # JS divergence over dB distributions aligned on shared support.
-    support = sorted(set(clipped_counts.keys()) | set(quantized_db_counts.keys()))
-    p = np.array([clipped_counts.get(val, 0) for val in support], dtype=np.float64)
-    q = np.array([quantized_db_counts.get(val, 0) for val in support], dtype=np.float64)
+    # JS divergence over linear magnitudes aligned on shared support.
+    support = sorted(set(raw_linear_counts.keys()) | set(quantized_linear_counts.keys()))
+    p = np.array([raw_linear_counts.get(val, 0) for val in support], dtype=np.float64)
+    q = np.array([quantized_linear_counts.get(val, 0) for val in support], dtype=np.float64)
     p /= p.sum()
     q /= q.sum()
     js_val = js_divergence(p, q)
 
-    # Wasserstein distance over dB values using weights.
+    # Wasserstein distance over linear magnitudes using weights.
     wass_val = float(
         wasserstein_distance(
-            list(clipped_counts.keys()),
-            list(quantized_db_counts.keys()),
-            u_weights=list(clipped_counts.values()),
-            v_weights=list(quantized_db_counts.values()),
+            list(raw_linear_counts.keys()),
+            list(quantized_linear_counts.keys()),
+            u_weights=list(raw_linear_counts.values()),
+            v_weights=list(quantized_linear_counts.values()),
         )
     )
 
-    # PSNR between clipped dB values and quantized bin centers.
+    # PSNR between raw linear values and quantized bin centers.
     mse = mse_accum / float(total)
     if mse <= 0:
         psnr_val = float("inf")
     else:
-        peak = float(quantizer.span_db)
+        peak = float(max(raw_linear_counts.keys(), default=quantizer.bin_center_magnitude(255)))
         psnr_val = 20.0 * np.log10(peak / np.sqrt(mse) + 1e-12)
 
     return {
@@ -303,6 +304,33 @@ def compute_quantization_metrics(
         "wasserstein_db": wass_val,
         "psnr_db": psnr_val,
     }
+
+
+def _quantized_counts_from_db(
+    counts: list[tuple[float, int]], quantizer: Uint8DbQuantizer
+) -> tuple[list[tuple[float, int]], list[tuple[float, int]]]:
+    """Return quantized histograms in dB and linear domains from uint8 bins."""
+    quantized_db: Counter[float] = Counter()
+    quantized_linear: Counter[float] = Counter()
+    for value_db, count in counts:
+        clipped_db = quantizer.clip_db(float(value_db))
+        bin_index = quantizer.to_uint8(clipped_db)
+        bin_center_db = quantizer.bin_center_db(bin_index)
+        bin_center_mag = quantizer.bin_center_magnitude(bin_index)
+        quantized_db[bin_center_db] += int(count)
+        quantized_linear[bin_center_mag] += int(count)
+    return sorted(quantized_db.items()), sorted(quantized_linear.items())
+
+
+def _estimate_bin_width(values: list[float]) -> float | None:
+    """Estimate a representative bin width for bar plots."""
+    if len(values) < 2:
+        return None
+    diffs = np.diff(np.sort(np.asarray(values, dtype=float)))
+    diffs = diffs[diffs > 0]
+    if diffs.size == 0:
+        return None
+    return float(np.median(diffs))
 
 
 class HistogramAccumulator:
@@ -893,6 +921,8 @@ def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[st
     hist_csv = output_dir / f"stft_hist_{dataset}.csv"
     summary_json = output_dir / f"stft_hist_summary_{dataset}.json"
     cdf_png = output_dir / f"stft_cdf_{dataset}.png"
+    linear_png = output_dir / f"stft_hist_linear_{dataset}.png"
+    cdf_quant_png = output_dir / f"stft_cdf_quantized_{dataset}.png"
 
     hist_data = [{"db": value, "count": count} for value, count in counts]
     hist_json.write_text(json.dumps({"dataset": dataset, "histogram": hist_data}, indent=2))
@@ -905,15 +935,78 @@ def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[st
     summary_json.write_text(json.dumps(summary, indent=2))
 
     if plt and counts:
+        metric_quantized: dict[str, dict[str, list[tuple[float, int]]]] = {}
+        best_clips = summary.get("best_clips") or {}
+        metric_colors = {
+            "js_divergence": "orange",
+            "wasserstein_db": "red",
+            "psnr_db": "green",
+        }
+        for metric in ("js_divergence", "wasserstein_db", "psnr_db"):
+            clip = best_clips.get(metric) or {}
+            quantizer = build_quantizer(clip.get("lower_db"), clip.get("upper_db"))
+            if not quantizer:
+                continue
+            q_db, q_lin = _quantized_counts_from_db(counts, quantizer)
+            metric_quantized[metric] = {"db": q_db, "linear": q_lin}
+
         values, freqs = zip(*counts)
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.bar(values, freqs, width=1.0)
+        ax.bar(values, freqs, width=1.0, alpha=0.6, label="dB")
+        for metric, overlays in metric_quantized.items():
+            q_counts = overlays.get("db") or []
+            if not q_counts:
+                continue
+            q_values, q_freqs = zip(*q_counts)
+            ax.step(
+                q_values,
+                q_freqs,
+                where="mid",
+                color=metric_colors.get(metric, None),
+                linewidth=1.5,
+                label=f"quantized ({metric})",
+            )
         ax.set_xlabel("dB (rounded)")
         ax.set_ylabel("Count")
         ax.set_title(f"STFT histogram: {dataset}")
         ax.set_yscale("log")
+        if metric_quantized:
+            ax.legend()
         fig.tight_layout()
         fig.savefig(output_dir / f"stft_hist_{dataset}.png")
+        plt.close(fig)
+
+        # Linear magnitude histogram
+        values_linear = list(10.0 ** (np.asarray(values, dtype=np.float64) / 20.0))
+        linear_width = _estimate_bin_width(values_linear)
+        if linear_width is None and len(values_linear) > 1:
+            linear_width = float((max(values_linear) - min(values_linear)) / (len(values_linear) - 1))
+        if linear_width is None:
+            linear_width = 1.0
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.bar(values_linear, freqs, width=linear_width, alpha=0.6, label="linear")
+        for metric, overlays in metric_quantized.items():
+            q_counts_lin = overlays.get("linear") or []
+            if not q_counts_lin:
+                continue
+            q_values_lin, q_freqs_lin = zip(*q_counts_lin)
+            ax.step(
+                q_values_lin,
+                q_freqs_lin,
+                where="mid",
+                color=metric_colors.get(metric, None),
+                linewidth=1.5,
+                label=f"quantized ({metric})",
+            )
+        ax.set_xlabel("Magnitude (linear)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"STFT histogram (linear scale): {dataset}")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        if metric_quantized:
+            ax.legend()
+        fig.tight_layout()
+        fig.savefig(linear_png)
         plt.close(fig)
 
         # CDF plot on linear scale for coverage intuition
@@ -927,6 +1020,33 @@ def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[st
         ax.grid(True, linestyle="--", alpha=0.5)
         fig.tight_layout()
         fig.savefig(cdf_png)
+        plt.close(fig)
+
+        # Metric-specific CDFs for clipped & quantized projections (dB bins mapped to bin centers).
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(values, cumulative, color="blue", label="raw dB")
+        for metric, overlays in metric_quantized.items():
+            q_counts = overlays.get("db") or []
+            if not q_counts:
+                continue
+            q_vals, q_freqs = zip(*q_counts)
+            q_total = float(sum(q_freqs))
+            q_cum = np.cumsum(q_freqs) / q_total if q_total > 0 else np.zeros_like(q_freqs, dtype=float)
+            ax.plot(
+                q_vals,
+                q_cum,
+                color=metric_colors.get(metric, None),
+                linestyle="--",
+                label=f"{metric} quantized",
+            )
+        ax.set_xlabel("dB (rounded / bin center)")
+        ax.set_ylabel("CDF")
+        ax.set_title(f"STFT CDF (raw vs quantized): {dataset}")
+        ax.grid(True, linestyle="--", alpha=0.5)
+        if metric_quantized:
+            ax.legend()
+        fig.tight_layout()
+        fig.savefig(cdf_quant_png)
         plt.close(fig)
         plot_metric_landscapes(dataset, summary, output_dir)
 

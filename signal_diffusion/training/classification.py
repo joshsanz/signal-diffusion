@@ -1415,7 +1415,9 @@ def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
         run_name = f"{config.training.run_name}-{timestamp}"
     else:
         task_part = "-".join(config.dataset.tasks)
-        run_name = f"{config.dataset.name}-{config.model.backbone}-{task_part}-{timestamp}"
+        # Use only the basename of dataset.name to avoid absolute path issues
+        dataset_basename = Path(config.dataset.name).name
+        run_name = f"{dataset_basename}-{config.model.backbone}-{task_part}-{timestamp}"
     run_dir = base / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 

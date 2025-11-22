@@ -18,16 +18,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None, help="Path to the config file.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing data.")
+    parser.add_argument("--all", action="store_true", help="Preprocess all datasets defined in the config.")
     parser.add_argument("datasets", nargs="*", default=["math", "parkinsons", "seed", "longitudinal"], help="Datasets to preprocess.")
     args = parser.parse_args()
 
     settings = load_settings(args.config)
+    dataset_names = list(settings.datasets.keys()) if args.all else args.datasets
     logger.info(f"Loading datasets from          {settings.data_root}")
     logger.info(f"Saving preprocessed outputs to {settings.output_root}")
 
     preprocessor = MetaPreprocessor(
         settings=settings,
-        dataset_names=args.datasets,
+        dataset_names=dataset_names,
         nsamps=2000,
         ovr_perc=0.5,
         fs=125,

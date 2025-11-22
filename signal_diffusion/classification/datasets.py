@@ -23,18 +23,28 @@ _DATASET_CLS: Mapping[str, type] = {
     "seed": SEEDDataset,
 }
 
-_DEFAULT_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToImage(),
-        transforms.ToDtype(torch.float32, scale=True),
-        transforms.Normalize([0.5], [0.5]),
-    ]
-)
+def default_transform(output_type: str = "db-only"):
+    """Return the default spectrogram transform used for classification.
 
-
-def default_transform():
-    """Return the default spectrogram transform used for classification."""
-    return _DEFAULT_TRANSFORM
+    Parameters:
+    - output_type: "db-only" for 1-channel, "db-iq" or "db-polar" for 3-channel
+    """
+    if output_type == "db-only":
+        return transforms.Compose(
+            [
+                transforms.ToImage(),
+                transforms.ToDtype(torch.float32, scale=True),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+    else:  # db-iq or db-polar (3 channels)
+        return transforms.Compose(
+            [
+                transforms.ToImage(),
+                transforms.ToDtype(torch.float32, scale=True),
+                transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+            ]
+        )
 
 
 def _preprocess_hf_dataset(
@@ -42,13 +52,16 @@ def _preprocess_hf_dataset(
     *,
     transform: transforms.Compose,
     tasks: Sequence[str],
+    output_type: str = "db-only",
 ) -> Mapping[str, Any]:
     """Preprocess examples from HuggingFace dataset."""
     images = examples.get("image") or examples.get("pixel_values")
     if images is None:
         raise KeyError("Dataset must provide an 'image' column")
 
-    processed_images = [transform(image.convert("L")) for image in images]
+    # Convert to appropriate mode based on output_type
+    mode = "L" if output_type == "db-only" else "RGB"
+    processed_images = [transform(image.convert(mode)) for image in images]
 
     # Build targets dict from metadata columns
     batch: MutableMapping[str, Any] = {"image": processed_images}
@@ -86,11 +99,12 @@ def build_dataset(
         ds = hf_load_dataset(str(dataset_path), split=split)
 
         # Apply preprocessing transform
-        transform_fn = transform or default_transform()
+        transform_fn = transform or default_transform(settings.output_type)
         preprocess = partial(
             _preprocess_hf_dataset,
             transform=transform_fn,
             tasks=tasks,
+            output_type=settings.output_type,
         )
         return ds.with_transform(preprocess)
 
@@ -106,6 +120,6 @@ def build_dataset(
         settings=settings,
         split=split,
         tasks=tuple(tasks),
-        transform=transform or default_transform(),
+        transform=transform or default_transform(settings.output_type),
         target_format=target_format,
     )

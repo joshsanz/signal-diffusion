@@ -6,23 +6,28 @@
 root = "~/data/signal-diffusion"
 output_root = "~/data/signal-diffusion/processed"
 max_sampling_weight = 5.0
+output_type = "db-only"  # Output format: "db-only", "db-iq", or "db-polar"
 
 [datasets.math]
 root = "eeg_math"
 output = "eeg_math/stfts"
+min_db = -127.028
+max_db = -44.068
 
 [datasets.parkinsons]
 root = "parkinsons"
 output = "parkinsons/stfts"
+min_db = -120.0675
+max_db = 2.9085
 
 [datasets.seed]
 root = "seed"
 output = "seed/stfts"
-
-[datasets.oklahoma]
-root = "oklahoma"
-output = "oklahoma/stfts"
+min_db = -119.0125
+max_db = -5.0875
 
 [datasets.longitudinal]
 root = "longitudinal"
 output = "longitudinal/stfts"
+min_db = -130.984
+max_db = -4.088
