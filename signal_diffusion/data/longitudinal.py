@@ -397,7 +397,7 @@ class LongitudinalPreprocessor(BaseSpectrogramPreprocessor):
         return data
 
 
-class LongitudinalTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+class LongitudinalTimeSeriesPreprocessor(LongitudinalPreprocessor):
     """Preprocess Longitudinal EEG recordings into time-domain .npy datasets."""
 
     DEFAULT_RESOLUTION = 512
@@ -410,37 +410,11 @@ class LongitudinalTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
         ovr_perc: float = 0.0,
         fs: float = 125,
     ) -> None:
-        super().__init__(settings, dataset_name="longitudinal")
-        self.nsamps = nsamps
-        self.overlap_fraction = float(ovr_perc)
-        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
-
-        self.data_dir = self.dataset_settings.root
-        self.participants = self._load_participants()
-
-        orig_fs = 1000
-        if fs <= 0:
-            raise ValueError("fs must be positive for longitudinal dataset")
-        decimation_ratio = orig_fs / fs
-        if not decimation_ratio.is_integer():
-            raise ValueError("fs must be a positive divisor of 1000 Hz for longitudinal dataset")
-        self.target_fs = fs
-        self.decimation = int(decimation_ratio)
-        self.fs = orig_fs / float(self.decimation)
-
-        self.channel_indices = [idx for _, idx in longitudinal_channels]
-        self.n_channels = len(self.channel_indices)
-        self._subject_ids: Sequence[str] | None = None
-
-        self.norm_stats = self._load_or_compute_normalization_stats()
+        super().__init__(settings, nsamps=nsamps, ovr_perc=ovr_perc, fs=fs)
         self.output_dir = self.dataset_settings.timeseries_output or (
             self.dataset_settings.output.parent / "timeseries"
         )
-
-        logger.info(
-            f"Initialized LongitudinalTimeSeriesPreprocessor: {self.n_channels} channels, "
-            f"{orig_fs}Hz → {self.fs}Hz (decimation={self.decimation})"
-        )
+        self.norm_stats = self._load_or_compute_normalization_stats()
 
     # ------------------------------------------------------------------
     # BaseSpectrogramPreprocessor hooks

@@ -301,7 +301,7 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         return data
 
 
-class ParkinsonsTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+class ParkinsonsTimeSeriesPreprocessor(ParkinsonsPreprocessor):
     """Preprocess Parkinsons EEG recordings into time-domain .npy datasets."""
 
     DEFAULT_RESOLUTION = 512
@@ -314,32 +314,11 @@ class ParkinsonsTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
         ovr_perc: float = 0.0,
         fs: float = 250,
     ) -> None:
-        super().__init__(settings, dataset_name="parkinsons")
-        self.nsamps = nsamps
-        self.overlap_fraction = float(ovr_perc)
-        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
-
-        self.data_dir = self.dataset_settings.root
-        self.participants = self._load_participants()
-
-        orig_fs = 500
-        if fs <= 0:
-            raise ValueError("fs must be positive for Parkinsons dataset")
-        decimation_ratio = orig_fs / fs
-        if not decimation_ratio.is_integer():
-            raise ValueError("fs must be a positive divisor of 500 Hz")
-        self.target_fs = fs
-        self.decimation = int(decimation_ratio)
-        self.fs = orig_fs / float(self.decimation)
-
-        self.channel_indices = [idx for _, idx in parkinsons_channels]
-        self.n_channels = len(self.channel_indices)
-        self._subject_ids: Sequence[str] | None = None
-
-        self.norm_stats = self._load_or_compute_normalization_stats()
+        super().__init__(settings, nsamps=nsamps, ovr_perc=ovr_perc, fs=fs)
         self.output_dir = self.dataset_settings.timeseries_output or (
             self.dataset_settings.output.parent / "timeseries"
         )
+        self.norm_stats = self._load_or_compute_normalization_stats()
 
     # ------------------------------------------------------------------
     # BaseSpectrogramPreprocessor hooks
