@@ -9,10 +9,12 @@ from torch import nn
 
 from signal_diffusion.data.specs import LabelRegistry
 
-from .backbones import CNNBackbone, TransformerBackbone
+from .backbones import CNNBackbone, CNNBackbone1D, TransformerBackbone
 
 _BACKBONES = {
     "cnn_light": CNNBackbone,
+    "cnn_1d": CNNBackbone1D,
+    "cnn_1d_light": CNNBackbone1D,
     "transformer": TransformerBackbone,
 }
 
@@ -123,6 +125,16 @@ def build_classifier(config: ClassifierConfig) -> MultiTaskClassifier:
 
     extras = dict(config.extras)
     if config.backbone == "cnn_light":
+        backbone = backbone_cls(
+            config.input_channels,
+            activation=config.activation,
+            dropout=config.dropout,
+            embedding_dim=config.embedding_dim,
+            depth=config.depth,
+            layer_repeats=config.layer_repeats,
+            **extras,
+        )
+    elif config.backbone in {"cnn_1d", "cnn_1d_light"}:
         backbone = backbone_cls(
             config.input_channels,
             activation=config.activation,

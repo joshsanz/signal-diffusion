@@ -230,6 +230,24 @@ class ModelConfig:
     extras: dict[str, Any] = field(default_factory=dict)
 
 
+def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
+    """Ensure backbone choice matches configured data type."""
+    is_timeseries = data_type == "timeseries"
+    is_1d_backbone = "1d" in backbone.lower()
+
+    if is_1d_backbone and not is_timeseries:
+        raise ValueError(
+            f"Backbone '{backbone}' requires time-domain data (settings.data_type='timeseries'). "
+            f"Current data_type='{data_type}'."
+        )
+    if is_timeseries and not is_1d_backbone:
+        LOGGER.warning(
+            "Configured data_type='timeseries' but backbone '%s' is 2D-focused. "
+            "Consider using 'cnn_1d' or 'cnn_1d_light' for time-domain inputs.",
+            backbone,
+        )
+
+
 @dataclass(slots=True)
 class OptimizerConfig:
     """Configuration for optimizer."""
@@ -447,6 +465,7 @@ def train_from_config(
     settings = load_settings(config.settings_path)
     dataset_cfg = config.dataset
     training_cfg = config.training
+    _validate_backbone_data_type(getattr(settings, "data_type", "spectrogram"), config.model.backbone)
 
     tasks = dataset_cfg.tasks
     task_specs = build_task_specs(dataset_cfg.name, tasks)
@@ -1116,7 +1135,12 @@ def _run_epoch(
     for batch_idx, batch in enumerate(data_loader, start=1):
         if max_steps > 0 and global_step >= max_steps:
             break
-        images = batch["image"].to(device).contiguous()
+        if "signal" in batch:
+            inputs = batch["signal"].to(device).contiguous()
+        elif "image" in batch:
+            inputs = batch["image"].to(device).contiguous()
+        else:
+            raise KeyError("Batch must contain 'signal' or 'image'")
         targets = {}
         for name in task_weights:
             tensor = _to_device_tensor(batch["targets"][name], device)
@@ -1126,14 +1150,14 @@ def _run_epoch(
             else:
                 tensor = tensor.float()
             targets[name] = tensor
-        batch_size = images.shape[0]
+        batch_size = inputs.shape[0]
 
         if train:
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(train):
             with torch.amp.autocast(device_type=device.type, enabled=scaler is not None and scaler.is_enabled()):
-                outputs = model(images)
+                outputs = model(inputs)
                 loss, per_task_batch = _compute_loss(
                     outputs,
                     targets,

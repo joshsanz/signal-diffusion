@@ -1,6 +1,7 @@
 """Reusable classifier backbones for EEG spectrogram models."""
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
@@ -165,3 +166,88 @@ class TransformerBackbone(nn.Module):
         output = self.output_proj(pooled)
         # Ensure contiguous output for torch.compile() compatibility
         return output.contiguous()
+
+
+class CNNBackbone1D(nn.Module):
+    """1D convolutional feature extractor for time-domain signals."""
+
+    def __init__(
+        self,
+        input_channels: int,
+        *,
+        depth: int = 3,
+        layer_repeats: int = 2,
+        activation: str = "gelu",
+        embedding_dim: int = 256,
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+        if depth < 1:
+            raise ValueError("depth must be at least 1")
+        if layer_repeats < 1:
+            raise ValueError("layer_repeats must be at least 1")
+
+        self.input_channels = input_channels
+        self.embedding_dim = embedding_dim
+        self.activation_name = activation.lower()
+
+        # Clamp initial projection width to a small power-of-two for typical channel counts
+        next_pow_two = 1 << math.ceil(math.log2(max(1, input_channels)))
+        input_conv_channels = max(8, next_pow_two)
+
+        # Derive growth factor with awareness of the larger starting width.
+        # Target: end near embedding_dim without shrinking early layers.
+        desired_growth = embedding_dim / float(input_conv_channels)
+        growth_factor = desired_growth ** (1 / depth) if desired_growth > 0 else 2.0
+        growth_factor = max(2.0, min(4.0, growth_factor))
+        growth_factor = int(round(growth_factor))
+        if growth_factor < 2:
+            growth_factor = 2
+
+        channels = [input_conv_channels * (growth_factor ** (i + 1)) for i in range(depth)]
+
+        # Kernel size decreases by 2 with each depth, minimum of 3.
+        base_kernel = 1 + 2 * depth  # depth=3 -> 7, depth=2 -> 5, etc.
+        kernel_sizes = [max(3, base_kernel - 2 * i) for i in range(depth)]
+
+        input_kernel = kernel_sizes[0]
+        input_padding = input_kernel // 2
+        self.input_conv = nn.Sequential(
+            nn.Conv1d(input_channels, input_conv_channels, kernel_size=input_kernel, padding=input_padding),
+            _make_activation(self.activation_name),
+            nn.BatchNorm1d(input_conv_channels),
+            nn.Dropout(dropout),
+            nn.AvgPool1d(kernel_size=2, stride=2),
+        )
+
+        blocks: list[nn.Module] = []
+        in_ch = input_conv_channels
+        for out_ch, kernel in zip(channels, kernel_sizes):
+            block_layers: list[nn.Module] = []
+            block_layers.append(nn.BatchNorm1d(in_ch))
+
+            for repeat_idx in range(layer_repeats):
+                conv_in = in_ch if repeat_idx == 0 else out_ch
+                padding = kernel // 2
+                block_layers.append(nn.Conv1d(conv_in, out_ch, kernel_size=kernel, padding=padding))
+                block_layers.append(_make_activation(self.activation_name))
+
+            block_layers.append(nn.Dropout(dropout))
+            block_layers.append(nn.AvgPool1d(kernel_size=2, stride=2))
+
+            blocks.append(nn.Sequential(*block_layers))
+            in_ch = out_ch
+
+        self.blocks = nn.Sequential(*blocks)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.projection = nn.Linear(channels[-1], embedding_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 3:
+            raise ValueError(f"Expected 3D input (B, C, L) for CNNBackbone1D, got shape {tuple(x.shape)}")
+        x = self.input_conv(x)
+        x = self.blocks(x)
+        x = self.pool(x)
+        x = x.squeeze(-1)
+        x = self.projection(x)
+        return x.contiguous()
