@@ -151,6 +151,23 @@ class DiffusionConfig:
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     settings_config: Path | None = None
     source_path: Path | None = None
+    settings: Any = None  # Will be populated with Settings object after loading
+
+    def validate(self):
+        """Validate configuration for incompatible combinations."""
+        if self.settings is None:
+            return  # Settings not loaded yet
+
+        # Check for Stable Diffusion + time-series incompatibility
+        if (
+            hasattr(self.settings, "data_type")
+            and self.settings.data_type == "timeseries"
+            and self.model.name == "stable-diffusion-v1-5"
+        ):
+            raise ValueError(
+                "Stable Diffusion models require 2D image data. "
+                "For timeseries data, use 'dit', 'hourglass', or 'localmamba'."
+            )
 
 
 def _path_from_value(value: Any) -> Path | None:

@@ -1,0 +1,50 @@
+# Example config for multi-task classification with time-series data.
+# This config uses time-domain EEG signals instead of spectrograms.
+
+[settings]
+config = "~/git/signal-diffusion/config/default.toml"
+trainer = "classification"
+
+[data]
+data_type = "timeseries"
+
+[dataset]
+name = "seed_timeseries"
+train_split = "train"
+val_split = "val"
+tasks = ["emotion", "gender"]
+batch_size = 32
+num_workers = 2
+shuffle = true
+
+[model]
+backbone = "cnn_1d"
+input_channels = 20  # 20 selected EEG channels
+embedding_dim = 256
+dropout = 0.3
+
+[optimizer]
+name = "adamw"
+learning_rate = 3e-4
+weight_decay = 1e-4
+
+[scheduler]
+name = "cosine"
+warmup_steps = 100
+
+[scheduler.kwargs]
+min_lr_ratio = 0.01
+
+[training]
+epochs = 25
+max_steps = -1
+clip_grad_norm = 1.0
+log_every_batches = 10
+tensorboard = true
+eval_strategy = "epoch"
+checkpoint_strategy = "epoch"
+checkpoint_total_limit = 3
+
+[training.task_weights]
+emotion = 1.0
+gender = 1.0

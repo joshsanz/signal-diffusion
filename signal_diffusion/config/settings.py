@@ -40,7 +40,15 @@ class Settings:
     output_root: Path
     max_sampling_weight: float | None
     output_type: str = "db-only"
+    data_type: str = "spectrogram"  # "spectrogram" or "timeseries"
     datasets: dict[str, DatasetSettings] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate configuration."""
+        if self.data_type not in {"spectrogram", "timeseries"}:
+            raise ValueError(
+                f"data_type must be 'spectrogram' or 'timeseries', got {self.data_type!r}"
+            )
 
     def dataset(self, name: str) -> DatasetSettings:
         try:
@@ -62,6 +70,7 @@ class Settings:
         output_root = _expand_root(data_section.get("output_root", data_root), base=config_dir)
         max_sampling_weight = data_section.get("max_sampling_weight", None)
         output_type = data_section.get("output_type", "db-only")
+        data_type = data_section.get("data_type", "spectrogram")
 
         datasets_section = mapping.get("datasets", {})
         datasets: dict[str, DatasetSettings] = {}
@@ -104,6 +113,7 @@ class Settings:
             output_root=output_root,
             max_sampling_weight=max_sampling_weight,
             output_type=output_type,
+            data_type=data_type,
             datasets=datasets,
         )
 

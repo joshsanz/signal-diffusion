@@ -1,0 +1,85 @@
+# Example configuration for DiT diffusion model training on time-series data.
+[settings]
+config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
+
+[data]
+data_type = "timeseries"
+
+[dataset]
+name = "seed_timeseries"
+train_split = "train"
+val_split = "val"
+batch_size = 32
+num_workers = 4
+resolution = 512  # Sequence length (must match preprocessing nsamps)
+num_classes = 0
+
+[dataset.extras]
+gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+n_channels = 20  # Number of EEG channels
+
+[model]
+name = "dit"
+sample_size = 512
+conditioning = "none"  # none, caption, classes
+
+[model.extras]
+num_attention_heads = 8
+attention_head_dim = 64
+in_channels = 1  # Single channel for time-series (B, 1, n_channels, n_samples)
+out_channels = 1
+num_layers = 12
+patch_size = [1, 8]  # Asymmetric patches: (height, width)
+latent_space = false
+num_classes = 0
+cfg_dropout = 0.0
+
+[model.lora]
+enabled = false
+
+[objective]
+prediction_type = "vector_field"
+flow_match_timesteps = 1000
+
+[optimizer]
+name = "adamw"
+learning_rate = 1e-4
+weight_decay = 1e-4
+betas = [0.9, 0.999]
+
+[scheduler]
+name = "constant_with_warmup"
+warmup_steps = 100
+
+[training]
+seed = 42
+epochs = 100
+mixed_precision = "fp16"
+gradient_checkpointing = false
+gradient_accumulation_steps = 1
+gradient_clip_norm = 1.0
+snr_gamma = 5.0
+
+log_every_steps = 10
+checkpoint_interval = 1000
+checkpoint_total_limit = 3
+
+eval_strategy = "epoch"
+eval_num_steps = 100
+eval_num_examples = 8
+
+ema_use_warmup = true
+ema_inv_gamma = 1
+ema_power = 0.75
+ema_decay = 0.999
+ema_update_after_step = 1000
+
+[logging]
+tensorboard = true
+run_name = "dit-timeseries"
+log_dir = "runs/diffusion/tensorboard/dit-timeseries"
+
+[inference]
+denoising_steps = 25
+cfg_scale = 1.0
