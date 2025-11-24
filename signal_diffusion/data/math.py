@@ -346,7 +346,7 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         return data
 
 
-class MathTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+class MathTimeSeriesPreprocessor(MathPreprocessor):
     """Preprocess Math EEG recordings into time-domain .npy datasets."""
 
     DEFAULT_RESOLUTION = 512
@@ -360,34 +360,17 @@ class MathTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
         fs: float = 250,
         include_math_trials: bool = False,
     ) -> None:
-        super().__init__(settings, dataset_name="math")
-        self.nsamps = nsamps
-        self.overlap_fraction = float(ovr_perc)
-        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
-        self.include_math_trials = include_math_trials
-
-        self.eeg_dir = self.dataset_settings.root / "raw_eeg"
-        self.subject_table = self._load_subject_table()
-
-        self.orig_fs = 500
-        if fs <= 0:
-            raise ValueError("fs must be positive for Math dataset")
-        decimation_ratio = self.orig_fs / fs
-        if not decimation_ratio.is_integer():
-            raise ValueError("fs must be a positive divisor of 500 Hz for Math dataset")
-        self.target_fs = fs
-        self.decimation = int(decimation_ratio)
-        self.fs = self.orig_fs / float(self.decimation)
-
-        self.states: Sequence[int] = (1, 2) if include_math_trials else (1,)
-        self._subject_ids: Sequence[str] | None = None
-        self.channel_indices = self._determine_channel_indices()
-        self.n_channels = len(self.channel_indices)
-
-        self.norm_stats = self._load_or_compute_normalization_stats()
+        super().__init__(
+            settings,
+            nsamps=nsamps,
+            ovr_perc=ovr_perc,
+            fs=fs,
+            include_math_trials=include_math_trials,
+        )
         self.output_dir = self.dataset_settings.timeseries_output or (
             self.dataset_settings.output.parent / "timeseries"
         )
+        self.norm_stats = self._load_or_compute_normalization_stats()
 
     # ------------------------------------------------------------------
     # BaseSpectrogramPreprocessor hooks
