@@ -22,9 +22,9 @@ logger = get_logger(__name__)
 
 # Default target sampling rates after decimation for each dataset
 DATASET_DEFAULT_FS: dict[str, float] = {
-    "seed": 250.0,
-    "parkinsons": 250.0,
-    "math": 250.0,
+    "seed": 125.0,
+    "parkinsons": 125.0,
+    "math": 125.0,
     "longitudinal": 125.0,
 }
 
@@ -69,11 +69,11 @@ def main() -> None:
         default=["math", "parkinsons", "seed", "longitudinal"],
         help="Datasets to preprocess (ignored if --all is set).",
     )
-    parser.add_argument("--nsamps", type=int, default=512, help="Window length for time-series examples.")
+    parser.add_argument("--nsamps", type=int, default=2000, help="Window length for time-series examples.")
     parser.add_argument(
         "--ovr-perc",
         type=float,
-        default=0.0,
+        default=0.5,
         help="Overlap percentage between windows (0.0-1.0).",
     )
     parser.add_argument(

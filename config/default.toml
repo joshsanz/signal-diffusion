@@ -7,7 +7,7 @@ root = "/data/data/signal-diffusion"
 output_root = "/data/data/signal-diffusion/processed"
 max_sampling_weight = 5.0
 output_type = "db-only"  # Output format: "db-only", "db-iq", or "db-polar"
-data_type = "spectrogram"  # Data format: "spectrogram" (default) or "timeseries"
+data_type = "timeseries"  # Data format: "spectrogram" (default) or "timeseries"
 
 [datasets.math]
 root = "eeg_math"
