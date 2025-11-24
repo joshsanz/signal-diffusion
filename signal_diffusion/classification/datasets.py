@@ -11,9 +11,13 @@ from torchvision.transforms import v2 as transforms
 
 from signal_diffusion.config import Settings
 from signal_diffusion.data import (
+    LongitudinalTimeSeriesDataset,
     MathDataset,
+    MathTimeSeriesDataset,
     ParkinsonsDataset,
+    ParkinsonsTimeSeriesDataset,
     SEEDDataset,
+    SEEDTimeSeriesDataset,
 )
 from signal_diffusion.data.meta import META_LABELS
 
@@ -21,6 +25,10 @@ _DATASET_CLS: Mapping[str, type] = {
     "math": MathDataset,
     "parkinsons": ParkinsonsDataset,
     "seed": SEEDDataset,
+    "math_timeseries": MathTimeSeriesDataset,
+    "parkinsons_timeseries": ParkinsonsTimeSeriesDataset,
+    "seed_timeseries": SEEDTimeSeriesDataset,
+    "longitudinal_timeseries": LongitudinalTimeSeriesDataset,
 }
 
 def default_transform(output_type: str = "db-only"):
@@ -116,10 +124,15 @@ def build_dataset(
             f"Unknown dataset '{dataset_name}'. Available: {sorted(_DATASET_CLS)}"
         ) from exc
 
+    is_timeseries = dataset_name.endswith("_timeseries") or "timeseries" in dataset_cls.__name__.lower()
+    resolved_transform = transform
+    if resolved_transform is None and not is_timeseries:
+        resolved_transform = default_transform(settings.output_type)
+
     return dataset_cls(
         settings=settings,
         split=split,
         tasks=tuple(tasks),
-        transform=transform or default_transform(settings.output_type),
+        transform=resolved_transform,
         target_format=target_format,
     )

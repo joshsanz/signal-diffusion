@@ -1196,7 +1196,7 @@ name = "seed_timeseries"
 train_split = "train"
 val_split = "val"
 batch_size = 32
-resolution = 512  # sequence length (must match preprocessing nsamps)
+resolution = 2000  # sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
@@ -1204,7 +1204,7 @@ gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 
 [model]
 name = "dit"
-sample_size = 512
+sample_size = 2000
 conditioning = "none"
 
 [objective]
@@ -1286,11 +1286,11 @@ uv run python -m signal_diffusion.training.diffusion \
    - [x] Verify files NOT mixed with spectrograms
 
 3. **Dataset Loading**
-   - [ ] Load SEEDTimeSeriesDataset with expected_length parameter
-   - [ ] Verify warning logged if resolution mismatch detected
-   - [ ] Verify shape: (n_channels, n_samples)
+   - [x] Load SEEDTimeSeriesDataset with expected_length parameter
+   - [x] Verify warning logged if resolution mismatch detected
+   - [x] Verify shape: (n_channels, n_samples)
    - [ ] Verify data already normalized (mean≈0, std≈1)
-   - [ ] Verify 'signal' key (not 'image') in return dict
+   - [x] Verify 'signal' key (not 'image') in return dict
    - [ ] Verify targets dict matches label registry
    - [ ] Test Gaussian noise augmentation (std=0 disables it)
 

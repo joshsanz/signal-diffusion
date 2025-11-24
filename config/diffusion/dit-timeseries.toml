@@ -12,7 +12,7 @@ train_split = "train"
 val_split = "val"
 batch_size = 32
 num_workers = 4
-resolution = 512  # Sequence length (must match preprocessing nsamps)
+resolution = 2000  # Sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
@@ -21,7 +21,7 @@ n_channels = 20  # Number of EEG channels
 
 [model]
 name = "dit"
-sample_size = 512
+sample_size = 2000
 conditioning = "none"  # none, caption, classes
 
 [model.extras]

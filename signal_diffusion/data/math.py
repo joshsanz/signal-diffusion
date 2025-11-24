@@ -560,3 +560,92 @@ class MathDataset:
     @property
     def available_tasks(self) -> Sequence[str]:
         return tuple(MATH_LABELS.keys())
+
+
+class MathTimeSeriesDataset(torch.utils.data.Dataset):
+    """Torch-compatible dataset for Math time-domain windows."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        split: str = "train",
+        tasks: Sequence[str] = ("gender",),
+        transform=None,
+        target_format: str = "dict",
+        expected_length: int | None = None,
+    ) -> None:
+        self.settings = settings
+        self.dataset_settings: DatasetSettings = settings.dataset("math")
+        self.split = split
+        self.transform = transform
+        self.tasks = tuple(tasks)
+        self.expected_length = expected_length
+        for name in self.tasks:
+            if name not in MATH_LABELS:
+                raise KeyError(f"Unknown task '{name}'. Available: {sorted(MATH_LABELS)}")
+        if target_format not in {"dict", "tuple"}:
+            raise ValueError("target_format must be 'dict' or 'tuple'")
+        self.target_format = target_format
+
+        self.root = self._resolve_root()
+        metadata_path = self.root / f"{split}-metadata.csv"
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Missing metadata file: {metadata_path}")
+        self.metadata = pd.read_csv(metadata_path)
+
+        if self.expected_length is not None:
+            self._validate_signal_length()
+
+    def _resolve_root(self) -> Path:
+        if self.dataset_settings.timeseries_output is not None:
+            return self.dataset_settings.timeseries_output
+        if self.dataset_settings.output.name == "stfts":
+            return self.dataset_settings.output.parent / "timeseries"
+        return self.dataset_settings.output
+
+    def _validate_signal_length(self) -> None:
+        """Warn if configured length does not match stored signals."""
+        if self.metadata.empty:
+            return
+        first = self.root / self.metadata.iloc[0]["file_name"]
+        try:
+            sample = np.load(first)
+        except FileNotFoundError:
+            logger.warning("Cannot validate signal length; missing sample at %s", first)
+            return
+        actual_length = sample.shape[1]
+        if actual_length != self.expected_length:
+            logger.warning(
+                "Expected signal length %s but found %s in %s",
+                self.expected_length,
+                actual_length,
+                first.name,
+            )
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __getitem__(self, index: int):
+        row = self.metadata.iloc[index]
+        data_path = self.root / row["file_name"]
+        signal = torch.from_numpy(np.load(data_path)).float()
+
+        if self.transform:
+            signal = self.transform(signal)
+
+        targets = {name: MATH_LABELS.encode(name, row) for name in self.tasks}
+        sample = {
+            "signal": signal,
+            "targets": targets,
+            "metadata": row.to_dict(),
+        }
+        if self.target_format == "tuple":
+            if len(self.tasks) == 1:
+                return signal, targets[self.tasks[0]]
+            return signal, targets
+        return sample
+
+    @property
+    def available_tasks(self) -> Sequence[str]:
+        return tuple(MATH_LABELS.keys())
