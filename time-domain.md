@@ -460,108 +460,18 @@ __all__ = [
 
 **File**: `signal_diffusion/classification/backbones.py`
 
-Add 1D CNN architecture:
+Add a 1D CNN that mirrors the 2D backbone’s configuration knobs (depth, layer_repeats, activation, dropout, embedding_dim):
 
-```python
-class CNNBackbone1D(nn.Module):
-    """1D CNN for time-domain signals.
-
-    Architecture:
-        Conv1d → BatchNorm1d → GELU → MaxPool1d → ... → AdaptiveAvgPool1d → Linear
-
-    Input shape: (B, n_channels, n_samples)
-    Output shape: (B, embedding_dim)
-    """
-
-    def __init__(
-        self,
-        input_channels: int = 62,
-        embedding_dim: int = 256,
-        channels: tuple[int, ...] = (128, 256, 512),
-        kernel_sizes: tuple[int, ...] = (7, 5, 3),
-        pool_kernels: tuple[int, ...] = (2, 2, 2),
-        dropout: float = 0.3,
-    ):
-        super().__init__()
-
-        if not (len(channels) == len(kernel_sizes) == len(pool_kernels)):
-            raise ValueError("channels, kernel_sizes, pool_kernels must have same length")
-
-        self.input_channels = input_channels
-        self.embedding_dim = embedding_dim
-
-        # Build conv blocks
-        layers = []
-        in_ch = input_channels
-
-        for out_ch, kernel, pool in zip(channels, kernel_sizes, pool_kernels):
-            layers.extend([
-                nn.Conv1d(in_ch, out_ch, kernel_size=kernel, padding=kernel // 2),
-                nn.BatchNorm1d(out_ch),
-                nn.GELU(),
-                nn.MaxPool1d(kernel_size=pool),
-                nn.Dropout(dropout),
-            ])
-            in_ch = out_ch
-
-        self.conv_blocks = nn.Sequential(*layers)
-
-        # Global pooling + projection
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.projection = nn.Linear(channels[-1], embedding_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: (B, n_channels, n_samples)
-
-        Returns:
-            (B, embedding_dim)
-        """
-        x = self.conv_blocks(x)  # (B, C, L)
-        x = self.pool(x)  # (B, C, 1)
-        x = x.squeeze(-1)  # (B, C)
-        x = self.projection(x)  # (B, embedding_dim)
-        return x
-```
+- Input conv width is `max(8, next_power_of_two(input_channels))` to avoid shrinking early layers (typical timeseries ≈20 chans).
+- Growth factor is derived from the ratio to `embedding_dim`, clamped to {2, 4} and rounded, so channels never decrease after the input conv.
+- Kernel sizes decrease by 2 per block with a floor of 3: `kernel = max(3, 1 + 2*depth - 2*block_idx)` which yields 7/5/3 for depth=3.
+- Block structure matches the 2D version: input conv → activation → norm → dropout → avg pool, then repeated blocks with norm → repeated convs → dropout → avg pool, followed by adaptive pooling and a linear projection to `embedding_dim`.
 
 ### 4.2 Update Classifier Factory
 
 **File**: `signal_diffusion/classification/factory.py`
 
-Add backbone selection logic:
-
-```python
-def build_classifier(config: ClassifierConfig) -> MultiTaskClassifier:
-    """Build multi-task classifier from config."""
-
-    # Select backbone
-    if config.backbone == "cnn_1d_light":
-        backbone = CNNBackbone1D(
-            input_channels=config.input_channels,
-            embedding_dim=config.embedding_dim,
-            channels=(128, 256),
-            kernel_sizes=(7, 5),
-            pool_kernels=(2, 2),
-            dropout=config.dropout,
-        )
-    elif config.backbone == "cnn_1d":
-        backbone = CNNBackbone1D(
-            input_channels=config.input_channels,
-            embedding_dim=config.embedding_dim,
-            channels=(128, 256, 512),
-            kernel_sizes=(7, 5, 3),
-            pool_kernels=(2, 2, 2),
-            dropout=config.dropout,
-        )
-    elif config.backbone == "cnn_light":
-        # Existing 2D CNN (for spectrograms)
-        backbone = CNNBackbone(...)
-    # ... other backbones
-
-    return MultiTaskClassifier(backbone=backbone, tasks=config.tasks)
-```
+Wire the new 1D backbone to reuse the same config fields as the 2D CNN (`activation`, `dropout`, `embedding_dim`, `depth`, `layer_repeats`). Both `cnn_1d` and `cnn_1d_light` variants call `CNNBackbone1D` with these shared parameters; light vs. full depth is determined by the `depth`/`layer_repeats` values passed in the config (no separate hardcoded channel tuples).
 
 ### 4.3 Update Training Loop to Handle Both Keys
 
