@@ -9,7 +9,7 @@ trainer = "classification"
 
 [dataset]
 # name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
-name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
+name = "/data/data/signal-diffusion/processed-iq/reweighted_meta_dataset_log_n2000_fs125"
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]

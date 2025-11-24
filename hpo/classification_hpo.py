@@ -39,6 +39,7 @@ SEARCH_SPACE = {
     "depth": [2, 4],
     "layer_repeats": [1, 3],
     "embedding_dim": [32, 64, 128, 192, 256],
+    "batch_size": [32, 64, 128, 192],
 }
 
 
@@ -90,6 +91,9 @@ def create_trial_config(
     config.model.depth = trial_params["depth"]
     config.model.layer_repeats = trial_params["layer_repeats"]
     config.model.embedding_dim = trial_params["embedding_dim"]
+
+    # Override batch size
+    config.dataset.batch_size = trial_params["batch_size"]
 
     # Ensure we have intermediate validation for pruning
     if config.training.eval_strategy == "epoch":
@@ -330,6 +334,10 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
             "embedding_dim",
             SEARCH_SPACE["embedding_dim"],
         )
+        batch_size = trial.suggest_categorical(
+            "batch_size",
+            SEARCH_SPACE["batch_size"],
+        )
 
         trial_params = {
             "learning_rate": learning_rate,
@@ -339,6 +347,7 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
             "depth": depth,
             "layer_repeats": layer_repeats,
             "embedding_dim": embedding_dim,
+            "batch_size": batch_size,
             "trial_number": trial.number,
         }
 
