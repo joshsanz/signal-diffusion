@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import math as pymath
 import os
 from dataclasses import dataclass
@@ -343,6 +344,171 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         if self.decimation > 1:
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
         return data
+
+
+class MathTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+    """Preprocess Math EEG recordings into time-domain .npy datasets."""
+
+    DEFAULT_RESOLUTION = 512
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        nsamps: int,
+        ovr_perc: float = 0.0,
+        fs: float = 250,
+        include_math_trials: bool = False,
+    ) -> None:
+        super().__init__(settings, dataset_name="math")
+        self.nsamps = nsamps
+        self.overlap_fraction = float(ovr_perc)
+        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
+        self.include_math_trials = include_math_trials
+
+        self.eeg_dir = self.dataset_settings.root / "raw_eeg"
+        self.subject_table = self._load_subject_table()
+
+        self.orig_fs = 500
+        if fs <= 0:
+            raise ValueError("fs must be positive for Math dataset")
+        decimation_ratio = self.orig_fs / fs
+        if not decimation_ratio.is_integer():
+            raise ValueError("fs must be a positive divisor of 500 Hz for Math dataset")
+        self.target_fs = fs
+        self.decimation = int(decimation_ratio)
+        self.fs = self.orig_fs / float(self.decimation)
+
+        self.states: Sequence[int] = (1, 2) if include_math_trials else (1,)
+        self._subject_ids: Sequence[str] | None = None
+        self.channel_indices = self._determine_channel_indices()
+        self.n_channels = len(self.channel_indices)
+
+        self.norm_stats = self._load_or_compute_normalization_stats()
+        self.output_dir = self.dataset_settings.timeseries_output or (
+            self.dataset_settings.output.parent / "timeseries"
+        )
+
+    # ------------------------------------------------------------------
+    # BaseSpectrogramPreprocessor hooks
+    # ------------------------------------------------------------------
+    def subjects(self) -> Sequence[str]:
+        if self._subject_ids is None:
+            existing: set[str] = set()
+            for edf_path in self.eeg_dir.glob("Subject*_*.edf"):
+                subject = edf_path.stem.split("_")[0]
+                if all((self.eeg_dir / f"{subject}_{state}.edf").exists() for state in self.states):
+                    existing.add(subject)
+            self._subject_ids = tuple(sorted(existing))
+        return self._subject_ids
+
+    def generate_examples(
+        self,
+        *,
+        subject_id: str,
+        split: str,
+        resolution: int | None = None,
+        hop_length: int | None = None,
+    ) -> Iterable[SpectrogramExample]:
+        resolution = resolution or self.DEFAULT_RESOLUTION
+        if resolution != self.nsamps:
+            logger.warning(
+                f"Configured resolution ({resolution}) does not match preprocessing nsamps ({self.nsamps}). "
+                f"Using nsamps={self.nsamps} for time-series data."
+            )
+
+        subject_info = self._subject_metadata(subject_id)
+        gender_code = subject_info.gender
+        means = np.asarray(self.norm_stats["channel_means"], dtype=np.float32)[:, None]
+        stds = np.asarray(self.norm_stats["channel_stds"], dtype=np.float32)[:, None]
+
+        for state in self.states:
+            data = self._load_subject_state(subject_id, state)
+            if data is None:
+                continue
+            total_samples = data.shape[1]
+            shift = self.nsamps - self.noverlap
+            if shift <= 0:
+                raise ValueError("Overlap percentage results in non-positive shift size")
+            nblocks = int(pymath.floor((total_samples - self.nsamps) / shift)) + 1
+            if nblocks <= 0:
+                raise ValueError(
+                    f"Recording {subject_id}_{state} too short for nsamps={self.nsamps}"
+                )
+
+            base_folder = Path(subject_id) / f"state-{state}"
+            for block_idx in range(nblocks):
+                block_start = block_idx * shift
+                block_end = block_start + self.nsamps
+                blk = data[:, block_start:block_end]
+
+                normalized_block = (blk.astype(np.float32) - means) / (stds + 1e-8)
+
+                doing_math = int(state == 2)
+
+                metadata = {
+                    "state": state,
+                    "gender": gender_code,
+                    "doingmath": doing_math,
+                    "age": subject_info.age,
+                }
+                metadata["math_condition"] = _encode_condition(metadata)
+
+                relative = base_folder / f"timeseries-{block_idx}.npy"
+                yield SpectrogramExample(
+                    subject_id=subject_id,
+                    relative_path=relative,
+                    metadata=metadata,
+                    writer=lambda path, data=normalized_block.copy(): np.save(path, data),
+                )
+
+    # ------------------------------------------------------------------
+    # Normalization
+    # ------------------------------------------------------------------
+    def _load_or_compute_normalization_stats(self) -> dict:
+        """Load existing normalization stats or compute from all data."""
+        stats_path = self.output_dir / "math_normalization_stats.json"
+        if stats_path.exists():
+            logger.info(f"Loading normalization statistics from {stats_path}")
+            with stats_path.open("r") as handle:
+                return json.load(handle)
+
+        logger.info("Computing normalization statistics from all Math data...")
+        return self._compute_normalization_stats(stats_path)
+
+    def _compute_normalization_stats(self, stats_path: Path) -> dict:
+        """Compute per-channel mean and std from all subjects and states."""
+        n_samples = np.zeros(self.n_channels, dtype=np.int64)
+        means = np.zeros(self.n_channels, dtype=np.float64)
+        m2s = np.zeros(self.n_channels, dtype=np.float64)
+
+        for subject_id in self.subjects():
+            for state in self.states:
+                data = self._load_subject_state(subject_id, state)
+                if data is None:
+                    continue
+                for ch_idx in range(self.n_channels):
+                    channel_data = data[ch_idx, :]
+                    for value in channel_data:
+                        n_samples[ch_idx] += 1
+                        delta = value - means[ch_idx]
+                        means[ch_idx] += delta / n_samples[ch_idx]
+                        delta2 = value - means[ch_idx]
+                        m2s[ch_idx] += delta * delta2
+
+        stds = np.sqrt(m2s / n_samples)
+        stats = {
+            "channel_means": means.tolist(),
+            "channel_stds": stds.tolist(),
+            "n_samples_per_channel": n_samples.tolist(),
+        }
+
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with stats_path.open("w") as handle:
+            json.dump(stats, handle, indent=2)
+
+        logger.info(f"Saved normalization statistics to {stats_path}")
+        return stats
 
 
 class MathDataset:

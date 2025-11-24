@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -330,6 +331,223 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
             hop_length += 8
         return hop_length
 
+    def _load_participants(self) -> pd.DataFrame:
+        info_path = self.data_dir / "participants_info.csv"
+        logger.debug(f"Loading participants from {info_path}")
+        if not info_path.exists():
+            raise FileNotFoundError(f"Missing participants_info.csv at {info_path}")
+        table = pd.read_csv(info_path)
+        table.columns = [col.strip().capitalize() for col in table.columns]
+        return table
+
+    def _subject_metadata(self, subject_id: str) -> SeedSubjectInfo:
+        index = int(subject_id.split("-")[1]) - 1
+        row = self.participants.iloc[index]
+        age = int(row.get("Age", 0))
+        gender_code = _normalize_gender(row.get("Sex", "M"))
+        return SeedSubjectInfo(
+            subject_id=subject_id,
+            index=index,
+            gender=gender_code,
+            age=age,
+        )
+
+    def _discover_sessions(self) -> dict[str, list[tuple[int, Path]]]:
+        sessions: dict[str, list[tuple[int, Path]]] = {}
+        for cnt_path in sorted(self.raw_dir.glob("*.cnt")):
+            stem = cnt_path.stem
+            parts = stem.split("_")
+            if len(parts) < 2:
+                continue
+            subject_num = int(parts[0])
+            session_num = int(parts[1])
+            subject_id = f"sub-{subject_num:02d}"
+            sessions.setdefault(subject_id, []).append((session_num - 1, cnt_path))
+        return sessions
+
+
+class SEEDTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+    """Preprocess SEED EEG recordings into time-domain .npy datasets."""
+
+    DEFAULT_RESOLUTION = 512
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        nsamps: int,
+        ovr_perc: float = 0.0,
+        fs: float = 250,
+    ) -> None:
+        super().__init__(settings, dataset_name="seed")
+        self.nsamps = nsamps
+        self.overlap_fraction = float(ovr_perc)
+        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
+        self.data_dir = self.dataset_settings.root
+        self.raw_dir = self.data_dir / "EEG_raw"
+        self.participants = self._load_participants()
+        self.output_dir = self.dataset_settings.timeseries_output or (
+            self.dataset_settings.output.parent / "timeseries"
+        )
+
+        self.orig_fs = 1000
+        if fs <= 0:
+            raise ValueError("fs must be positive for SEED dataset")
+        decimation_ratio = self.orig_fs / fs
+        if not decimation_ratio.is_integer():
+            raise ValueError("fs must be a positive divisor of 1000 Hz")
+        self.target_fs = fs
+        self.decimation = int(decimation_ratio)
+        self.fs = self.orig_fs / float(self.decimation)
+
+        self.channel_indices = [idx for _, idx in seed_channels]
+        self.n_channels = len(self.channel_indices)
+        self.n_sessions = 3
+        self.n_trials = len(START_SECOND[0])
+
+        self.session_files = self._discover_sessions()
+        self._subject_ids = tuple(sorted(self.session_files.keys()))
+
+        # Load or compute normalization statistics
+        self.norm_stats = self._load_or_compute_normalization_stats()
+
+    # ------------------------------------------------------------------
+    # BaseSpectrogramPreprocessor hooks
+    # ------------------------------------------------------------------
+    def subjects(self) -> Sequence[str]:
+        return self._subject_ids
+
+    def generate_examples(
+        self,
+        *,
+        subject_id: str,
+        split: str,
+        resolution: int | None = None,
+        hop_length: int | None = None,
+    ) -> Iterable[SpectrogramExample]:
+        resolution = resolution or self.DEFAULT_RESOLUTION
+        if resolution != self.nsamps:
+            logger.warning(
+                f"Configured resolution ({resolution}) does not match preprocessing nsamps ({self.nsamps}). "
+                f"Using nsamps={self.nsamps} for time-series data."
+            )
+
+        info = self._subject_metadata(subject_id)
+        for session_index, cnt_path in self.session_files.get(subject_id, []):
+            logger.debug(f"Loading data from {cnt_path}")
+            raw = mne.io.read_raw_cnt(cnt_path, preload=True, verbose="WARNING")
+            data = raw.get_data()[self.channel_indices, :]
+            if self.decimation > 1:
+                data = decimate(data, self.decimation, axis=1, zero_phase=True)
+
+            start_points = START_SECOND[session_index]
+            end_points = END_SECOND[session_index]
+            emotions = TRIAL_EMOTIONS[session_index]
+
+            for trial_index in range(self.n_trials):
+                start = int(start_points[trial_index] * self.fs)
+                end = int(end_points[trial_index] * self.fs)
+                trial_data = data[:, start:end]
+
+                shift = self.nsamps - self.noverlap
+                if shift <= 0:
+                    raise ValueError("Overlap percentage results in non-positive shift size")
+                nblocks = int(np.floor((trial_data.shape[1] - self.nsamps) / shift)) + 1
+                if nblocks <= 0:
+                    continue
+
+                means = np.asarray(self.norm_stats["channel_means"], dtype=np.float32)[:, None]
+                stds = np.asarray(self.norm_stats["channel_stds"], dtype=np.float32)[:, None]
+
+                for block_idx in range(nblocks):
+                    block_start = block_idx * shift
+                    block_end = block_start + self.nsamps
+                    block = trial_data[:, block_start:block_end]
+
+                    # Apply z-score normalization per channel with epsilon for stability
+                    normalized_block = (block.astype(np.float32) - means) / (stds + 1e-8)
+
+                    emotion_id = emotions[trial_index]
+                    metadata = {
+                        "session": session_index,
+                        "trial": trial_index,
+                        "gender": info.gender,
+                        "health": "H",
+                        "age": info.age,
+                        "emotion_id": emotion_id,
+                        "emotion": emotion_id,
+                        "emotion_label": EMOTION_NAMES[emotion_id],
+                    }
+                    metadata["seed_condition"] = _encode_condition(metadata)
+
+                    relative = Path(subject_id) / f"timeseries-s{session_index+1}-t{trial_index}-{block_idx}.npy"
+                    yield SpectrogramExample(
+                        subject_id=subject_id,
+                        relative_path=relative,
+                        metadata=metadata,
+                        writer=lambda path, data=normalized_block.copy(): np.save(path, data),
+                    )
+
+    # ------------------------------------------------------------------
+    # Normalization
+    # ------------------------------------------------------------------
+    def _load_or_compute_normalization_stats(self) -> dict:
+        """Load existing normalization stats or compute from all data."""
+        stats_path = self.output_dir / "seed_normalization_stats.json"
+
+        if stats_path.exists():
+            logger.info(f"Loading normalization statistics from {stats_path}")
+            with stats_path.open("r") as f:
+                return json.load(f)
+
+        logger.info("Computing normalization statistics from all SEED data...")
+        return self._compute_normalization_stats(stats_path)
+
+    def _compute_normalization_stats(self, stats_path: Path) -> dict:
+        """Compute per-channel mean and std from all subjects and sessions."""
+        # Accumulate statistics using Welford's online algorithm
+        n_samples = np.zeros(self.n_channels, dtype=np.int64)
+        means = np.zeros(self.n_channels, dtype=np.float64)
+        m2s = np.zeros(self.n_channels, dtype=np.float64)
+
+        for subject_id in self._subject_ids:
+            logger.debug(f"Processing {subject_id} for normalization stats...")
+            for session_index, cnt_path in self.session_files.get(subject_id, []):
+                raw = mne.io.read_raw_cnt(cnt_path, preload=True, verbose="WARNING")
+                data = raw.get_data()[self.channel_indices, :]
+                if self.decimation > 1:
+                    data = decimate(data, self.decimation, axis=1, zero_phase=True)
+
+                # Update statistics per channel
+                for ch_idx in range(self.n_channels):
+                    channel_data = data[ch_idx, :]
+                    for value in channel_data:
+                        n_samples[ch_idx] += 1
+                        delta = value - means[ch_idx]
+                        means[ch_idx] += delta / n_samples[ch_idx]
+                        delta2 = value - means[ch_idx]
+                        m2s[ch_idx] += delta * delta2
+
+        # Compute final statistics
+        stds = np.sqrt(m2s / n_samples)
+
+        stats = {
+            "channel_means": means.tolist(),
+            "channel_stds": stds.tolist(),
+            "n_samples_per_channel": n_samples.tolist(),
+        }
+
+        # Save to JSON
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with stats_path.open("w") as f:
+            json.dump(stats, f, indent=2)
+
+        logger.info(f"Saved normalization statistics to {stats_path}")
+        return stats
+
+    # ------------------------------------------------------------------
+    # Helpers (reused from SEEDPreprocessor)
+    # ------------------------------------------------------------------
     def _load_participants(self) -> pd.DataFrame:
         info_path = self.data_dir / "participants_info.csv"
         logger.debug(f"Loading participants from {info_path}")

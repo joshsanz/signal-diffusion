@@ -58,6 +58,7 @@ class BaseSpectrogramPreprocessor(ABC):
         self.settings = settings
         self.dataset_name = dataset_name
         self.dataset_settings = settings.dataset(dataset_name)
+        self.output_dir = self.dataset_settings.output
 
     def preprocess(
         self,
@@ -161,7 +162,7 @@ class BaseSpectrogramPreprocessor(ABC):
         return counts
 
     def _reset_output_root(self) -> None:
-        root = self.dataset_settings.output
+        root = self.output_dir
         if root.exists():
             for child in root.iterdir():
                 if child.is_file():
@@ -175,7 +176,7 @@ class BaseSpectrogramPreprocessor(ABC):
         if relative_path.is_absolute():
             raise ValueError("relative_path must be relative, not absolute")
 
-        output_dir = self.dataset_settings.output / split
+        output_dir = self.output_dir / split
         output_path = output_dir / relative_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -220,7 +221,7 @@ class BaseSpectrogramPreprocessor(ABC):
             if not records:
                 continue
             fieldnames = self._collect_fieldnames(records)
-            metadata_path = self.dataset_settings.output / f"{split}-metadata.csv"
+            metadata_path = self.output_dir / f"{split}-metadata.csv"
             metadata_path.parent.mkdir(parents=True, exist_ok=True)
             with metadata_path.open("w", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -231,7 +232,7 @@ class BaseSpectrogramPreprocessor(ABC):
 
         if all_records:
             fieldnames = self._collect_fieldnames(all_records)
-            aggregated = self.dataset_settings.output / "metadata.csv"
+            aggregated = self.output_dir / "metadata.csv"
             with aggregated.open("w", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=fieldnames)
                 writer.writeheader()
@@ -247,4 +248,3 @@ class BaseSpectrogramPreprocessor(ABC):
                     keys.append(key)
                     seen.add(key)
         return keys
-

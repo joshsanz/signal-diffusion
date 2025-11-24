@@ -19,6 +19,7 @@ class DatasetSettings:
     name: str
     root: Path
     output: Path
+    timeseries_output: Path | None = None
     min_db: float | None = None
     max_db: float | None = None
 
@@ -79,6 +80,7 @@ class Settings:
                 raise TypeError(f"Dataset entry '{name}' must be a mapping, got {type(section)!r}")
             raw_root = section.get("root")
             raw_output = section.get("output")
+            raw_timeseries_output = section.get("timeseries_output")
             min_db = _parse_db_bound(section.get("min_db"), dataset=name, field="min_db")
             max_db = _parse_db_bound(section.get("max_db"), dataset=name, field="max_db")
             if min_db is not None and max_db is not None and max_db <= min_db:
@@ -99,10 +101,18 @@ class Settings:
                 default_base=output_root,
                 fallback=output_root / name,
             )
+            timeseries_output = _expand_dataset_path(
+                raw_timeseries_output,
+                dataset=name,
+                base_dir=config_dir,
+                default_base=output_root,
+                fallback=dataset_output.parent / "timeseries",
+            )
             datasets[name] = DatasetSettings(
                 name=name,
                 root=dataset_root,
                 output=dataset_output,
+                timeseries_output=timeseries_output,
                 min_db=min_db,
                 max_db=max_db,
             )

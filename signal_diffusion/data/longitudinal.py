@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math as pymath
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -394,6 +395,199 @@ class LongitudinalPreprocessor(BaseSpectrogramPreprocessor):
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
 
         return data
+
+
+class LongitudinalTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
+    """Preprocess Longitudinal EEG recordings into time-domain .npy datasets."""
+
+    DEFAULT_RESOLUTION = 512
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        nsamps: int,
+        ovr_perc: float = 0.0,
+        fs: float = 125,
+    ) -> None:
+        super().__init__(settings, dataset_name="longitudinal")
+        self.nsamps = nsamps
+        self.overlap_fraction = float(ovr_perc)
+        self.noverlap = int(np.floor(nsamps * self.overlap_fraction))
+
+        self.data_dir = self.dataset_settings.root
+        self.participants = self._load_participants()
+
+        orig_fs = 1000
+        if fs <= 0:
+            raise ValueError("fs must be positive for longitudinal dataset")
+        decimation_ratio = orig_fs / fs
+        if not decimation_ratio.is_integer():
+            raise ValueError("fs must be a positive divisor of 1000 Hz for longitudinal dataset")
+        self.target_fs = fs
+        self.decimation = int(decimation_ratio)
+        self.fs = orig_fs / float(self.decimation)
+
+        self.channel_indices = [idx for _, idx in longitudinal_channels]
+        self.n_channels = len(self.channel_indices)
+        self._subject_ids: Sequence[str] | None = None
+
+        self.norm_stats = self._load_or_compute_normalization_stats()
+        self.output_dir = self.dataset_settings.timeseries_output or (
+            self.dataset_settings.output.parent / "timeseries"
+        )
+
+        logger.info(
+            f"Initialized LongitudinalTimeSeriesPreprocessor: {self.n_channels} channels, "
+            f"{orig_fs}Hz → {self.fs}Hz (decimation={self.decimation})"
+        )
+
+    # ------------------------------------------------------------------
+    # BaseSpectrogramPreprocessor hooks
+    # ------------------------------------------------------------------
+    def subjects(self) -> Sequence[str]:
+        if self._subject_ids is None:
+            subs = [
+                entry.name
+                for entry in self.data_dir.iterdir()
+                if entry.is_dir() and entry.name.startswith("sub-")
+            ]
+            self._subject_ids = tuple(sorted(subs))
+        return self._subject_ids
+
+    def generate_examples(
+        self,
+        *,
+        subject_id: str,
+        split: str,
+        resolution: int | None = None,
+        hop_length: int | None = None,
+    ) -> Iterable[SpectrogramExample]:
+        resolution = resolution or self.DEFAULT_RESOLUTION
+        if resolution != self.nsamps:
+            logger.warning(
+                f"Configured resolution ({resolution}) does not match preprocessing nsamps ({self.nsamps}). "
+                f"Using nsamps={self.nsamps} for time-series data."
+            )
+
+        info = self._subject_metadata(subject_id)
+
+        sessions_to_process: list[str] = []
+        if info.has_session1:
+            sessions_to_process.append("ses-1")
+        if info.has_session2:
+            sessions_to_process.append("ses-2")
+
+        shift = self.nsamps - self.noverlap
+        if shift <= 0:
+            raise ValueError("Overlap percentage results in non-positive shift size")
+
+        means = np.asarray(self.norm_stats["channel_means"], dtype=np.float32)[:, None]
+        stds = np.asarray(self.norm_stats["channel_stds"], dtype=np.float32)[:, None]
+
+        counter = 0
+        for session in sessions_to_process:
+            age = self._get_adjusted_age(subject_id, session, info.baseline_age)
+            recording_year = self._get_recording_year(subject_id, session)
+
+            for acquisition in ["pre", "post"]:
+                data = self._load_subject_data(subject_id, session, "EyesOpen", acquisition)
+                if data is None:
+                    logger.debug(
+                        f"Skipping {subject_id}/{session}/EyesOpen/{acquisition} - file not found"
+                    )
+                    continue
+
+                total_samples = data.shape[1]
+                nblocks = int(pymath.floor((total_samples - self.nsamps) / shift)) + 1
+                if nblocks <= 0:
+                    logger.warning(
+                        f"Recording {subject_id}/{session}/{acquisition} too short "
+                        f"for nsamps={self.nsamps}"
+                    )
+                    continue
+
+                for block_idx in range(nblocks):
+                    block_start = block_idx * shift
+                    block_end = block_start + self.nsamps
+                    blk = data[:, block_start:block_end]
+
+                    normalized_block = (blk.astype(np.float32) - means) / (stds + 1e-8)
+
+                    metadata = {
+                        "gender": info.gender,
+                        "age": age,
+                        "acquisition": acquisition,
+                        "handedness": info.handedness,
+                        "health": "H",  # All longitudinal participants are healthy
+                        "session": session,
+                        "recording_year": recording_year,
+                    }
+
+                    relative = Path(subject_id) / f"timeseries-{counter}.npy"
+                    counter += 1
+                    yield SpectrogramExample(
+                        subject_id=subject_id,
+                        relative_path=relative,
+                        metadata=metadata,
+                        writer=lambda path, data=normalized_block.copy(): np.save(path, data),
+                    )
+
+    # ------------------------------------------------------------------
+    # Normalization
+    # ------------------------------------------------------------------
+    def _load_or_compute_normalization_stats(self) -> dict:
+        """Load existing normalization stats or compute from all data."""
+        stats_path = self.output_dir / "longitudinal_normalization_stats.json"
+        if stats_path.exists():
+            logger.info(f"Loading normalization statistics from {stats_path}")
+            with stats_path.open("r") as handle:
+                return json.load(handle)
+
+        logger.info("Computing normalization statistics from all Longitudinal data...")
+        return self._compute_normalization_stats(stats_path)
+
+    def _compute_normalization_stats(self, stats_path: Path) -> dict:
+        """Compute per-channel mean and std from all subjects/sessions."""
+        n_samples = np.zeros(self.n_channels, dtype=np.int64)
+        means = np.zeros(self.n_channels, dtype=np.float64)
+        m2s = np.zeros(self.n_channels, dtype=np.float64)
+
+        for subject_id in self.subjects():
+            info = self._subject_metadata(subject_id)
+            sessions_to_process: list[str] = []
+            if info.has_session1:
+                sessions_to_process.append("ses-1")
+            if info.has_session2:
+                sessions_to_process.append("ses-2")
+
+            for session in sessions_to_process:
+                for acquisition in ["pre", "post"]:
+                    data = self._load_subject_data(subject_id, session, "EyesOpen", acquisition)
+                    if data is None:
+                        continue
+                    for ch_idx in range(self.n_channels):
+                        channel_data = data[ch_idx, :]
+                        for value in channel_data:
+                            n_samples[ch_idx] += 1
+                            delta = value - means[ch_idx]
+                            means[ch_idx] += delta / n_samples[ch_idx]
+                            delta2 = value - means[ch_idx]
+                            m2s[ch_idx] += delta * delta2
+
+        stds = np.sqrt(m2s / n_samples)
+        stats = {
+            "channel_means": means.tolist(),
+            "channel_stds": stds.tolist(),
+            "n_samples_per_channel": n_samples.tolist(),
+        }
+
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with stats_path.open("w") as handle:
+            json.dump(stats, handle, indent=2)
+
+        logger.info(f"Saved normalization statistics to {stats_path}")
+        return stats
 
 
 class LongitudinalDataset:

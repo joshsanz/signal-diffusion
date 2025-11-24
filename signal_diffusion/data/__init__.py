@@ -11,13 +11,17 @@ from .parkinsons import (
     PARKINSONS_LABELS,
     ParkinsonsDataset,
     ParkinsonsPreprocessor,
+    ParkinsonsTimeSeriesPreprocessor,
 )
 from .seed import (
     SEED_CONDITION_CLASSES,
     SEED_LABELS,
     SEEDDataset,
     SEEDPreprocessor,
+    SEEDTimeSeriesPreprocessor,
 )
+from .math import MathTimeSeriesPreprocessor
+from .longitudinal import LongitudinalTimeSeriesPreprocessor
 
 __all__ = [
     "BaseSpectrogramPreprocessor",
@@ -28,11 +32,15 @@ __all__ = [
     "MATH_LABELS",
     "MATH_CONDITION_CLASSES",
     "ParkinsonsPreprocessor",
+    "ParkinsonsTimeSeriesPreprocessor",
     "ParkinsonsDataset",
     "PARKINSONS_LABELS",
     "PARKINSONS_CONDITION_CLASSES",
     "SEEDPreprocessor",
+    "SEEDTimeSeriesPreprocessor",
     "SEEDDataset",
     "SEED_LABELS",
     "SEED_CONDITION_CLASSES",
+    "MathTimeSeriesPreprocessor",
+    "LongitudinalTimeSeriesPreprocessor",
 ]
