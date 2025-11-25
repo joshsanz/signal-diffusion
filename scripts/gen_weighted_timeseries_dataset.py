@@ -26,7 +26,18 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--config", type=Path, required=True, help="Path to TOML config.")
-    parser.add_argument("--datasets", nargs="+", required=True, help="Datasets to include.")
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Datasets to include (ignored if --all is set).",
+    )
+    parser.add_argument(
+        "--all",
+        dest="use_all_datasets",
+        action="store_true",
+        help="Include all datasets defined in the TOML config.",
+    )
     parser.add_argument("--output", type=Path, required=True, help="Output directory for parquet files.")
     parser.add_argument(
         "--splits",
@@ -268,17 +279,26 @@ def main() -> None:
     np.random.seed(args.seed)
     settings = load_settings(args.config)
 
-    logger.info("Loading metadata for datasets: %s", ", ".join(args.datasets))
-    metadata = load_metadata(settings, args.datasets, args.splits)
+    if args.use_all_datasets:
+        dataset_names = tuple(settings.datasets.keys())
+        if not dataset_names:
+            raise ValueError("No datasets configured in the provided TOML.")
+    else:
+        if not args.datasets:
+            raise ValueError("Specify --datasets or use --all to include every configured dataset.")
+        dataset_names = tuple(args.datasets)
+
+    logger.info("Loading metadata for datasets: %s", ", ".join(dataset_names))
+    metadata = load_metadata(settings, dataset_names, args.splits)
 
     weights = compute_balanced_weights(
         metadata,
-        dataset_order=args.datasets,
+        dataset_order=dataset_names,
         max_sampling_weight=settings.max_sampling_weight,
     )
 
     dataset_roots = {
-        name: resolve_timeseries_root(settings.dataset(name)) for name in args.datasets
+        name: resolve_timeseries_root(settings.dataset(name)) for name in dataset_names
     }
 
     output_dir = args.output
