@@ -1,0 +1,95 @@
+# LocalMamba adapter configuration for time-series diffusion (EEG) data.
+[settings]
+config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
+
+[data]
+data_type = "timeseries"
+
+[dataset]
+name = "seed_timeseries"
+train_split = "train"
+val_split = "val"
+batch_size = 32
+num_workers = 4
+resolution = 2000  # Sequence length (must match preprocessing nsamps)
+num_classes = 0
+
+[dataset.extras]
+gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+# n_eeg_channels will be auto-loaded from normalization stats
+# sequence_length will be auto-populated from resolution
+
+[model]
+name = "localmamba"
+sample_size = 2000
+conditioning = "none"  # none, caption, classes
+
+[model.extras]
+depths = [2, 2, 4, 2]
+dims = [64, 128, 256, 256]
+d_state = 16
+ssm_ratio = 2.0
+ssm_dt_rank = "auto"
+mlp_ratio = 4.0
+scan_directions = ["h", "v", "w7"]
+mapping_width = 256
+mapping_depth = 2
+mapping_dropout_rate = 0.0
+patch_size = [1, 8]  # Asymmetric patches: (channels, timesteps)
+in_channels = 1  # Single channel for time-series (B, 1, n_channels, n_samples)
+out_channels = 1
+dropout_rate = 0.05
+drop_path_rate = 0.05
+cfg_dropout = 0.0
+augment_wrapper = false
+augment_prob = 0.0
+
+[model.lora]
+enabled = false
+
+[objective]
+prediction_type = "vector_field"
+flow_match_timesteps = 1000
+
+[optimizer]
+name = "adamw"
+learning_rate = 3e-4
+weight_decay = 0.01
+betas = [0.9, 0.99]
+
+[scheduler]
+name = "constant_with_warmup"
+warmup_steps = 100
+
+[training]
+seed = 42
+epochs = 100
+mixed_precision = "fp16"
+gradient_checkpointing = true
+gradient_accumulation_steps = 1
+gradient_clip_norm = 1.0
+snr_gamma = 5.0
+
+log_every_steps = 10
+checkpoint_interval = 1000
+checkpoint_total_limit = 3
+
+eval_strategy = "epoch"
+eval_num_steps = 100
+eval_num_examples = 8
+
+ema_use_warmup = true
+ema_inv_gamma = 1
+ema_power = 0.75
+ema_decay = 0.999
+ema_update_after_step = 1000
+
+[logging]
+tensorboard = true
+run_name = "localmamba-timeseries"
+log_dir = "runs/diffusion/tensorboard/localmamba-timeseries"
+
+[inference]
+denoising_steps = 25
+cfg_scale = 1.0
