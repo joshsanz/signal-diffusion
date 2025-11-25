@@ -9,6 +9,7 @@ from .fidelity import (
     calculate_pair_metrics,
     clear_fidelity_cache,
 )
+from .reconstruction import compute_batch_psnr, compute_psnr
 from .vae import VAEGenerationConfig, generate_vae_dataset
 
 __all__ = [
@@ -20,6 +21,8 @@ __all__ = [
     "calculate_metrics_for_extractors",
     "calculate_pair_metrics",
     "clear_fidelity_cache",
+    "compute_batch_psnr",
+    "compute_psnr",
     "VAEGenerationConfig",
     "generate_vae_dataset",
 ]
