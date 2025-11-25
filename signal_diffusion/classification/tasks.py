@@ -17,6 +17,11 @@ _DATASET_LABELS: Mapping[str, LabelRegistry] = {
     "math": MATH_LABELS,
     "parkinsons": PARKINSONS_LABELS,
     "seed": SEED_LABELS,
+    # Timeseries variants use the same label registries
+    "math_timeseries": MATH_LABELS,
+    "parkinsons_timeseries": PARKINSONS_LABELS,
+    "seed_timeseries": SEED_LABELS,
+    "longitudinal_timeseries": SEED_LABELS,  # Longitudinal uses SEED labels
 }
 
 
