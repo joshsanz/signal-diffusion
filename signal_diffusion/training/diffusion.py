@@ -93,6 +93,26 @@ def train(
 
     tokenizer = adapter.create_tokenizer(cfg) if conditioning == "caption" else None
 
+    # Validate time-series configuration
+    if cfg.settings.data_type == "timeseries":
+        # Check that required extras are configured
+        if not hasattr(cfg.dataset, 'extras') or cfg.dataset.extras is None:
+            raise ValueError(
+                "Time-series diffusion requires [dataset.extras] section in config with "
+                "'n_eeg_channels' and 'sequence_length'. Run preprocessing first to get n_eeg_channels."
+            )
+
+        if "n_eeg_channels" not in cfg.dataset.extras:
+            raise ValueError(
+                "Time-series config missing 'n_eeg_channels' in [dataset.extras]. "
+                "Run preprocessing to generate normalization stats, then copy n_eeg_channels value to config."
+            )
+
+        # Auto-populate sequence_length from resolution if not set
+        if "sequence_length" not in cfg.dataset.extras:
+            cfg.dataset.extras["sequence_length"] = cfg.dataset.resolution
+            LOGGER.info(f"Auto-populated sequence_length={cfg.dataset.resolution} from dataset.resolution")
+
     log_with = []
     if getattr(cfg.logging, "tensorboard", False):
         log_with.append(LoggerType.TENSORBOARD)

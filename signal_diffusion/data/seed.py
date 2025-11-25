@@ -504,11 +504,13 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
 
         # Compute final statistics
         stds = np.sqrt(m2s / n_samples)
+        total_samples = int(n_samples.sum())
 
         stats = {
             "channel_means": means.tolist(),
             "channel_stds": stds.tolist(),
-            "n_samples_per_channel": n_samples.tolist(),
+            "n_eeg_channels": self.n_channels,
+            "n_samples_total": total_samples,
         }
 
         # Save to JSON
@@ -517,6 +519,7 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
             json.dump(stats, f, indent=2)
 
         logger.info(f"Saved normalization statistics to {stats_path}")
+        logger.info(f"  Channels: {self.n_channels}, Total samples: {total_samples:,}")
         return stats
 
     # ------------------------------------------------------------------
@@ -656,6 +659,25 @@ class SEEDTimeSeriesDataset(torch.utils.data.Dataset):
         if not metadata_path.exists():
             raise FileNotFoundError(f"Missing metadata file: {metadata_path}")
         self.metadata = pd.read_csv(metadata_path)
+
+        # Load normalization stats to get n_eeg_channels
+        stats_path = self.dataset_settings.output / "seed_normalization_stats.json"
+        if stats_path.exists():
+            with stats_path.open() as f:
+                norm_stats = json.load(f)
+            self.n_eeg_channels = norm_stats.get("n_eeg_channels")
+        else:
+            # Fallback: infer from first sample if stats don't exist
+            if not self.metadata.empty:
+                first_file = self.root / self.metadata.iloc[0]["file_name"]
+                try:
+                    sample = np.load(first_file)
+                    self.n_eeg_channels = sample.shape[0]
+                except FileNotFoundError:
+                    logger.warning(f"Cannot infer n_eeg_channels; missing sample at {first_file}")
+                    self.n_eeg_channels = None
+            else:
+                self.n_eeg_channels = None
 
         if self.expected_length is not None:
             self._validate_signal_length()

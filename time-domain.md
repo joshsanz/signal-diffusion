@@ -155,8 +155,8 @@ class SEEDTimeSeriesPreprocessor(BaseSpectrogramPreprocessor):
         stats = {
             "channel_means": channel_means.tolist(),
             "channel_stds": channel_stds.tolist(),
-            "n_channels": n_channels,
-            "n_samples": int(total_samples),
+            "n_eeg_channels": n_channels,  # Number of EEG channels (e.g., 62 for SEED)
+            "n_samples_total": int(total_samples),  # Total samples across all data
         }
 
         # Save with dataset-specific name
@@ -364,6 +364,12 @@ class SEEDTimeSeriesDataset(torch.utils.data.Dataset):
         self.metadata = pd.read_csv(metadata_path)
         self.root = self.dataset_settings.output
 
+        # Load normalization stats to get n_eeg_channels
+        stats_path = self.dataset_settings.output / "seed_normalization_stats.json"
+        with stats_path.open() as f:
+            norm_stats = json.load(f)
+        self.n_eeg_channels = norm_stats["n_eeg_channels"]
+
         # Validate expected_length against actual data
         if self.expected_length is not None:
             self._validate_signal_length()
@@ -416,11 +422,11 @@ class SEEDTimeSeriesDataset(torch.utils.data.Dataset):
         return sample
 ```
 
-### 3.3 Update Dataset Registry
+### 3.3 Update Dataset Registry and Populate extras
 
 **File**: `signal_diffusion/classification/datasets.py`
 
-Register time-domain datasets:
+Register time-domain datasets and ensure `dataset.extras` is populated with `n_eeg_channels` and `sequence_length`:
 
 ```python
 _DATASET_CLS: Mapping[str, type] = {
@@ -434,6 +440,20 @@ _DATASET_CLS: Mapping[str, type] = {
     "math_timeseries": MathTimeSeriesDataset,
     "longitudinal_timeseries": LongitudinalTimeSeriesDataset,
 }
+
+def build_dataset(...):
+    """Build dataset and populate extras for time-series."""
+    dataset_cls = _DATASET_CLS[dataset_name]
+    dataset = dataset_cls(...)
+
+    # For time-series datasets, populate extras with required metadata
+    if "timeseries" in dataset_name and hasattr(dataset, 'n_eeg_channels'):
+        # These are read from normalization stats during dataset init
+        config.dataset.extras["n_eeg_channels"] = dataset.n_eeg_channels
+        # sequence_length should match config.dataset.resolution
+        config.dataset.extras["sequence_length"] = config.dataset.resolution
+
+    return dataset
 ```
 
 **File**: `signal_diffusion/data/__init__.py`
@@ -531,7 +551,10 @@ Call this in `signal_diffusion/training/classification.py` after loading config.
 
 **Files**: `signal_diffusion/diffusion/models/{dit,hourglass,localmamba}.py`
 
-Each adapter needs a helper to create noise tensors with appropriate shape. For time-series, add a channel dimension to create (B, 1, n_channels, n_samples) format:
+Each adapter needs a helper to create noise tensors with appropriate shape. For time-series data, the shape is `(B, in_channels, n_eeg_channels, sequence_length)` where:
+- `in_channels` comes from `model.extras.in_channels` (typically 1, the artificial channel dimension added by collate_fn)
+- `n_eeg_channels` is retrieved from `dataset.extras["n_eeg_channels"]` (computed from preprocessing, e.g., 62 for SEED)
+- `sequence_length` comes from `dataset.extras["sequence_length"]` (should match `dataset.resolution`)
 
 ```python
 def _create_noise_tensor(
@@ -544,12 +567,24 @@ def _create_noise_tensor(
     """Create noise tensor with shape appropriate for data type."""
 
     if config.settings.data_type == "timeseries":
-        # Time-series: (B, 1, n_channels, n_samples) - add channel dimension
+        # Time-series: (B, in_channels, n_eeg_channels, sequence_length)
+        # in_channels: from model config (typically 1, may be >1 if augmented)
+        # n_eeg_channels: EEG channels (dataset-specific, e.g., 62 for SEED)
+        # sequence_length: temporal dimension (from config.dataset.resolution)
         # This allows reusing 2D models with asymmetric patching
-        n_channels = config.dataset.extras.get("n_channels", 62)
-        length = config.dataset.resolution
+        in_channels = self._extras.in_channels
+        n_eeg_channels = config.dataset.extras.get("n_eeg_channels")
+        sequence_length = config.dataset.extras.get("sequence_length")
+
+        if n_eeg_channels is None or sequence_length is None:
+            raise ValueError(
+                f"Time-series config missing required extras: "
+                f"n_eeg_channels={n_eeg_channels}, sequence_length={sequence_length}. "
+                f"Ensure dataset.extras is populated during build_dataset()."
+            )
+
         return torch.randn(
-            (num_samples, 1, n_channels, length),
+            (num_samples, in_channels, n_eeg_channels, sequence_length),
             device=device,
             dtype=dtype,
         )
@@ -1110,12 +1145,18 @@ resolution = 2000  # sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
+# REQUIRED for time-series: populated from dataset during build_dataset()
+# n_eeg_channels = 62  # Auto-populated from normalization stats
+# sequence_length = 2000  # Auto-populated from resolution
 gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 
 [model]
 name = "dit"
 sample_size = 2000
 conditioning = "none"
+
+[model.extras]
+in_channels = 1  # Artificial channel dimension added by collate_fn
 
 [objective]
 prediction_type = "vector_field"
@@ -1273,22 +1314,36 @@ uv run python -m signal_diffusion.training.diffusion \
 
 1. **Normalization**: Per-channel z-score computed BEFORE preprocessing, applied during save
    - Stats saved with dataset-specific naming: `{dataset}_normalization_stats.json`
+   - Stats include `n_eeg_channels` (actual EEG channel count, e.g., 62 for SEED)
    - Reuse existing stats if available (don't recompute)
    - Normalized data stored in .npy files (no runtime normalization needed)
-2. **Inheritance**: Time-series preprocessors inherit from `BaseSpectrogramPreprocessor` (pragmatic)
-3. **File format**: Uncompressed .npy (float32)
-4. **Configuration**: `data_type` at settings level (not model level)
-5. **Transforms**: New centralized module at `signal_diffusion/data/transforms/`
+2. **EEG Channel Count** (`n_eeg_channels`):
+   - Computed during preprocessing and stored in normalization stats
+   - Loaded by time-series dataset classes during `__init__`
+   - Populated into `dataset.extras["n_eeg_channels"]` by `build_dataset()`
+   - Used by diffusion adapters to create correct noise tensor shape
+3. **Sequence Length** (`sequence_length`):
+   - Matches `dataset.resolution` in config (e.g., 2000 samples)
+   - Populated into `dataset.extras["sequence_length"]` by `build_dataset()`
+   - Used by diffusion adapters to create correct noise tensor shape
+4. **In-Channels** (`in_channels`):
+   - Set in `[model.extras]` for diffusion configs (typically 1)
+   - Set in `[model]` for classification configs as `input_channels` (matches `n_eeg_channels`)
+5. **Inheritance**: Time-series preprocessors inherit from `BaseSpectrogramPreprocessor` (pragmatic)
+6. **File format**: Uncompressed .npy (float32)
+7. **Configuration**: `data_type` at settings level (not model level)
+8. **Transforms**: New centralized module at `signal_diffusion/data/transforms/`
    - No TimeReverse (removed per feedback)
    - Configurable Gaussian noise std (set to 0 to disable)
-6. **Storage**: Separate directories (`seed/timeseries/` vs `seed/stfts/`)
-7. **Dataset keys**: Use `'signal'` key (not `'image'`) for time-series clarity
-8. **Diffusion shapes**: Add channel dimension (B, 1, H, W) for compatibility with 2D models
-9. **Patching**: Asymmetric patches (1×8) for high aspect ratio signals (e.g., 62×2000)
-10. **Validation**:
+9. **Storage**: Separate directories (`seed/timeseries/` vs `seed/stfts/`)
+10. **Dataset keys**: Use `'signal'` key (not `'image'`) for time-series clarity
+11. **Diffusion shapes**: Shape is `(B, in_channels, n_eeg_channels, sequence_length)` for time-series
+12. **Patching**: Asymmetric patches (1×8) for high aspect ratio signals (e.g., 62×2000)
+13. **Validation**:
     - Error on Stable Diffusion + time-series
     - Warn if configured resolution doesn't match actual signal length
     - Warn on backbone/data_type mismatches
+    - Error if `dataset.extras` missing required keys (`n_eeg_channels`, `sequence_length`)
 
 ---
 
@@ -1303,6 +1358,56 @@ uv run python -m signal_diffusion.training.diffusion \
 7. **Phase 5.1-5.3** (Diffusion) - Generative modeling
 8. **Phase 6** (Meta-dataset) - Advanced use case
 9. **Phase 7** (Testing & docs) - Validation
+
+---
+
+## Configuration Flow for Time-Series Data
+
+### Data Flow from Preprocessing → Diffusion
+
+```
+1. Phase 2: Preprocessing
+   SEEDTimeSeriesPreprocessor._compute_normalization_stats()
+   └─> Writes: seed_normalization_stats.json with:
+       {
+         "channel_means": [...],
+         "channel_stds": [...],
+         "n_eeg_channels": 62,        ← Actual EEG channel count
+         "n_samples_total": 123456
+       }
+
+2. Phase 3: Dataset Loading
+   SEEDTimeSeriesDataset.__init__()
+   └─> Reads: seed_normalization_stats.json
+   └─> Stores: self.n_eeg_channels = 62
+
+3. Phase 3.3: build_dataset()
+   └─> Populates config.dataset.extras:
+       {
+         "n_eeg_channels": 62,        ← From dataset.n_eeg_channels
+         "sequence_length": 2000,     ← From config.dataset.resolution
+         "gaussian_noise_std": 0.01
+       }
+
+4. Phase 5.1: Diffusion _create_noise_tensor()
+   └─> Reads from:
+       - model.extras.in_channels → 1
+       - dataset.extras["n_eeg_channels"] → 62
+       - dataset.extras["sequence_length"] → 2000
+   └─> Creates: torch.randn((B, 1, 62, 2000))
+```
+
+### Configuration Parameters by Source
+
+| Parameter | Phase | Source | Used By |
+|-----------|-------|--------|---------|
+| `n_eeg_channels` | 2 (preprocessing) | Computed from raw EEG data | Stored in normalization stats |
+| `n_eeg_channels` | 3 (dataset) | Loaded from normalization stats | Populated to `dataset.extras` |
+| `n_eeg_channels` | 5 (diffusion) | Retrieved from `dataset.extras` | Noise tensor shape |
+| `sequence_length` | Config | Set in `[dataset] resolution` | Populated to `dataset.extras` |
+| `sequence_length` | 5 (diffusion) | Retrieved from `dataset.extras` | Noise tensor shape |
+| `in_channels` | Config | Set in `[model.extras]` | Noise tensor shape, adapter initialization |
+| `input_channels` | Config (classification) | Set in `[model]` | Classification backbone initialization |
 
 ---
 

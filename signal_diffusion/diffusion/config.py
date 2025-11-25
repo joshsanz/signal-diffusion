@@ -29,6 +29,7 @@ class DatasetConfig:
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
     num_classes: int = 0
+    extras: MutableMapping[str, Any] = field(default_factory=dict)
 
 
 

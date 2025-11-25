@@ -97,8 +97,14 @@ def build_dataset(
     tasks: Sequence[str],
     transform=None,
     target_format: str = "dict",
+    extras: dict[str, Any] | None = None,
 ):
-    """Construct a dataset instance compatible with the shared data layer."""
+    """Construct a dataset instance compatible with the shared data layer.
+
+    For time-series datasets, extras dict is used bidirectionally:
+    - Input: Can contain 'expected_length' to validate signal length
+    - Output: Populated with 'n_eeg_channels' and 'sequence_length' from dataset
+    """
 
     # Check if dataset_name is a path (for reweighted meta datasets)
     dataset_path = Path(dataset_name).expanduser()
@@ -129,10 +135,30 @@ def build_dataset(
     if resolved_transform is None and not is_timeseries:
         resolved_transform = default_transform(settings.output_type)
 
-    return dataset_cls(
-        settings=settings,
-        split=split,
-        tasks=tuple(tasks),
-        transform=resolved_transform,
-        target_format=target_format,
-    )
+    # Prepare constructor kwargs
+    kwargs = {
+        "settings": settings,
+        "split": split,
+        "tasks": tuple(tasks),
+        "transform": resolved_transform,
+        "target_format": target_format,
+    }
+
+    # For time-series datasets, add expected_length from extras if provided
+    if is_timeseries and extras:
+        if "expected_length" in extras:
+            kwargs["expected_length"] = extras["expected_length"]
+
+    # Instantiate dataset
+    dataset = dataset_cls(**kwargs)
+
+    # For time-series datasets, populate extras with metadata
+    if is_timeseries and extras is not None:
+        if hasattr(dataset, 'n_eeg_channels') and dataset.n_eeg_channels is not None:
+            extras["n_eeg_channels"] = dataset.n_eeg_channels
+        # Also store sequence_length from expected_length if available
+        if "sequence_length" not in extras and hasattr(dataset, 'expected_length'):
+            if dataset.expected_length is not None:
+                extras["sequence_length"] = dataset.expected_length
+
+    return dataset

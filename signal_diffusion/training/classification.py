@@ -214,6 +214,7 @@ class DatasetConfig:
     num_workers: int = 4
     pin_memory: bool = True
     shuffle: bool = True
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -506,19 +507,37 @@ def train_from_config(
         model = torch.compile(model, mode=training_cfg.compile_mode)
         LOGGER.info("Model compilation successful")
 
+    # Initialize extras dict from dataset config for time-series metadata
+    extras = dict(dataset_cfg.extras) if hasattr(dataset_cfg, 'extras') and dataset_cfg.extras else {}
+
+    # For time-series datasets, add resolution as expected_length for signal validation
+    if "_timeseries" in dataset_cfg.name or "timeseries" in dataset_cfg.name.lower():
+        if "expected_length" not in extras and hasattr(dataset_cfg, 'resolution'):
+            extras["expected_length"] = dataset_cfg.resolution
+
     train_dataset = build_dataset(
         settings,
         dataset_name=dataset_cfg.name,
         split=dataset_cfg.train_split,
         tasks=tasks,
         target_format="dict",
+        extras=extras,
     )
+
+    # Propagate populated extras back to dataset_cfg for backbone initialization
+    if extras:
+        if not hasattr(dataset_cfg, 'extras'):
+            dataset_cfg.extras = {}
+        for key, value in extras.items():
+            dataset_cfg.extras[key] = value
+
     val_dataset = build_dataset(
         settings,
         dataset_name=dataset_cfg.name,
         split=dataset_cfg.val_split,
         tasks=tasks,
         target_format="dict",
+        extras=extras,
     )
 
     # Configure DataLoader settings for optimal training performance.

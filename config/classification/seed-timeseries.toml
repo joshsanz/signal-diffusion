@@ -17,6 +17,10 @@ batch_size = 32
 num_workers = 2
 shuffle = true
 
+[dataset.extras]
+n_eeg_channels = 20
+sequence_length = 2000  # Number of time points per sample
+
 [model]
 backbone = "cnn_1d"
 input_channels = 20  # 20 selected EEG channels
