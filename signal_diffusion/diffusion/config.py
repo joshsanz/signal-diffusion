@@ -208,6 +208,13 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         raise ValueError("Dataset configuration requires 'name' or 'identifier'")
     cache_dir = _path_from_value(section.get("cache_dir"))
 
+    extras_section = section.get("extras", {})
+    if extras_section is None:
+        extras_section = {}
+    if not isinstance(extras_section, Mapping):
+        raise TypeError("dataset.extras must be a mapping if provided")
+    extras = dict(extras_section)
+
     def _opt(column: str | None) -> str | None:
         if column in (None, ""):
             return None
@@ -240,6 +247,7 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         max_train_samples=section.get("max_train_samples"),
         max_eval_samples=section.get("max_eval_samples"),
         num_classes=int(section.get("num_classes", 0) or 0),
+        extras=extras,
     )
 
 
