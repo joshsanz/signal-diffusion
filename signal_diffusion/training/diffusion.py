@@ -93,25 +93,64 @@ def train(
 
     tokenizer = adapter.create_tokenizer(cfg) if conditioning == "caption" else None
 
-    # Validate time-series configuration
-    if cfg.settings.data_type == "timeseries":
-        # Check that required extras are configured
-        if not hasattr(cfg.dataset, 'extras') or cfg.dataset.extras is None:
+    is_timeseries = bool(cfg.settings and getattr(cfg.settings, "data_type", "") == "timeseries")
+
+    if is_timeseries:
+        extras = cfg.dataset.extras
+        if extras is None:
             raise ValueError(
                 "Time-series diffusion requires [dataset.extras] section in config with "
                 "'n_eeg_channels' and 'sequence_length'. Run preprocessing first to get n_eeg_channels."
             )
 
-        if "n_eeg_channels" not in cfg.dataset.extras:
-            raise ValueError(
-                "Time-series config missing 'n_eeg_channels' in [dataset.extras]. "
-                "Run preprocessing to generate normalization stats, then copy n_eeg_channels value to config."
-            )
+        settings = cfg.settings
+        dataset_key = cfg.dataset.identifier
+        dataset_base = dataset_key.replace("_timeseries", "")
+        lookup_key = dataset_key if dataset_key in settings.datasets else dataset_base
+        dataset_settings = None
+        if cfg.settings_config:
+            try:
+                dataset_settings = settings.dataset(lookup_key)
+            except KeyError:
+                LOGGER.warning(
+                    "Dataset '%s' not found in settings; skipping normalization stats lookup",
+                    lookup_key,
+                )
 
-        # Auto-populate sequence_length from resolution if not set
-        if "sequence_length" not in cfg.dataset.extras:
-            cfg.dataset.extras["sequence_length"] = cfg.dataset.resolution
-            LOGGER.info(f"Auto-populated sequence_length={cfg.dataset.resolution} from dataset.resolution")
+        if dataset_settings is not None:
+            stats_file = f"{dataset_base}_normalization_stats.json"
+            stats_path = dataset_settings.output / stats_file
+            if stats_path.exists():
+                try:
+                    with stats_path.open("r", encoding="utf-8") as f:
+                        norm_stats = json.load(f)
+                    if "n_eeg_channels" not in extras:
+                        n_channels = norm_stats.get("n_eeg_channels")
+                        if n_channels is not None:
+                            extras["n_eeg_channels"] = n_channels
+                            LOGGER.info(
+                                "Loaded n_eeg_channels=%s from %s",
+                                extras["n_eeg_channels"],
+                                stats_path.name,
+                            )
+                except (OSError, json.JSONDecodeError) as exc:
+                    LOGGER.warning("Failed to load normalization stats from %s: %s", stats_path, exc)
+            else:
+                LOGGER.warning(
+                    "Normalization stats not found at %s. "
+                    "Run preprocessing first or set 'n_eeg_channels' in [dataset.extras].",
+                    stats_path,
+                )
+
+        if "sequence_length" not in extras:
+            extras["sequence_length"] = cfg.dataset.resolution
+            LOGGER.info("Auto-populated sequence_length=%s from dataset.resolution", cfg.dataset.resolution)
+
+        if "n_eeg_channels" not in extras:
+            raise ValueError(
+                "Time-series diffusion requires 'n_eeg_channels' in [dataset.extras]. "
+                "Run preprocessing to generate normalization stats or set the value manually."
+            )
 
     log_with = []
     if getattr(cfg.logging, "tensorboard", False):
@@ -564,6 +603,48 @@ def train(
                         update_best_checkpoints(kid_score, global_step)
                         if kid_score is not None:
                             postfix_payload["kid"] = f"{kid_score:.4f}"
+
+                    if (
+                        is_timeseries
+                        and val_loader is not None
+                        and accelerator.is_main_process
+                    ):
+                        from signal_diffusion.metrics import compute_batch_psnr
+
+                        with torch.no_grad():
+                            with ema_weights_context(accelerator, modules):
+                                samples = adapter.generate_samples(
+                                    accelerator, cfg, modules, num_images=16
+                                )
+
+                            try:
+                                real_batch = next(iter(val_loader))
+                            except StopIteration:
+                                real_batch = None
+
+                        if real_batch is not None and hasattr(real_batch, "pixel_values"):
+                            num_samples = min(samples.shape[0], real_batch.pixel_values.shape[0])
+                            real_samples = real_batch.pixel_values[:num_samples].to(accelerator.device)
+                            generated_samples = samples[:num_samples]
+                            mean_psnr, std_psnr = compute_batch_psnr(real_samples, generated_samples)
+                            accelerator.log(
+                                {
+                                    "validation/timeseries_psnr": mean_psnr,
+                                    "validation/timeseries_psnr_std": std_psnr,
+                                    "validation/timeseries_mean": generated_samples.mean().item(),
+                                    "validation/timeseries_std": generated_samples.std().item(),
+                                    "validation/timeseries_min": generated_samples.min().item(),
+                                    "validation/timeseries_max": generated_samples.max().item(),
+                                },
+                                step=global_step,
+                            )
+                            LOGGER.info(
+                                "Time-series validation: PSNR=%.2f+/-%.2f dB, mean=%.3f, std=%.3f",
+                                mean_psnr,
+                                std_psnr,
+                                float(generated_samples.mean()),
+                                float(generated_samples.std()),
+                            )
                 if accelerator.is_main_process and progress_bar is not None:
                     progress_bar.update(1)
                     if postfix_payload:
