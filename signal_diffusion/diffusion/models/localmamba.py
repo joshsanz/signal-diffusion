@@ -169,6 +169,47 @@ class LocalMambaAdapter:
         )
         return extras
 
+    def _create_noise_tensor(
+        self,
+        num_samples: int,
+        cfg: DiffusionConfig,
+        modules: DiffusionModules,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Create noise tensor for sampling, handling time-series shapes."""
+        model_config = getattr(modules.denoiser, "config", None)
+        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
+
+        if cfg.settings and getattr(cfg.settings, "data_type", "") == "timeseries":
+            n_eeg_channels = cfg.dataset.extras.get("n_eeg_channels")
+            sequence_length = cfg.dataset.extras.get("sequence_length")
+            if n_eeg_channels is None or sequence_length is None:
+                raise ValueError(
+                    "Time-series config missing required extras: "
+                    f"n_eeg_channels={n_eeg_channels}, sequence_length={sequence_length}"
+                )
+
+            return torch.randn(
+                (num_samples, channels, n_eeg_channels, sequence_length),
+                generator=generator,
+                device=device,
+                dtype=dtype,
+            )
+
+        sample_size = getattr(model_config, "sample_size", None)
+        if sample_size is None:
+            sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
+
+        return torch.randn(
+            (num_samples, channels, sample_size, sample_size),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        )
+
     def _make_model(self, cfg: DiffusionConfig, extras: LocalMambaExtras) -> LocalMamba2DModel:
         """Construct LocalMamba2DModel from config and extras."""
         dropout_rates = (
@@ -478,12 +519,16 @@ class LocalMambaAdapter:
 
         model_config = getattr(modules.denoiser, "config", None)
         channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
-        sample_size = getattr(model_config, "sample_size", None)
-        if sample_size is None:
-            sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
         vae = modules.vae
 
-        sample = torch.randn((num_images, channels, sample_size, sample_size), generator=generator, device=device, dtype=dtype)
+        sample = self._create_noise_tensor(
+            num_images,
+            cfg,
+            modules,
+            device=device,
+            dtype=dtype,
+            generator=generator,
+        )
         dropout_label = self._num_dataset_classes
 
         class_labels, unconditional_labels, classifier_free = self._prepare_sampling_conditioning(
