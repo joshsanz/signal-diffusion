@@ -1,8 +1,8 @@
 """Generate a re-weighted meta time-series dataset as Hugging Face parquet files."""
 from __future__ import annotations
-from rich.traceback import install
 
-install(show_locals=True)
+# from rich.traceback import install
+# install(show_locals=False)
 
 import argparse
 import importlib
@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preprocess", action="store_true", help="Run time-series preprocessors before sampling.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output directory if present.")
     parser.add_argument("--skip-plot", action="store_true", help="Skip saving the weight diagnostic plot.")
+    parser.add_argument(
+        "--writer-batch-size",
+        type=int,
+        default=None,
+        help="Optional writer batch size for Hugging Face dataset creation to avoid Arrow 2GB overflow.",
+    )
     return parser.parse_args()
 
 
@@ -228,7 +234,16 @@ def build_features(sample: Mapping[str, Any]) -> Features:
     return Features(feature_defs)
 
 
-def build_hf_dataset(samples: list[dict[str, Any]]) -> Dataset:
+def _estimate_writer_batch_size(sample: Mapping[str, Any], target_bytes: int = 512 * 1024 * 1024) -> int:
+    """Derive a conservative writer batch size to stay under Arrow's 2GB limit."""
+    timeseries = sample.get("timeseries")
+    ts_bytes = int(timeseries.nbytes) if isinstance(timeseries, np.ndarray) else 0
+    approx_sample_bytes = max(ts_bytes, 1) + 1024  # pad for metadata overhead
+    batch_size = max(1, target_bytes // approx_sample_bytes)
+    return int(batch_size)
+
+
+def build_hf_dataset(samples: list[dict[str, Any]], *, writer_batch_size: int | None = None) -> tuple[Dataset, int]:
     if not samples:
         raise ValueError("No samples were generated for this split.")
     first = samples[0]
@@ -238,13 +253,15 @@ def build_hf_dataset(samples: list[dict[str, Any]]) -> Dataset:
             raise ValueError("Inconsistent timeseries shapes detected across samples: "
                              "expected %s but got %s", ts_shape, tuple(sample["timeseries"].shape))
     features = build_features(first)
+    resolved_batch_size = writer_batch_size or _estimate_writer_batch_size(first)
     columns: dict[str, list[Any]] = {key: [] for key in first.keys()}
 
     for sample in samples:
         for key, value in sample.items():
             columns[key].append(value)
 
-    return Dataset.from_dict(columns, features=features)
+    dataset = Dataset.from_dict(columns, features=features, writer_batch_size=resolved_batch_size)
+    return dataset, resolved_batch_size
 
 
 def main() -> None:
@@ -334,9 +351,10 @@ def main() -> None:
             logger.warning("No samples generated for split '%s'; skipping write.", split)
             continue
 
-        dataset = build_hf_dataset(samples)
+        dataset, writer_batch_size = build_hf_dataset(samples, writer_batch_size=args.writer_batch_size)
         out_path = output_dir / f"{split}.parquet"
-        dataset.to_parquet(out_path)
+        logger.info("Saving split '%s' with writer_batch_size=%d", split, writer_batch_size)
+        dataset.to_parquet(out_path, batch_size=writer_batch_size)
         parquet_paths[split] = out_path
         logger.info("Saved %d samples to %s", len(dataset), out_path)
 
