@@ -17,6 +17,7 @@ from signal_diffusion.log_setup import get_logger
 
 logger = get_logger(__name__)
 
+DEFAULT_DATASETS: tuple[str, ...] = ("math", "parkinsons", "seed", "longitudinal")
 DEFAULT_SPLITS: tuple[str, ...] = ("train", "val", "test")
 
 
@@ -25,11 +26,11 @@ def parse_args() -> argparse.Namespace:
         description="Create a weighted meta time-series dataset as parquet files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", type=Path, required=True, help="Path to TOML config.")
+    parser.add_argument("--config", type=Path, default=None, help="Path to TOML config.")
     parser.add_argument(
         "--datasets",
         nargs="+",
-        default=None,
+        default=list(DEFAULT_DATASETS),
         help="Datasets to include (ignored if --all is set).",
     )
     parser.add_argument(
@@ -45,7 +46,7 @@ def parse_args() -> argparse.Namespace:
         default=list(DEFAULT_SPLITS),
         help="Dataset splits to materialise (must correspond to existing metadata files).",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Seed (reserved for future stochastic steps).")
+    parser.add_argument("--seed", type=int, default=205, help="Seed (reserved for future stochastic steps).")
     return parser.parse_args()
 
 
