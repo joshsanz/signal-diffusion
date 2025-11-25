@@ -1664,6 +1664,12 @@ def train(
         "--metrics-summary-path",
         help="Optional path to write a summary of key metrics as JSON.",
     ),
+    max_steps: int | None = typer.Option(
+        None,
+        "--max-steps",
+        "--max_steps",
+        help="Override training.max_steps from the config.",
+    ),
 ) -> None:
     """Train a classifier experiment from a TOML configuration."""
 
@@ -1672,6 +1678,8 @@ def train(
         experiment.training.output_dir = output_dir.resolve()
     if metrics_summary_path is not None:
         experiment.training.metrics_summary_path = metrics_summary_path.resolve()
+    if max_steps is not None:
+        experiment.training.max_steps = max_steps
     summary = train_from_config(experiment)
     print(f"Training complete. Best checkpoint saved at {summary.best_checkpoint}")
 

@@ -22,6 +22,14 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to the configuration TOML file.")
     parser.add_argument("--output_dir", type=str, default=None, help="Optional: Path to the output directory.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Optional: Path to a checkpoint directory to resume training from.")
+    parser.add_argument(
+        "--max_steps",
+        "--max-train-steps",
+        dest="max_steps",
+        type=int,
+        default=None,
+        help="Override configured max steps (classification: training.max_steps, diffusion: training.max_train_steps).",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser().resolve()
@@ -47,12 +55,19 @@ def main():
         experiment_config = load_experiment_config(config_path)
         if output_dir:
             experiment_config.training.output_dir = output_dir
+        if args.max_steps is not None:
+            experiment_config.training.max_steps = args.max_steps
         train_from_config(experiment_config)
 
     elif trainer_type == "diffusion":
         from signal_diffusion.training.diffusion import train as train_diffusion
 
-        train_diffusion(config_path=config_path, output_dir=output_dir, resume_from_checkpoint=args.resume_from_checkpoint)
+        train_diffusion(
+            config_path=config_path,
+            output_dir=output_dir,
+            resume_from_checkpoint=args.resume_from_checkpoint,
+            max_train_steps=args.max_steps,
+        )
 
     else:
         raise ValueError(f"Unknown trainer type: '{trainer_type}'. Must be 'classification' or 'diffusion'.")

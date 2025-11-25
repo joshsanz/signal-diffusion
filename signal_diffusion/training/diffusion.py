@@ -63,9 +63,17 @@ def train(
     config_path: Path = typer.Argument(..., help="Path to diffusion training TOML"),
     output_dir: Optional[Path] = typer.Option(None, help="Override the configured output directory"),
     resume_from_checkpoint: Optional[Path] = typer.Option(None, help="Path to a checkpoint directory to resume training from"),
+    max_train_steps: Optional[int] = typer.Option(
+        None,
+        "--max-train-steps",
+        "--max_train_steps",
+        help="Override training.max_train_steps from the config.",
+    ),
 ) -> None:
     torch.multiprocessing.set_start_method('spawn', force=True)
     cfg = load_diffusion_config(config_path)
+    if max_train_steps is not None:
+        cfg.training.max_train_steps = max_train_steps
     run_dir = resolve_output_dir(cfg, config_path, output_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg.training.output_dir = run_dir
