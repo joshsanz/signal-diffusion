@@ -170,6 +170,19 @@ class DiffusionConfig:
                 "For timeseries data, use 'dit', 'hourglass', or 'localmamba'."
             )
 
+        # DiT does not support asymmetric patch sizes for time-series inputs
+        if (
+            hasattr(self.settings, "data_type")
+            and self.settings.data_type == "timeseries"
+            and self.model.name == "dit"
+        ):
+            patch_size = self.model.extras.get("patch_size")
+            if isinstance(patch_size, (list, tuple)):
+                raise ValueError(
+                    "DiT adapter does not support asymmetric patches for time-series. "
+                    "Use 'hourglass' or 'localmamba' instead for patch sizes like [1, 8]."
+                )
+
 
 def _path_from_value(value: Any) -> Path | None:
     if value in (None, ""):
@@ -395,7 +408,7 @@ def load_diffusion_config(path: str | Path) -> DiffusionConfig:
     settings_section = mapping.get("settings", {})
     settings_config = _path_from_value(settings_section.get("config")) if isinstance(settings_section, Mapping) else None
 
-    return DiffusionConfig(
+    cfg = DiffusionConfig(
         dataset=dataset_cfg,
         model=model_cfg,
         objective=objective_cfg,
@@ -407,3 +420,15 @@ def load_diffusion_config(path: str | Path) -> DiffusionConfig:
         settings_config=settings_config,
         source_path=config_path,
     )
+
+    if settings_config:
+        from signal_diffusion.config import load_settings
+
+        cfg.settings = load_settings(settings_config)
+        data_section = mapping.get("data", {})
+        if isinstance(data_section, Mapping) and "data_type" in data_section:
+            cfg.settings.data_type = str(data_section["data_type"])
+
+    cfg.validate()
+
+    return cfg
