@@ -1021,74 +1021,6 @@ if __name__ == "__main__":
     main()
 ```
 
-### 6.2 Create Meta Time-Domain Dataset Class
-
-**New file**: `signal_diffusion/data/meta_timeseries.py`
-
-```python
-"""Meta time-series dataset for multi-dataset training."""
-
-import torch
-from datasets import load_from_disk
-from pathlib import Path
-from typing import Optional
-
-from signal_diffusion.data.specs import META_LABELS
-
-
-class MetaTimeSeriesDataset(torch.utils.data.Dataset):
-    """Meta dataset for time-series from multiple sources."""
-
-    def __init__(
-        self,
-        data_dir: Path,
-        split: str,
-        tasks: tuple[str, ...],
-        transform: Optional[torch.nn.Module] = None,
-    ):
-        self.data_dir = Path(data_dir)
-        self.split = split
-        self.tasks = tasks
-        self.transform = transform
-
-        # Load HF dataset
-        dataset_dict = load_from_disk(str(self.data_dir))
-        self.dataset = dataset_dict[split]
-
-    def __len__(self) -> int:
-        return len(self.dataset)
-
-    def __getitem__(self, index: int):
-        row = self.dataset[index]
-
-        # Get time-series
-        timeseries = torch.from_numpy(row["timeseries"]).float()
-
-        # Apply transform
-        if self.transform:
-            timeseries = self.transform(timeseries)
-
-        # Encode targets
-        targets = {}
-        for task_name in self.tasks:
-            if task_name in META_LABELS:
-                targets[task_name] = META_LABELS.encode(task_name, row)
-
-        return {
-            "signal": timeseries,  # Use 'signal' key for time-series
-            "targets": targets,
-            "metadata": {k: v for k, v in row.items() if k != "timeseries"},
-        }
-```
-
-Register in `signal_diffusion/classification/datasets.py`:
-
-```python
-_DATASET_CLS["meta_timeseries"] = MetaTimeSeriesDataset
-```
-
----
-
 ## Phase 7: Integration & Testing
 
 ### 7.1 Create Example Configs
@@ -1263,7 +1195,7 @@ uv run python -m signal_diffusion.training.diffusion \
 6. **Meta-Dataset**
    - [ ] Generate weighted time-series dataset
    - [ ] Verify parquet files created
-   - [ ] Load MetaTimeSeriesDataset
+   - [ ] Load parquet splits via `datasets` (Array2D features)
    - [ ] Train classifier on meta dataset
 
 7. **Backward Compatibility**
@@ -1275,18 +1207,17 @@ uv run python -m signal_diffusion.training.diffusion \
 
 ## Implementation Summary
 
-### New Files (11)
+### New Files (9)
 
 1. `signal_diffusion/data/transforms/__init__.py`
 2. `signal_diffusion/data/transforms/timeseries.py`
-3. `signal_diffusion/data/meta_timeseries.py`
-4. `signal_diffusion/metrics/reconstruction.py`
-5. `scripts/gen_weighted_timeseries_dataset.py`
-6. `config/classification/seed-timeseries.toml`
-7. `config/classification/parkinsons-timeseries.toml`
-8. `config/diffusion/dit-timeseries.toml`
-9. `config/diffusion/hourglass-timeseries.toml`
-10. `config/diffusion/localmamba-timeseries.toml`
+3. `signal_diffusion/metrics/reconstruction.py`
+4. `scripts/gen_weighted_timeseries_dataset.py`
+5. `config/classification/seed-timeseries.toml`
+6. `config/classification/parkinsons-timeseries.toml`
+7. `config/diffusion/dit-timeseries.toml`
+8. `config/diffusion/hourglass-timeseries.toml`
+9. `config/diffusion/localmamba-timeseries.toml`
 
 ### Modified Files (16)
 
