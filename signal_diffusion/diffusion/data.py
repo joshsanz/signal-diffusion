@@ -34,7 +34,15 @@ class DiffusionCollator:
     """Collate function converting preprocessed examples to tensors."""
 
     def __call__(self, examples: list[Mapping[str, Any]]) -> DiffusionBatch:
-        pixel_values = torch.stack([torch.as_tensor(example["pixel_values"]) for example in examples])
+        if "signal" in examples[0]:
+            signals = [torch.as_tensor(example["signal"]) for example in examples]
+            pixel_values = torch.stack(signals).unsqueeze(1)
+        elif "pixel_values" in examples[0]:
+            pixel_values = torch.stack([torch.as_tensor(example["pixel_values"]) for example in examples])
+        elif "image" in examples[0]:
+            pixel_values = torch.stack([torch.as_tensor(example["image"]) for example in examples])
+        else:
+            raise KeyError("Examples must contain 'signal', 'pixel_values', or 'image' key")
         captions = None
         class_labels = None
         if "captions" in examples[0]:
@@ -62,7 +70,13 @@ def _resolve_dataset(cfg: DatasetConfig, settings: Settings | None) -> tuple[str
     return cfg.identifier, None
 
 
-def _build_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
+def _build_transforms(cfg: DatasetConfig, *, train: bool, data_type: str = "spectrogram") -> transforms.Compose | None:
+    if data_type == "timeseries":
+        return _build_timeseries_transforms(cfg, train=train)
+    return _build_image_transforms(cfg, train=train)
+
+
+def _build_image_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
     size = cfg.resolution
     ops: list[Any] = [transforms.ToImage()]
     ops.append(transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR))
@@ -82,6 +96,23 @@ def _build_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
         ]
     )
     return transforms.Compose(ops)
+
+
+def _build_timeseries_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose | None:
+    ops: list[Any] = []
+
+    ops.append(transforms.Lambda(lambda x: torch.from_numpy(x).float() if isinstance(x, np.ndarray) else x))
+
+    if train:
+        noise_std = 0.0
+        if isinstance(cfg.extras, Mapping):
+            noise_std = float(cfg.extras.get("gaussian_noise_std", 0.0) or 0.0)
+        if noise_std > 0:
+            def add_noise(x: torch.Tensor) -> torch.Tensor:
+                return x + torch.randn_like(x) * noise_std
+            ops.append(transforms.Lambda(add_noise))
+
+    return transforms.Compose(ops) if ops else None
 
 
 def _tokenize_captions(
@@ -115,18 +146,32 @@ def _tokenize_captions(
 def _preprocess(
     examples: Mapping[str, Any],
     *,
-    transform: transforms.Compose,
+    transform: transforms.Compose | None,
     tokenizer: PreTrainedTokenizerBase | None,
     caption_column: str | None,
     class_column: str | None,
     is_train: bool,
+    data_type: str = "spectrogram",
 ) -> Mapping[str, Any]:
-    images = examples.get("image") or examples.get("pixel_values")
-    if images is None:
-        raise KeyError("Dataset must provide an 'image' column")
+    if data_type == "timeseries":
+        signals = examples.get("signal")
+        if signals is None:
+            raise KeyError("Time-series dataset must provide a 'signal' column")
 
-    processed_images = [transform(image.convert("RGB")) for image in images]
-    batch: MutableMapping[str, Any] = {"pixel_values": processed_images}
+        if transform:
+            processed_data = [transform(signal) for signal in signals]
+        else:
+            processed_data = [
+                torch.from_numpy(signal).float() if isinstance(signal, np.ndarray) else signal for signal in signals
+            ]
+        batch: MutableMapping[str, Any] = {"signal": processed_data}
+    else:
+        images = examples.get("image") or examples.get("pixel_values")
+        if images is None:
+            raise KeyError("Dataset must provide an 'image' column")
+
+        processed_images = [transform(image.convert("RGB")) for image in images]
+        batch = {"pixel_values": processed_images}
 
     if tokenizer is not None and caption_column:
         captions = examples.get(caption_column)
@@ -152,8 +197,9 @@ def _prepare_dataset(
     caption_column: str | None,
     class_column: str | None,
     is_train: bool,
+    data_type: str = "spectrogram",
 ) -> Dataset:
-    transform = _build_transforms(cfg, train=is_train)
+    transform = _build_transforms(cfg, train=is_train, data_type=data_type)
     preprocess = partial(
         _preprocess,
         transform=transform,
@@ -161,6 +207,7 @@ def _prepare_dataset(
         caption_column=caption_column,
         class_column=class_column,
         is_train=is_train,
+        data_type=data_type,
     )
     return dataset.with_transform(preprocess)
 
@@ -170,10 +217,13 @@ def build_dataloaders(
     *,
     tokenizer: PreTrainedTokenizerBase | None,
     settings_path: Path | None,
+    data_type: str = "spectrogram",
 ) -> tuple[DataLoader, DataLoader | None]:
     """Construct training (and optional validation) dataloaders."""
 
     settings = _maybe_load_settings(settings_path)
+    if settings and hasattr(settings, "data_type"):
+        data_type = settings.data_type
     hf_dataset, local_path = _resolve_dataset(cfg, settings)
 
     ds: Dataset | DatasetDict | IterableDataset | IterableDatasetDict
@@ -210,6 +260,7 @@ def build_dataloaders(
         caption_column=cfg.caption_column,
         class_column=cfg.class_column,
         is_train=True,
+        data_type=data_type,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -228,6 +279,7 @@ def build_dataloaders(
             caption_column=cfg.caption_column,
             class_column=cfg.class_column,
             is_train=False,
+            data_type=data_type,
         )
         val_loader = DataLoader(
             val_dataset,
