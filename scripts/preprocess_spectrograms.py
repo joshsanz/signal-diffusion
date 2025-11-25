@@ -15,7 +15,7 @@ def main():
     """
     Runs the preprocessing for all datasets.
     """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", type=Path, default=None, help="Path to the config file.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing data.")
     parser.add_argument("--all", action="store_true", help="Preprocess all datasets defined in the config.")

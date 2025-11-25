@@ -179,6 +179,13 @@ def _normalize_gender(value: object) -> str:
     return "F" if text in {"f", "female", "1", "true"} else "M"
 
 
+def _normalize_channel_name(name: str) -> str:
+    normalized = name.lstrip()
+    if normalized.upper().startswith("EEG"):
+        normalized = normalized[3:].lstrip()
+    return normalized
+
+
 @dataclass(slots=True)
 class SeedSubjectInfo:
     subject_id: str
@@ -221,7 +228,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         self.decimation = int(decimation_ratio)
         self.fs = self.orig_fs / float(self.decimation)
 
-        self.channel_indices = [idx for _, idx in seed_channels]
+        self.channel_indices = self._determine_channel_indices()
         self.n_channels = len(self.channel_indices)
         self.n_sessions = 3
         self.n_trials = len(START_SECOND[0])
@@ -384,12 +391,6 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
             self.dataset_settings.output.parent / "timeseries"
         )
         self.norm_stats = self._load_or_compute_normalization_stats()
-
-    # ------------------------------------------------------------------
-    # BaseSpectrogramPreprocessor hooks
-    # ------------------------------------------------------------------
-    def subjects(self) -> Sequence[str]:
-        return self._subject_ids
 
     def generate_examples(
         self,
@@ -558,6 +559,41 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
             subject_id = f"sub-{subject_num:02d}"
             sessions.setdefault(subject_id, []).append((session_num - 1, cnt_path))
         return sessions
+
+    def _determine_channel_indices(self) -> Sequence[int]:
+        cnt_files = sorted(self.raw_dir.glob("*.cnt"))
+        if not cnt_files:
+            raise FileNotFoundError(
+                f"Could not find any .cnt files in {self.raw_dir} to determine channels"
+            )
+
+        sample_path = cnt_files[0]
+        raw = mne.io.read_raw_cnt(sample_path, preload=False, verbose="WARNING")
+        ch_names = raw.ch_names
+        normalized_ch_names = [_normalize_channel_name(name) for name in ch_names]
+
+        indices: list[int] = []
+        missing: list[tuple[str, int]] = []
+        mismatched: list[tuple[str, int, str]] = []
+
+        for expected_name, expected_idx in seed_channels:
+            if expected_idx >= len(normalized_ch_names):
+                missing.append((expected_name, expected_idx))
+                continue
+            actual_name = normalized_ch_names[expected_idx]
+            if actual_name != expected_name:
+                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
+            indices.append(expected_idx)
+
+        if missing:
+            raise ValueError(
+                f"SEED channel map indices out of range for {sample_path.name}: {missing}"
+            )
+        if mismatched:
+            logger.warning(
+                "Channel label mismatch for %s: %s", sample_path.name, mismatched
+            )
+        return tuple(indices)
 
 
 class SEEDDataset:

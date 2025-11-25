@@ -133,6 +133,13 @@ def _normalize_gender(value: object) -> str:
     return "F" if text in {"f", "female", "1", "true"} else "M"
 
 
+def _normalize_channel_name(name: str) -> str:
+    normalized = name.lstrip()
+    if normalized.upper().startswith("EEG"):
+        normalized = normalized[3:].lstrip()
+    return normalized
+
+
 @dataclass(slots=True)
 class LongitudinalSubjectInfo:
     subject_id: str
@@ -178,9 +185,9 @@ class LongitudinalPreprocessor(BaseSpectrogramPreprocessor):
         self.fs = orig_fs / float(self.decimation)
 
         # Use the standard 20-channel selection
-        self.channel_indices = [idx for _, idx in longitudinal_channels]
-        self.n_channels = len(self.channel_indices)
         self._subject_ids: Sequence[str] | None = None
+        self.channel_indices = self._determine_channel_indices()
+        self.n_channels = len(self.channel_indices)
 
         logger.info(
             f"Initialized LongitudinalPreprocessor: {self.n_channels} channels, "
@@ -396,6 +403,46 @@ class LongitudinalPreprocessor(BaseSpectrogramPreprocessor):
 
         return data
 
+    def _determine_channel_indices(self) -> Sequence[int]:
+        subjects = self.subjects()
+        if not subjects:
+            raise ValueError("No longitudinal subjects found to determine channel order")
+
+        first_subject = subjects[0]
+        edf_candidates = sorted((self.data_dir / first_subject).glob("**/*_eeg.edf"))
+        if not edf_candidates:
+            raise FileNotFoundError(
+                f"Could not find any EDF files for subject {first_subject} to determine channels"
+            )
+
+        sample_path = edf_candidates[0]
+        raw = mne.io.read_raw_edf(sample_path, preload=False, verbose="ERROR")
+        ch_names = raw.ch_names
+        normalized_ch_names = [_normalize_channel_name(name) for name in ch_names]
+
+        indices: list[int] = []
+        missing: list[tuple[str, int]] = []
+        mismatched: list[tuple[str, int, str]] = []
+
+        for expected_name, expected_idx in longitudinal_channels:
+            if expected_idx >= len(normalized_ch_names):
+                missing.append((expected_name, expected_idx))
+                continue
+            actual_name = normalized_ch_names[expected_idx]
+            if actual_name != expected_name:
+                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
+            indices.append(expected_idx)
+
+        if missing:
+            raise ValueError(
+                f"Longitudinal channel map indices out of range for {sample_path.name}: {missing}"
+            )
+        if mismatched:
+            logger.warning(
+                "Channel label mismatch for %s: %s", sample_path.name, mismatched
+            )
+        return tuple(indices)
+
 
 class LongitudinalTimeSeriesPreprocessor(LongitudinalPreprocessor):
     """Preprocess Longitudinal EEG recordings into time-domain .npy datasets."""
@@ -415,19 +462,6 @@ class LongitudinalTimeSeriesPreprocessor(LongitudinalPreprocessor):
             self.dataset_settings.output.parent / "timeseries"
         )
         self.norm_stats = self._load_or_compute_normalization_stats()
-
-    # ------------------------------------------------------------------
-    # BaseSpectrogramPreprocessor hooks
-    # ------------------------------------------------------------------
-    def subjects(self) -> Sequence[str]:
-        if self._subject_ids is None:
-            subs = [
-                entry.name
-                for entry in self.data_dir.iterdir()
-                if entry.is_dir() and entry.name.startswith("sub-")
-            ]
-            self._subject_ids = tuple(sorted(subs))
-        return self._subject_ids
 
     def generate_examples(
         self,

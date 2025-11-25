@@ -21,6 +21,7 @@ from torchvision.transforms import v2 as transforms
 from signal_diffusion.data.utils.multichannel_spectrograms import multichannel_spectrogram
 from signal_diffusion.config import DatasetSettings, Settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor, SpectrogramExample
+from signal_diffusion.data.channel_maps import math_channels
 from signal_diffusion.data.specs import LabelRegistry, LabelSpec
 
 # Basic configuration for logging
@@ -329,9 +330,36 @@ class MathPreprocessor(BaseSpectrogramPreprocessor):
         sample_path = self.eeg_dir / f"{first_subject}_{self.states[0]}.edf"
         raw = mne.io.read_raw_edf(sample_path, preload=False, verbose="ERROR")
         ch_names = raw.ch_names
-        indices = [i for i, name in enumerate(ch_names) if name.upper() != "EKG"]
-        if not indices:
-            indices = list(range(len(ch_names)))
+
+        def _normalize_channel_name(name: str) -> str:
+            normalized = name.lstrip()
+            if normalized.upper().startswith("EEG"):
+                normalized = normalized[3:].lstrip()
+            return normalized
+
+        ch_names_short = [_normalize_channel_name(name) for name in ch_names]
+
+        indices: list[int] = []
+        missing: list[tuple[str, int]] = []
+        mismatched: list[tuple[str, int, str]] = []
+
+        for expected_name, expected_idx in math_channels:
+            if expected_idx >= len(ch_names_short):
+                missing.append((expected_name, expected_idx))
+                continue
+            actual_name = ch_names_short[expected_idx]
+            if actual_name != expected_name:
+                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
+            indices.append(expected_idx)
+
+        if missing:
+            raise ValueError(
+                f"Math channel map indices out of range for {sample_path.name}: {missing}"
+            )
+        if mismatched:
+            logger.warning(
+                "Channel label mismatch for %s: %s", sample_path.name, mismatched
+            )
         return tuple(indices)
 
     def _load_subject_state(self, subject_id: str, state: int) -> np.ndarray | None:
@@ -371,19 +399,6 @@ class MathTimeSeriesPreprocessor(MathPreprocessor):
             self.dataset_settings.output.parent / "timeseries"
         )
         self.norm_stats = self._load_or_compute_normalization_stats()
-
-    # ------------------------------------------------------------------
-    # BaseSpectrogramPreprocessor hooks
-    # ------------------------------------------------------------------
-    def subjects(self) -> Sequence[str]:
-        if self._subject_ids is None:
-            existing: set[str] = set()
-            for edf_path in self.eeg_dir.glob("Subject*_*.edf"):
-                subject = edf_path.stem.split("_")[0]
-                if all((self.eeg_dir / f"{subject}_{state}.edf").exists() for state in self.states):
-                    existing.add(subject)
-            self._subject_ids = tuple(sorted(existing))
-        return self._subject_ids
 
     def generate_examples(
         self,

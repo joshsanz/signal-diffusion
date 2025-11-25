@@ -1,8 +1,11 @@
 """Generate a re-weighted meta time-series dataset as Hugging Face parquet files."""
 from __future__ import annotations
+from rich.traceback import install
+
+install(show_locals=True)
 
 import argparse
-import math
+import importlib
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -12,13 +15,27 @@ from datasets import Array2D, Dataset, Features, Value
 from tqdm.auto import tqdm
 
 from signal_diffusion.config import DatasetSettings, Settings, load_settings
-from signal_diffusion.data.meta import META_LABELS
 from signal_diffusion.log_setup import get_logger
+from weighted_dataset_utils import (
+    DatasetStats,
+    WeightStats,
+    assign_copies,
+    compute_balanced_weights,
+    enrich_metadata,
+    parse_copy_splits,
+    parse_splits,
+    prepare_output_dir,
+    save_weights_plot,
+    scale_numpy_weights,
+    set_random_seeds,
+    validate_splits_compatibility,
+    write_readme,
+)
 
 logger = get_logger(__name__)
 
 DEFAULT_DATASETS: tuple[str, ...] = ("math", "parkinsons", "seed", "longitudinal")
-DEFAULT_SPLITS: tuple[str, ...] = ("train", "val", "test")
+DEFAULT_TASKS: tuple[str, ...] = ("gender",)
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,27 +43,49 @@ def parse_args() -> argparse.Namespace:
         description="Create a weighted meta time-series dataset as parquet files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", type=Path, default=None, help="Path to TOML config.")
+    parser.add_argument("--config", type=Path, default=None, help="Path to a TOML config file.")
     parser.add_argument(
         "--datasets",
-        nargs="+",
+        nargs="*",
         default=list(DEFAULT_DATASETS),
-        help="Datasets to include (ignored if --all is set).",
+        help="Datasets to include.",
     )
     parser.add_argument(
-        "--all",
-        dest="use_all_datasets",
-        action="store_true",
-        help="Include all datasets defined in the TOML config.",
+        "--tasks",
+        nargs="*",
+        default=DEFAULT_TASKS,
+        help="Tasks to require when building the meta dataset.",
     )
-    parser.add_argument("--output", type=Path, required=True, help="Output directory for parquet files.")
+    parser.add_argument("--nsamps", type=int, default=2000, help="Samples per window when preprocessing.")
+    parser.add_argument("--fs", type=int, default=125, help="Target sample rate used during preprocessing.")
+    parser.add_argument(
+        "--ovr-perc",
+        type=float,
+        default=0.5,
+        help="Overlap percentage to forward to timeseries preprocessors.",
+    )
     parser.add_argument(
         "--splits",
-        nargs="+",
-        default=list(DEFAULT_SPLITS),
-        help="Dataset splits to materialise (must correspond to existing metadata files).",
+        type=str,
+        default="train:0.8,val:0.1,test:0.1",
+        help="Comma-separated split fractions (e.g. train:0.8,val:0.2). Only used when --preprocess is set.",
     )
-    parser.add_argument("--seed", type=int, default=205, help="Seed (reserved for future stochastic steps).")
+    parser.add_argument(
+        "--copy-splits",
+        type=str,
+        default="train,val,test",
+        help="Comma-separated dataset splits to materialise in the weighted output (e.g. 'train,val,test').",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Optional explicit output directory instead of deriving one from settings.output_root. Either relative to output_root or absolute path.",
+    )
+    parser.add_argument("--seed", type=int, default=205, help="Random seed applied to NumPy for reproducibility.")
+    parser.add_argument("--preprocess", action="store_true", help="Run time-series preprocessors before sampling.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output directory if present.")
+    parser.add_argument("--skip-plot", action="store_true", help="Skip saving the weight diagnostic plot.")
     return parser.parse_args()
 
 
@@ -100,151 +139,83 @@ def load_metadata(settings: Settings, dataset_names: Sequence[str], splits: Sequ
     return pd.concat(frames, ignore_index=True)
 
 
-def compute_balanced_weights(
-    metadata: pd.DataFrame,
+def run_timeseries_preprocessor(
+    settings: Settings,
+    dataset_names: Sequence[str],
     *,
-    dataset_order: Sequence[str],
-    max_sampling_weight: float | None = None,
-) -> np.ndarray:
-    """Compute per-row weights that balance datasets and gender."""
-    if metadata.empty:
-        return np.asarray([], dtype=np.float64)
-
-    gender_spec = META_LABELS["gender"]
-    encoded_gender = metadata.apply(lambda row: int(gender_spec.encode(row)), axis=1).to_numpy()
-
-    dataset_indices: list[np.ndarray] = []
-    female = 0
-    male = 0
-    totals: list[int] = []
-
-    for name in dataset_order:
-        mask = metadata["dataset"] == name
-        if not mask.any():
-            continue
-        indices = np.flatnonzero(mask.to_numpy())
-        dataset_indices.append(indices)
-        genders = encoded_gender[indices]
-        totals.append(len(indices))
-        female += int((genders == 1).sum())
-        male += int((genders == 0).sum())
-
-    total_samps = sum(totals)
-    if total_samps == 0:
-        return np.asarray([], dtype=np.float64)
-
-    gend_weights = [female / total_samps, male / total_samps]
-    dataset_weights = [total / total_samps for total in totals]
-
-    summed_weights: list[float] = []
-    weights: list[list[float]] = []
-    for dw in dataset_weights:
-        data_gender_w = []
-        for gw in gend_weights:
-            data_gender_w.append(gw + dw)
-        summed_weights.append(sum(data_gender_w))
-        weights.append(data_gender_w)
-
-    rankings: dict[int, int] = {}
-    for label in range(len(dataset_indices)):
-        label_weight = summed_weights[label]
-        rank = 0
-        for weight in summed_weights:
-            if label_weight > weight:
-                rank += 1
-        rankings[label] = rank
-
-    new_label_weights = [weights[(len(dataset_indices) - 1) - rankings[i]] for i in range(len(dataset_indices))]
-
-    if max_sampling_weight is not None:
-        capped: list[list[float]] = []
-        for weight_pair in new_label_weights:
-            capped.append([min(w, float(max_sampling_weight)) for w in weight_pair])
-        new_label_weights = capped
-
-    per_row = np.zeros(len(metadata), dtype=np.float64)
-    for i, indices in enumerate(dataset_indices):
-        female_weight = new_label_weights[i][0] if len(new_label_weights[i]) > 0 else 0.0
-        male_weight = new_label_weights[i][1] if len(new_label_weights[i]) > 1 else 0.0
-        genders = encoded_gender[indices]
-        per_row[indices] = np.where(genders == 1, female_weight, male_weight)
-
-    norm = float(per_row.sum())
-    if norm <= 0:
-        logger.warning("Computed weights sum to zero; falling back to uniform weights.")
-        return np.full(len(per_row), 1.0 / max(len(per_row), 1), dtype=np.float64)
-
-    return per_row / norm
+    nsamps: int,
+    ovr_perc: float,
+    fs: int,
+    splits: dict[str, float],
+    overwrite: bool,
+) -> None:
+    for name in dataset_names:
+        logger.info("Preprocessing %s (time-series)...", name)
+        module = importlib.import_module(f"signal_diffusion.data.{name}")
+        base = name.upper() if name == "seed" else name.capitalize()
+        preprocessor_class_name = f"{base}TimeSeriesPreprocessor"
+        preprocessor_class = getattr(module, preprocessor_class_name)
+        preprocessor = preprocessor_class(settings, nsamps=nsamps, ovr_perc=ovr_perc, fs=fs)
+        preprocessor.preprocess(splits=splits, overwrite=overwrite)
 
 
-def scale_weights(weights: np.ndarray) -> np.ndarray:
-    if weights.size == 0:
-        return weights
-    min_weight = float(np.min(weights))
-    if min_weight <= 0:
-        raise ValueError("Weights must be positive to compute copy counts.")
-    return weights / min_weight
-
-
-def assign_copies(weight: float, count: int) -> list[int]:
-    """Distribute fractional weights into integer copy counts."""
-    base = math.floor(weight)
-    if base <= 0:
-        raise ValueError(f"Weight {weight:.6f} would yield zero copies; check sampler output.")
-    fractional = max(weight - base, 0.0)
-    copies: list[int] = []
-    remainder = 0.0
-    for _ in range(count):
-        extra = 0
-        if fractional > 0:
-            remainder += fractional
-            if remainder + 1e-8 >= 1.0:
-                extra = 1
-                remainder -= 1.0
-        copies.append(base + extra)
-    return copies
-
-
-def compute_copy_counts(scaled_weights: np.ndarray) -> np.ndarray:
-    if scaled_weights.size == 0:
-        return np.asarray([], dtype=np.int64)
-    copy_counts = np.zeros_like(scaled_weights, dtype=np.int64)
-    unique_weights = np.unique(scaled_weights)
-    for weight in np.sort(unique_weights):
-        indices = np.flatnonzero(np.isclose(scaled_weights, weight))
-        if indices.size == 0:
-            continue
-        counts = assign_copies(float(weight), indices.size)
-        copy_counts[indices] = counts
-    return copy_counts
-
-
-def build_split_samples(
+def load_weighted_timeseries(
     split_metadata: pd.DataFrame,
-    copy_counts: np.ndarray,
+    scaled_weights: np.ndarray,
     dataset_roots: Mapping[str, Path],
-) -> list[dict[str, Any]]:
-    """Load and duplicate signals based on copy counts."""
+    *,
+    split: str,
+) -> tuple[list[dict[str, Any]], dict[str, DatasetStats], dict[float, WeightStats]]:
+    """Load time-series windows and metadata according to their weights for a specific split."""
+    dataset_stats: dict[str, DatasetStats] = {}
+    weight_stats: dict[float, WeightStats] = {}
     samples: list[dict[str, Any]] = []
 
-    for idx, copies in enumerate(copy_counts):
-        if copies <= 0:
+    for dataset_name, group in split_metadata.groupby("dataset"):
+        dataset_stats[dataset_name] = DatasetStats(name=dataset_name, original_samples=len(group))
+
+    unique_weights = np.unique(scaled_weights)
+    progress = tqdm(total=len(scaled_weights), desc="Loading samples", unit="sample")
+
+    for weight_value in np.sort(unique_weights):
+        mask = np.isclose(scaled_weights, weight_value)
+        idxs = np.flatnonzero(mask)
+        if idxs.size == 0:
             continue
-        row = split_metadata.iloc[idx]
-        dataset_name = row["dataset"]
-        root = dataset_roots[dataset_name]
-        data_path = root / row["file_name"]
-        signal = np.load(data_path).astype(np.float32)
 
-        base_sample: dict[str, Any] = {"timeseries": signal}
-        for key, value in row.items():
-            base_sample[key] = _clean_value(value)
-        base_sample["original_file"] = base_sample.get("file_name")
+        weight_stat = weight_stats.setdefault(float(weight_value), WeightStats(weight=float(weight_value)))
+        weight_stat.source_count += idxs.size
+        copy_schedule = assign_copies(float(weight_value), idxs.size)
 
-        for _ in range(copies):
-            samples.append(base_sample.copy())
+        for idx, copies in zip(idxs, copy_schedule):
+            row = split_metadata.iloc[int(idx)]
+            dataset_name = row["dataset"]
+            root = dataset_roots[dataset_name]
+            data_path = root / row["file_name"]
+            if not data_path.exists():
+                logger.warning("Skipping missing source file: %s", data_path)
+                continue
 
-    return samples
+            try:
+                signal = np.load(data_path).astype(np.float32)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to load %s: %s", data_path, exc)
+                continue
+
+            metadata_copy = row.copy()
+            enriched = enrich_metadata(metadata_copy, split=split, modality="time-series segment")
+            enriched_dict = {k: _clean_value(v) for k, v in enriched.to_dict().items()}
+            enriched_dict["original_file"] = enriched_dict.get("file_name")
+
+            for _ in range(copies):
+                samples.append({"timeseries": signal.copy(), **enriched_dict})
+
+            dataset_stats[dataset_name].generated_samples += copies
+            weight_stat.generated_copies += copies
+            progress.update(1)
+
+    progress.close()
+    return samples, dataset_stats, weight_stats
 
 
 def build_features(sample: Mapping[str, Any]) -> Features:
@@ -264,7 +235,8 @@ def build_hf_dataset(samples: list[dict[str, Any]]) -> Dataset:
     ts_shape = tuple(first["timeseries"].shape)
     for sample in samples:
         if tuple(sample["timeseries"].shape) != ts_shape:
-            raise ValueError("Inconsistent timeseries shapes detected across samples.")
+            raise ValueError("Inconsistent timeseries shapes detected across samples: "
+                             "expected %s but got %s", ts_shape, tuple(sample["timeseries"].shape))
     features = build_features(first)
     columns: dict[str, list[Any]] = {key: [] for key in first.keys()}
 
@@ -277,36 +249,66 @@ def build_hf_dataset(samples: list[dict[str, Any]]) -> Dataset:
 
 def main() -> None:
     args = parse_args()
-    np.random.seed(args.seed)
+    set_random_seeds(args.seed)
     settings = load_settings(args.config)
 
-    if args.use_all_datasets:
-        dataset_names = tuple(settings.datasets.keys())
-        if not dataset_names:
-            raise ValueError("No datasets configured in the provided TOML.")
-    else:
-        if not args.datasets:
-            raise ValueError("Specify --datasets or use --all to include every configured dataset.")
-        dataset_names = tuple(args.datasets)
+    datasets = tuple(args.datasets)
+    tasks = tuple(args.tasks)
+    copy_splits = parse_copy_splits(args.copy_splits)
 
-    logger.info("Loading metadata for datasets: %s", ", ".join(dataset_names))
-    metadata = load_metadata(settings, dataset_names, args.splits)
+    logger.info(
+        "Starting weighted time-series generation | datasets=%s | tasks=%s | nsamps=%d | fs=%d | copy_splits=%s",
+        ",".join(datasets),
+        ",".join(tasks),
+        args.nsamps,
+        args.fs,
+        ",".join(copy_splits),
+    )
+    logger.info("Using settings file %s", settings.config_path)
+
+    if args.output_dir is None:
+        output_dir = settings.output_root / f"reweighted_timeseries_meta_dataset_n{args.nsamps}_fs{args.fs}"
+    else:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = (settings.output_root / output_dir).resolve()
+    output_dir = output_dir.resolve()
+    prepare_output_dir(output_dir, overwrite=args.overwrite)
+
+    if args.preprocess:
+        splits = parse_splits(args.splits)
+        validate_splits_compatibility(args.preprocess, splits, copy_splits)
+        run_timeseries_preprocessor(
+            settings,
+            datasets,
+            nsamps=args.nsamps,
+            ovr_perc=args.ovr_perc,
+            fs=args.fs,
+            splits=splits,
+            overwrite=args.overwrite,
+        )
+
+    metadata = load_metadata(settings, datasets, copy_splits)
 
     weights = compute_balanced_weights(
         metadata,
-        dataset_order=dataset_names,
+        dataset_order=datasets,
         max_sampling_weight=settings.max_sampling_weight,
     )
 
     dataset_roots = {
-        name: resolve_timeseries_root(settings.dataset(name)) for name in dataset_names
+        name: resolve_timeseries_root(settings.dataset(name)) for name in datasets
     }
 
-    output_dir = args.output
-    output_dir.mkdir(parents=True, exist_ok=True)
+    dataset_stats_total: dict[str, DatasetStats] = {}
+    dataset_stats_by_split: dict[str, dict[str, DatasetStats]] = {}
+    weight_stats_total: dict[float, WeightStats] = {}
+    weight_stats_by_split: dict[str, dict[float, WeightStats]] = {}
+    plot_paths: dict[str, Path] = {}
+    parquet_paths: dict[str, Path] = {}
 
-    logger.info("Generating weighted datasets in %s", output_dir)
-    for split in args.splits:
+    for split in copy_splits:
+        logger.info("Processing split '%s'", split)
         split_mask = metadata["split"] == split
         if not split_mask.any():
             logger.warning("No rows found for split '%s'; skipping.", split)
@@ -314,10 +316,20 @@ def main() -> None:
 
         split_metadata = metadata.loc[split_mask].reset_index(drop=True)
         split_weights = weights[split_mask.to_numpy()]
-        scaled_weights = scale_weights(split_weights)
-        copy_counts = compute_copy_counts(scaled_weights)
+        scaled_weights = scale_numpy_weights(split_weights)
 
-        samples = build_split_samples(split_metadata, copy_counts, dataset_roots)
+        if not args.skip_plot:
+            plot_label = split if len(copy_splits) > 1 else "all"
+            plot_split_arg = None if plot_label == "all" else split
+            plot_paths[plot_label] = save_weights_plot(scaled_weights, output_dir, split=plot_split_arg)
+
+        samples, split_dataset_stats, split_weight_stats = load_weighted_timeseries(
+            split_metadata,
+            scaled_weights,
+            dataset_roots,
+            split=split,
+        )
+
         if not samples:
             logger.warning("No samples generated for split '%s'; skipping write.", split)
             continue
@@ -325,7 +337,63 @@ def main() -> None:
         dataset = build_hf_dataset(samples)
         out_path = output_dir / f"{split}.parquet"
         dataset.to_parquet(out_path)
+        parquet_paths[split] = out_path
         logger.info("Saved %d samples to %s", len(dataset), out_path)
+
+        dataset_stats_by_split[split] = split_dataset_stats
+        weight_stats_by_split[split] = split_weight_stats
+
+        for name, stats in split_dataset_stats.items():
+            aggregate = dataset_stats_total.setdefault(name, DatasetStats(name=name, original_samples=0, generated_samples=0))
+            aggregate.original_samples += stats.original_samples
+            aggregate.generated_samples += stats.generated_samples
+
+        for weight, stats in split_weight_stats.items():
+            aggregate_weight = weight_stats_total.setdefault(weight, WeightStats(weight=weight))
+            aggregate_weight.source_count += stats.source_count
+            aggregate_weight.generated_copies += stats.generated_copies
+
+        generated_split_total = sum(stat.generated_samples for stat in split_dataset_stats.values())
+        logger.info(
+            "Completed split '%s' | generated=%d | component_datasets=%s",
+            split,
+            generated_split_total,
+            ",".join(f"{name}:{stat.generated_samples}" for name, stat in split_dataset_stats.items()),
+        )
+
+    if not parquet_paths:
+        raise RuntimeError("No samples were loaded across the requested splits; verify dataset metadata and sampler configuration.")
+
+    preprocessing_fields = {
+        "nsamps": args.nsamps,
+        "fs": args.fs,
+        "overlap_percent": args.ovr_perc,
+    }
+
+    readme_path, _ = write_readme(
+        output_dir,
+        settings,
+        dataset_stats=dataset_stats_total,
+        dataset_stats_by_split=dataset_stats_by_split,
+        weight_stats=weight_stats_total,
+        weight_stats_by_split=weight_stats_by_split,
+        copy_splits=copy_splits,
+        args=args,
+        modality="time-series",
+        preprocessing_fields=preprocessing_fields,
+    )
+
+    total_generated = sum(stats.generated_samples for stats in dataset_stats_total.values())
+    logger.info("Generated %d samples into %s", total_generated, output_dir)
+    for split in copy_splits:
+        if split in parquet_paths:
+            logger.info("Saved %s dataset to %s", split, parquet_paths[split])
+        else:
+            logger.info("No parquet dataset saved for split '%s'", split)
+    if plot_paths:
+        for label, path in plot_paths.items():
+            logger.info("Saved weight diagnostics (%s) to %s", label, path)
+    logger.info("Documented run in %s", readme_path)
 
 
 if __name__ == "__main__":

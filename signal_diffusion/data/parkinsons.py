@@ -127,6 +127,13 @@ PARKINSONS_LABELS.register(
 )
 
 
+def _normalize_channel_name(name: str) -> str:
+    normalized = name.lstrip()
+    if normalized.upper().startswith("EEG"):
+        normalized = normalized[3:].lstrip()
+    return normalized
+
+
 @dataclass(slots=True)
 class ParkinsonsSubjectInfo:
     subject: str
@@ -168,9 +175,9 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
         self.decimation = int(decimation_ratio)
         self.fs = orig_fs / float(self.decimation)
 
-        self.channel_indices = [idx for _, idx in parkinsons_channels]
-        self.n_channels = len(self.channel_indices)
         self._subject_ids: Sequence[str] | None = None
+        self.channel_indices = self._determine_channel_indices()
+        self.n_channels = len(self.channel_indices)
 
     # ------------------------------------------------------------------
     # BaseSpectrogramPreprocessor hooks
@@ -300,6 +307,47 @@ class ParkinsonsPreprocessor(BaseSpectrogramPreprocessor):
             data = decimate(data, self.decimation, axis=1, zero_phase=True)
         return data
 
+    def _determine_channel_indices(self) -> Sequence[int]:
+        subjects = self.subjects()
+        if not subjects:
+            raise ValueError("No Parkinsons subjects found to determine channel order")
+
+        first_subject = subjects[0]
+        eeg_dir = self.data_dir / first_subject / "eeg"
+        set_files = sorted(eeg_dir.glob("*eeg.set"))
+        if not set_files:
+            raise FileNotFoundError(
+                f"Could not find any .set files for subject {first_subject} to determine channels"
+            )
+
+        sample_path = set_files[0]
+        raw = mne.io.read_raw_eeglab(sample_path, preload=False, verbose="ERROR")
+        ch_names = raw.ch_names
+        normalized_ch_names = [_normalize_channel_name(name) for name in ch_names]
+
+        indices: list[int] = []
+        missing: list[tuple[str, int]] = []
+        mismatched: list[tuple[str, int, str]] = []
+
+        for expected_name, expected_idx in parkinsons_channels:
+            if expected_idx >= len(normalized_ch_names):
+                missing.append((expected_name, expected_idx))
+                continue
+            actual_name = normalized_ch_names[expected_idx]
+            if actual_name != expected_name:
+                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
+            indices.append(expected_idx)
+
+        if missing:
+            raise ValueError(
+                f"Parkinsons channel map indices out of range for {sample_path.name}: {missing}"
+            )
+        if mismatched:
+            logger.warning(
+                "Channel label mismatch for %s: %s", sample_path.name, mismatched
+            )
+        return tuple(indices)
+
 
 class ParkinsonsTimeSeriesPreprocessor(ParkinsonsPreprocessor):
     """Preprocess Parkinsons EEG recordings into time-domain .npy datasets."""
@@ -319,19 +367,6 @@ class ParkinsonsTimeSeriesPreprocessor(ParkinsonsPreprocessor):
             self.dataset_settings.output.parent / "timeseries"
         )
         self.norm_stats = self._load_or_compute_normalization_stats()
-
-    # ------------------------------------------------------------------
-    # BaseSpectrogramPreprocessor hooks
-    # ------------------------------------------------------------------
-    def subjects(self) -> Sequence[str]:
-        if self._subject_ids is None:
-            subs = [
-                entry.name
-                for entry in self.data_dir.iterdir()
-                if entry.is_dir() and entry.name.startswith("sub")
-            ]
-            self._subject_ids = tuple(sorted(subs))
-        return self._subject_ids
 
     def generate_examples(
         self,
