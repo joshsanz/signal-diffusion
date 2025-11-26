@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from datasets import Array2D, Dataset, Features, Value
+from datasets import Array2D, Dataset, Features, Value, concatenate_datasets
 from tqdm.auto import tqdm
 
 from signal_diffusion.config import DatasetSettings, Settings, load_settings
@@ -244,6 +244,10 @@ def _estimate_writer_batch_size(sample: Mapping[str, Any], target_bytes: int = 5
 
 
 def build_hf_dataset(samples: list[dict[str, Any]], *, writer_batch_size: int | None = None) -> tuple[Dataset, int]:
+    """Build HF dataset from samples, chunking to avoid memory overflow.
+
+    Chunks samples to avoid memory issues when creating large datasets.
+    """
     if not samples:
         raise ValueError("No samples were generated for this split.")
     first = samples[0]
@@ -254,13 +258,24 @@ def build_hf_dataset(samples: list[dict[str, Any]], *, writer_batch_size: int | 
                              "expected %s but got %s", ts_shape, tuple(sample["timeseries"].shape))
     features = build_features(first)
     resolved_batch_size = writer_batch_size or _estimate_writer_batch_size(first)
-    columns: dict[str, list[Any]] = {key: [] for key in first.keys()}
 
-    for sample in samples:
-        for key, value in sample.items():
-            columns[key].append(value)
+    # Chunk samples to avoid memory overflow
+    chunk_size = 4096
+    chunks = []
 
-    dataset = Dataset.from_dict(columns, features=features, writer_batch_size=resolved_batch_size)
+    for i in range(0, len(samples), chunk_size):
+        chunk = samples[i : i + chunk_size]
+        columns: dict[str, list[Any]] = {key: [] for key in first.keys()}
+
+        for sample in chunk:
+            for key, value in sample.items():
+                columns[key].append(value)
+
+        dataset_chunk = Dataset.from_dict(columns, features=features)
+        chunks.append(dataset_chunk)
+
+    # Concatenate all chunks
+    dataset = concatenate_datasets(chunks)
     return dataset, resolved_batch_size
 
 

@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 import torch
-from datasets import Dataset, Image as DatasetImage
+from datasets import Dataset, Image as DatasetImage, concatenate_datasets
 from PIL import Image
 from tqdm.auto import tqdm
 
@@ -227,17 +227,30 @@ def save_parquet_dataset(
     output_dir: Path,
     split: str,
 ) -> Path:
-    """Save examples to parquet dataset using HuggingFace datasets library."""
-    # Create DataFrame to validate and align columns
-    df = pd.DataFrame([{k: v for k, v in ex.items() if k != "image"} for ex in examples])
+    """Save examples to parquet dataset using HuggingFace datasets library.
 
-    # Convert to HuggingFace Dataset with Image feature
-    dataset_dict = {k: list(df[k]) if k in df.columns else [] for k in df.columns}
-    dataset_dict["image"] = [ex["image"] for ex in examples]
+    Chunks examples to avoid memory overflow when creating large datasets.
+    """
+    chunk_size = 4096
+    chunks = []
 
-    hf_dataset = Dataset.from_dict(dataset_dict)
-    # Cast image column to HuggingFace Image type
-    hf_dataset = hf_dataset.cast_column("image", DatasetImage())
+    for i in range(0, len(examples), chunk_size):
+        chunk = examples[i : i + chunk_size]
+
+        # Create DataFrame to validate and align columns
+        df = pd.DataFrame([{k: v for k, v in ex.items() if k != "image"} for ex in chunk])
+
+        # Convert to HuggingFace Dataset with Image feature
+        dataset_dict = {k: list(df[k]) if k in df.columns else [] for k in df.columns}
+        dataset_dict["image"] = [ex["image"] for ex in chunk]
+
+        hf_dataset = Dataset.from_dict(dataset_dict)
+        # Cast image column to HuggingFace Image type
+        hf_dataset = hf_dataset.cast_column("image", DatasetImage())
+        chunks.append(hf_dataset)
+
+    # Concatenate all chunks
+    hf_dataset = concatenate_datasets(chunks)
 
     # Save as parquet file
     output_path = output_dir / f"{split}.parquet"
