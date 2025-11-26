@@ -1173,7 +1173,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Datasets to analyze (default: all discovered preprocessors).",
     )
-    parser.add_argument("--nsamps", type=int, default=2000, help="Samples per window.")
+    parser.add_argument("--nsamps", type=int, default=2048, help="Samples per window.")
     parser.add_argument("--ovr-perc", type=float, default=0.5, help="Overlap fraction for windows (0-1).")
     parser.add_argument("--fs", type=float, default=125.0, help="Target sampling rate after decimation.")
     parser.add_argument(

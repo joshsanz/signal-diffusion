@@ -166,8 +166,7 @@ class HourglassAdapter:
         generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Create noise tensor for sampling, handling time-series shapes."""
-        model_config = getattr(modules.denoiser, "config", None)
-        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
+        channels = cfg.model.extras.get("in_channels", 3)
 
         if cfg.settings and getattr(cfg.settings, "data_type", "") == "timeseries":
             n_eeg_channels = cfg.dataset.extras.get("n_eeg_channels")
@@ -177,7 +176,6 @@ class HourglassAdapter:
                     "Time-series config missing required extras: "
                     f"n_eeg_channels={n_eeg_channels}, sequence_length={sequence_length}"
                 )
-
             return torch.randn(
                 (num_samples, channels, n_eeg_channels, sequence_length),
                 generator=generator,
@@ -185,9 +183,9 @@ class HourglassAdapter:
                 dtype=dtype,
             )
 
-        sample_size = getattr(model_config, "sample_size", None)
+        sample_size = cfg.model.sample_size
         if sample_size is None:
-            sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
+            sample_size = cfg.dataset.resolution
 
         return torch.randn(
             (num_samples, channels, sample_size, sample_size),
@@ -488,8 +486,6 @@ class HourglassAdapter:
         dtype = modules.weight_dtype
         scheduler.set_timesteps(denoising_steps, device=device)
 
-        model_config = getattr(modules.denoiser, "config", None)
-        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
         vae = modules.vae
 
         sample = self._create_noise_tensor(

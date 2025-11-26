@@ -30,7 +30,7 @@ def main():
     preprocessor = MetaPreprocessor(
         settings=settings,
         dataset_names=dataset_names,
-        nsamps=2000,
+        nsamps=2048,
         ovr_perc=0.5,
         fs=125,
         bin_spacing="log",

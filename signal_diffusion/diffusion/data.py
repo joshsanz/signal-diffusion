@@ -76,6 +76,31 @@ def _build_transforms(cfg: DatasetConfig, *, train: bool, data_type: str = "spec
     return _build_image_transforms(cfg, train=train)
 
 
+class _ConvertToTensor(torch.nn.Module):
+    """Convert numpy arrays to tensors."""
+
+    def forward(self, x: Any) -> torch.Tensor:
+        """Convert numpy array to tensor or pass through tensor."""
+        if isinstance(x, np.ndarray):
+            return torch.from_numpy(x).float()
+        if isinstance(x, torch.Tensor):
+            return x.float()
+        return torch.as_tensor(x, dtype=torch.float32)
+
+
+class _GaussianNoiseTransform(torch.nn.Module):
+    """Add gaussian noise to tensor input."""
+
+    def __init__(self, noise_std: float):
+        super().__init__()
+        self.noise_std = noise_std
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not isinstance(x, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(x)}")
+        return x + torch.randn_like(x) * self.noise_std
+
+
 def _build_image_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose:
     size = cfg.resolution
     ops: list[Any] = [transforms.ToImage()]
@@ -99,20 +124,16 @@ def _build_image_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Co
 
 
 def _build_timeseries_transforms(cfg: DatasetConfig, *, train: bool) -> transforms.Compose | None:
-    ops: list[Any] = []
-
-    ops.append(transforms.Lambda(lambda x: torch.from_numpy(x).float() if isinstance(x, np.ndarray) else x))
+    ops: list[Any] = [_ConvertToTensor()]
 
     if train:
         noise_std = 0.0
         if isinstance(cfg.extras, Mapping):
             noise_std = float(cfg.extras.get("gaussian_noise_std", 0.0) or 0.0)
         if noise_std > 0:
-            def add_noise(x: torch.Tensor) -> torch.Tensor:
-                return x + torch.randn_like(x) * noise_std
-            ops.append(transforms.Lambda(add_noise))
+            ops.append(_GaussianNoiseTransform(noise_std))
 
-    return transforms.Compose(ops) if ops else None
+    return transforms.Compose(ops)
 
 
 def _tokenize_captions(

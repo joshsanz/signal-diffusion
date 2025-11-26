@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TASKS,
         help="Tasks to require when building the meta dataset.",
     )
-    parser.add_argument("--nsamps", type=int, default=2000, help="Samples per STFT when preprocessing (MetaPreprocessor nsamps).")
+    parser.add_argument("--nsamps", type=int, default=2048, help="Samples per STFT when preprocessing (MetaPreprocessor nsamps).")
     parser.add_argument("--fs", type=int, default=125, help="Target sample rate used during preprocessing.")
     parser.add_argument(
         "--resolution",

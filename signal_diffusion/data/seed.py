@@ -372,6 +372,41 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
             sessions.setdefault(subject_id, []).append((session_num - 1, cnt_path))
         return sessions
 
+    def _determine_channel_indices(self) -> Sequence[int]:
+        cnt_files = sorted(self.raw_dir.glob("*.cnt"))
+        if not cnt_files:
+            raise FileNotFoundError(
+                f"Could not find any .cnt files in {self.raw_dir} to determine channels"
+            )
+
+        sample_path = cnt_files[0]
+        raw = mne.io.read_raw_cnt(sample_path, preload=False, verbose="WARNING")
+        ch_names = raw.ch_names
+        normalized_ch_names = [_normalize_channel_name(name) for name in ch_names]
+
+        indices: list[int] = []
+        missing: list[tuple[str, int]] = []
+        mismatched: list[tuple[str, int, str]] = []
+
+        for expected_name, expected_idx in seed_channels:
+            if expected_idx >= len(normalized_ch_names):
+                missing.append((expected_name, expected_idx))
+                continue
+            actual_name = normalized_ch_names[expected_idx]
+            if actual_name != expected_name:
+                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
+            indices.append(expected_idx)
+
+        if missing:
+            raise ValueError(
+                f"SEED channel map indices out of range for {sample_path.name}: {missing}"
+            )
+        if mismatched:
+            logger.warning(
+                "Channel label mismatch for %s: %s", sample_path.name, mismatched
+            )
+        return tuple(indices)
+
 
 class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
     """Preprocess SEED EEG recordings into time-domain .npy datasets."""
@@ -559,41 +594,6 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
             subject_id = f"sub-{subject_num:02d}"
             sessions.setdefault(subject_id, []).append((session_num - 1, cnt_path))
         return sessions
-
-    def _determine_channel_indices(self) -> Sequence[int]:
-        cnt_files = sorted(self.raw_dir.glob("*.cnt"))
-        if not cnt_files:
-            raise FileNotFoundError(
-                f"Could not find any .cnt files in {self.raw_dir} to determine channels"
-            )
-
-        sample_path = cnt_files[0]
-        raw = mne.io.read_raw_cnt(sample_path, preload=False, verbose="WARNING")
-        ch_names = raw.ch_names
-        normalized_ch_names = [_normalize_channel_name(name) for name in ch_names]
-
-        indices: list[int] = []
-        missing: list[tuple[str, int]] = []
-        mismatched: list[tuple[str, int, str]] = []
-
-        for expected_name, expected_idx in seed_channels:
-            if expected_idx >= len(normalized_ch_names):
-                missing.append((expected_name, expected_idx))
-                continue
-            actual_name = normalized_ch_names[expected_idx]
-            if actual_name != expected_name:
-                mismatched.append((expected_name, expected_idx, ch_names[expected_idx]))
-            indices.append(expected_idx)
-
-        if missing:
-            raise ValueError(
-                f"SEED channel map indices out of range for {sample_path.name}: {missing}"
-            )
-        if mismatched:
-            logger.warning(
-                "Channel label mismatch for %s: %s", sample_path.name, mismatched
-            )
-        return tuple(indices)
 
 
 class SEEDDataset:

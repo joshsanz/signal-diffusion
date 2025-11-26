@@ -7,22 +7,22 @@ trainer = "diffusion"
 data_type = "timeseries"
 
 [dataset]
-name = "seed_timeseries"
+name = "/data/data/signal-diffusion/processed/reweighted_timeseries_meta_dataset_n2048_fs125"
 train_split = "train"
-val_split = "val"
+val_split = "validation"
 batch_size = 32
 num_workers = 4
-resolution = 2000  # Sequence length (must match preprocessing nsamps)
+resolution = 2048  # Sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
 n_eeg_channels = 20  # SEED channel count; set manually when stats are missing
-sequence_length = 2000  # Explicitly match resolution for timeseries runs
+sequence_length = 2048  # Explicitly match resolution for timeseries runs
 gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 
 [model]
 name = "hourglass"
-sample_size = 2000
+sample_size = 2048
 conditioning = "none"  # none, caption, classes
 
 [model.extras]
@@ -32,7 +32,8 @@ mapping_d_ff = 768
 mapping_cond_dim = 0
 mapping_dropout_rate = 0.0
 depths = [3, 3, 4]
-widths = [96, 192, 320]
+widths = [128, 256, 512]
+d_ffs = [768, 768, 768]
 self_attns = [
     { type = "neighborhood", d_head = 64, kernel_size = 7 },
     { type = "neighborhood", d_head = 64, kernel_size = 7 },
@@ -66,9 +67,9 @@ warmup_steps = 100
 [training]
 seed = 42
 epochs = 100
-mixed_precision = "fp16"
+mixed_precision = "bf16"
 gradient_checkpointing = true
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
 

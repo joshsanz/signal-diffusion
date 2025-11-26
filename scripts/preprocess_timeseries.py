@@ -72,7 +72,7 @@ def main() -> None:
         default=["math", "parkinsons", "seed", "longitudinal"],
         help="Datasets to preprocess (ignored if --all is set).",
     )
-    parser.add_argument("--nsamps", type=int, default=2000, help="Window length for time-series examples.")
+    parser.add_argument("--nsamps", type=int, default=2048, help="Window length for time-series examples.")
     parser.add_argument(
         "--ovr-perc",
         type=float,

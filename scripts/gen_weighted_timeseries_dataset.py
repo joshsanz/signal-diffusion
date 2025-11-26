@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TASKS,
         help="Tasks to require when building the meta dataset.",
     )
-    parser.add_argument("--nsamps", type=int, default=2000, help="Samples per window when preprocessing.")
+    parser.add_argument("--nsamps", type=int, default=2048, help="Samples per window when preprocessing.")
     parser.add_argument("--fs", type=int, default=125, help="Target sample rate used during preprocessing.")
     parser.add_argument(
         "--ovr-perc",
@@ -214,7 +214,7 @@ def load_weighted_timeseries(
             enriched_dict["original_file"] = enriched_dict.get("file_name")
 
             for _ in range(copies):
-                samples.append({"timeseries": signal.copy(), **enriched_dict})
+                samples.append({"signal": signal.copy(), **enriched_dict})
 
             dataset_stats[dataset_name].generated_samples += copies
             weight_stat.generated_copies += copies
@@ -225,10 +225,10 @@ def load_weighted_timeseries(
 
 
 def build_features(sample: Mapping[str, Any]) -> Features:
-    ts_shape = tuple(sample["timeseries"].shape)
-    feature_defs: dict[str, Any] = {"timeseries": Array2D(shape=ts_shape, dtype="float32")}
+    ts_shape = tuple(sample["signal"].shape)
+    feature_defs: dict[str, Any] = {"signal": Array2D(shape=ts_shape, dtype="float32")}
     for key, value in sample.items():
-        if key == "timeseries":
+        if key == "signal":
             continue
         feature_defs[key] = _feature_for_value(value)
     return Features(feature_defs)
@@ -236,8 +236,8 @@ def build_features(sample: Mapping[str, Any]) -> Features:
 
 def _estimate_writer_batch_size(sample: Mapping[str, Any], target_bytes: int = 512 * 1024 * 1024) -> int:
     """Derive a conservative writer batch size to stay under Arrow's 2GB limit."""
-    timeseries = sample.get("timeseries")
-    ts_bytes = int(timeseries.nbytes) if isinstance(timeseries, np.ndarray) else 0
+    signal = sample.get("signal")
+    ts_bytes = int(signal.nbytes) if isinstance(signal, np.ndarray) else 0
     approx_sample_bytes = max(ts_bytes, 1) + 1024  # pad for metadata overhead
     batch_size = max(1, target_bytes // approx_sample_bytes)
     return int(batch_size)
@@ -251,11 +251,11 @@ def build_hf_dataset(samples: list[dict[str, Any]], *, writer_batch_size: int | 
     if not samples:
         raise ValueError("No samples were generated for this split.")
     first = samples[0]
-    ts_shape = tuple(first["timeseries"].shape)
+    ts_shape = tuple(first["signal"].shape)
     for sample in samples:
-        if tuple(sample["timeseries"].shape) != ts_shape:
-            raise ValueError("Inconsistent timeseries shapes detected across samples: "
-                             "expected %s but got %s", ts_shape, tuple(sample["timeseries"].shape))
+        if tuple(sample["signal"].shape) != ts_shape:
+            raise ValueError("Inconsistent signal shapes detected across samples: "
+                             "expected %s but got %s", ts_shape, tuple(sample["signal"].shape))
     features = build_features(first)
     resolved_batch_size = writer_batch_size or _estimate_writer_batch_size(first)
 

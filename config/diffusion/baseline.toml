@@ -4,7 +4,7 @@ config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
 
 [dataset]
-name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2000_fs125"
+name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"
 val_split = "val"
 batch_size = 32

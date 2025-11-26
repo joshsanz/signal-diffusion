@@ -12,7 +12,7 @@ train_split = "train"
 val_split = "val"
 batch_size = 32
 num_workers = 4
-resolution = 2000  # Sequence length (must match preprocessing nsamps)
+resolution = 2048  # Sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
@@ -22,7 +22,7 @@ gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 
 [model]
 name = "dit"
-sample_size = 2000
+sample_size = 2048
 conditioning = "none"  # none, caption, classes
 
 [model.extras]
