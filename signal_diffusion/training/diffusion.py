@@ -622,7 +622,9 @@ def train(
                         with torch.no_grad():
                             with ema_weights_context(accelerator, modules):
                                 samples = adapter.generate_samples(
-                                    accelerator, cfg, modules, num_images=16
+                                    accelerator, cfg, modules, num_images=16,
+                                    denoising_steps=cfg.inference.denoising_steps,
+                                    cfg_scale=cfg.inference.cfg_scale,
                                 )
 
                             try:

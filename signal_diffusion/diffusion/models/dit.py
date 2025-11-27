@@ -13,7 +13,12 @@ from transformers import AutoTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
-from signal_diffusion.diffusion.models.base import DiffusionAdapter, DiffusionModules, registry
+from signal_diffusion.diffusion.models.base import (
+    DiffusionAdapter,
+    DiffusionModules,
+    create_noise_tensor,
+    registry,
+)
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
     get_snr,
@@ -80,46 +85,26 @@ class DiTAdapter:
             timestep_embeddings=timestep_embeddings,
         )
 
-    def _create_noise_tensor(
+    def _dit_prepare_class_labels(
         self,
-        num_samples: int,
-        cfg: DiffusionConfig,
-        modules: DiffusionModules,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-        generator: torch.Generator | None = None,
+        images: torch.Tensor,
+        class_labels: torch.Tensor | None,
+        extras: DiTExtras,
     ) -> torch.Tensor:
-        """Create noise tensor for sampling, handling time-series shapes."""
-        model_config = getattr(modules.denoiser, "config", None)
-        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
-
-        if cfg.settings and getattr(cfg.settings, "data_type", "") == "timeseries":
-            n_eeg_channels = cfg.dataset.extras.get("n_eeg_channels")
-            sequence_length = cfg.dataset.extras.get("sequence_length")
-            if n_eeg_channels is None or sequence_length is None:
-                raise ValueError(
-                    "Time-series config missing required extras: "
-                    f"n_eeg_channels={n_eeg_channels}, sequence_length={sequence_length}"
-                )
-
-            return torch.randn(
-                (num_samples, channels, n_eeg_channels, sequence_length),
-                generator=generator,
-                device=device,
-                dtype=dtype,
-            )
-
-        sample_size = getattr(model_config, "sample_size", None)
-        if sample_size is None:
-            sample_size = int(cfg.model.sample_size or cfg.dataset.resolution)
-
-        return torch.randn(
-            (num_samples, channels, sample_size, sample_size),
-            generator=generator,
-            device=device,
-            dtype=dtype,
-        )
+        """Prepare class labels for DiT training with CFG dropout."""
+        if extras.conditioning == "classes":
+            if class_labels is None:
+                raise ValueError("Class conditioning requires 'batch.class_labels'")
+            class_labels_out = class_labels.to(device=images.device, dtype=torch.long)
+            if extras.cfg_dropout > 0:
+                mask = torch.rand(class_labels_out.shape, device=class_labels_out.device) < extras.cfg_dropout
+                class_labels_out = class_labels_out.masked_fill(mask, extras.num_classes)
+        else:
+            # Diffusers' DiT uses AdaLayerNormZero under the hood, which always expects
+            # a label embedding. Provide a constant dummy tensor so unconditional runs
+            # (conditioning="none") can skip classifier guidance while satisfying the API.
+            class_labels_out = torch.zeros(images.shape[0], device=images.device, dtype=torch.long)
+        return class_labels_out
 
     def build_modules(
         self,
@@ -276,11 +261,9 @@ class DiTAdapter:
         dtype = modules.weight_dtype
         scheduler.set_timesteps(denoising_steps, device=device)
 
-        model_config = getattr(modules.denoiser, "config", None)
-        channels = getattr(model_config, "in_channels", 3) if model_config is not None else 3
         vae = modules.vae
 
-        sample = self._create_noise_tensor(
+        sample = create_noise_tensor(
             num_images,
             cfg,
             modules,
@@ -382,19 +365,7 @@ class DiTAdapter:
         z_t = scheduler.scale_noise(images, timesteps, noise)
         snr = get_snr(scheduler, timesteps, device=images.device)
 
-        class_labels: torch.Tensor | None
-        if extras.conditioning == "classes":
-            if batch.class_labels is None:
-                raise ValueError("Class conditioning requires 'batch.class_labels'")
-            class_labels = batch.class_labels.to(device=images.device, dtype=torch.long)
-            if extras.cfg_dropout > 0:
-                mask = torch.rand(class_labels.shape, device=class_labels.device) < extras.cfg_dropout
-                class_labels = class_labels.masked_fill(mask, extras.num_classes)
-        else:
-            # Diffusers' DiT uses AdaLayerNormZero under the hood, which always expects
-            # a label embedding. Provide a constant dummy tensor so unconditional runs
-            # (conditioning="none") can skip classifier guidance while satisfying the API.
-            class_labels = torch.zeros(images.shape[0], device=images.device, dtype=torch.long)
+        class_labels = self._dit_prepare_class_labels(images, batch.class_labels, extras)
 
         if cfg.objective.prediction_type == "epsilon":
             target = noise
