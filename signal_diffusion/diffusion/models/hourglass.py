@@ -335,7 +335,34 @@ class HourglassAdapter:
             prediction_type=cfg.objective.prediction_type,
         )
         loss = (loss * weights).mean()
-        metrics: Mapping[str, float] = {}
+
+        # Compute PSNR for timeseries datasets
+        metrics: dict[str, float] = {}
+
+        # Check if this is timeseries data (not latent space)
+        is_timeseries = bool(
+            cfg.settings
+            and getattr(cfg.settings, "data_type", "") == "timeseries"
+            and not extras.latent_space
+        )
+
+        if is_timeseries:
+            from signal_diffusion.diffusion.train_utils import compute_training_psnr
+
+            psnr_result = compute_training_psnr(
+                images=images,
+                z_t=z_t,
+                model_pred=model_pred,
+                sigmas=sigmas,
+                prediction_type=cfg.objective.prediction_type,
+                max_value=1.0,
+            )
+
+            if psnr_result is not None:
+                mean_psnr, std_psnr = psnr_result
+                metrics["psnr_mean"] = mean_psnr
+                metrics["psnr_std"] = std_psnr
+
         return loss, metrics
 
     def validation_step(

@@ -37,6 +37,7 @@ dependencies = [
     "optuna>=4.5.0",
     "causal-conv1d>=1.5.3.post1",
     "mamba-ssm>2",
+    "pytest>=9.0.1",
 ]
 
 # Optional GPU-accelerated packages (CUDA-dependent)

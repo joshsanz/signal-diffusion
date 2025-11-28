@@ -49,3 +49,60 @@ def verify_scheduler(scheduler) -> None:
     """Basic sanity checks for FlowMatch schedulers."""
     if max(scheduler.sigmas) != 1.0:  # pragma: no cover - depends on scheduler config
         warnings.warn("Scheduler maximum sigma is not 1.0; FlowMatch assumptions may not hold")
+
+
+def compute_training_psnr(
+    images: torch.Tensor,
+    z_t: torch.Tensor,
+    model_pred: torch.Tensor,
+    sigmas: torch.Tensor,
+    prediction_type: str,
+    max_value: float = 1.0,
+) -> tuple[float, float] | None:
+    """Compute PSNR by algebraically inverting diffusion predictions.
+
+    Args:
+        images: Original clean images (B, C, H, W)
+        z_t: Noisy images at timestep t (B, C, H, W)
+        model_pred: Model predictions (B, C, H, W)
+        sigmas: Noise levels (B,) or (B, 1, 1, 1)
+        prediction_type: "epsilon" or "vector_field"
+        max_value: Maximum pixel value for PSNR calculation
+
+    Returns:
+        (mean_psnr, std_psnr) or None if computation fails
+    """
+    try:
+        # Ensure all tensors are detached and on same device
+        images = images.detach()
+        z_t = z_t.detach()
+        model_pred = model_pred.detach()
+        sigmas = sigmas.detach()
+
+        # Reshape sigmas to broadcast correctly
+        if sigmas.ndim == 1:
+            sigmas = sigmas.reshape(-1, 1, 1, 1)
+
+        # Algebraic inversion (prediction-type dependent)
+        if prediction_type == "vector_field":
+            # z_t = images + sigma * model_pred
+            # Therefore: predicted_images = z_t - sigma * model_pred
+            predicted_images = z_t - sigmas * model_pred
+        elif prediction_type == "epsilon":
+            # z_t = (1 - sigma) * images + sigma * model_pred
+            # Therefore: predicted_images = (z_t - sigma * model_pred) / (1 - sigma)
+            predicted_images = (z_t - sigmas * model_pred) / (1 - sigmas)
+        else:
+            return None
+
+        # Compute PSNR using the corrected averaging function
+        from signal_diffusion.metrics import compute_batch_psnr
+        mean_psnr, std_psnr = compute_batch_psnr(
+            images, predicted_images, max_value=max_value
+        )
+
+        return mean_psnr, std_psnr
+
+    except Exception:
+        # Return None on any error to avoid crashing training
+        return None

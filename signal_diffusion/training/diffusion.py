@@ -612,49 +612,6 @@ def train(
                         if kid_score is not None:
                             postfix_payload["kid"] = f"{kid_score:.4f}"
 
-                    if (
-                        is_timeseries
-                        and val_loader is not None
-                        and accelerator.is_main_process
-                    ):
-                        from signal_diffusion.metrics import compute_batch_psnr
-
-                        with torch.no_grad():
-                            with ema_weights_context(accelerator, modules):
-                                samples = adapter.generate_samples(
-                                    accelerator, cfg, modules, num_images=16,
-                                    denoising_steps=cfg.inference.denoising_steps,
-                                    cfg_scale=cfg.inference.cfg_scale,
-                                )
-
-                            try:
-                                real_batch = next(iter(val_loader))
-                            except StopIteration:
-                                real_batch = None
-
-                        if real_batch is not None and hasattr(real_batch, "pixel_values"):
-                            num_samples = min(samples.shape[0], real_batch.pixel_values.shape[0])
-                            real_samples = real_batch.pixel_values[:num_samples].to(accelerator.device)
-                            generated_samples = samples[:num_samples]
-                            mean_psnr, std_psnr = compute_batch_psnr(real_samples, generated_samples)
-                            accelerator.log(
-                                {
-                                    "validation/timeseries_psnr": mean_psnr,
-                                    "validation/timeseries_psnr_std": std_psnr,
-                                    "validation/timeseries_mean": generated_samples.mean().item(),
-                                    "validation/timeseries_std": generated_samples.std().item(),
-                                    "validation/timeseries_min": generated_samples.min().item(),
-                                    "validation/timeseries_max": generated_samples.max().item(),
-                                },
-                                step=global_step,
-                            )
-                            LOGGER.info(
-                                "Time-series validation: PSNR=%.2f+/-%.2f dB, mean=%.3f, std=%.3f",
-                                mean_psnr,
-                                std_psnr,
-                                float(generated_samples.mean()),
-                                float(generated_samples.std()),
-                            )
                 if accelerator.is_main_process and progress_bar is not None:
                     progress_bar.update(1)
                     if postfix_payload:
