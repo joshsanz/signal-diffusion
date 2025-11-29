@@ -491,7 +491,9 @@ class HourglassAdapter:
         output_dir: str,
     ) -> None:
         del accelerator, cfg
-        path = Path(output_dir) / "hourglass_model.pt"
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        path = output_path / "hourglass_model.pt"
         inner_model = getattr(modules.denoiser, "inner_model", modules.denoiser)
         torch.save(inner_model.state_dict(), path)
         self._logger.info("Saved hourglass checkpoint to %s", path)
