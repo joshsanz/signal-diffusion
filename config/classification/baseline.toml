@@ -6,6 +6,10 @@
 config = "~/git/signal-diffusion/config/default.toml"
 trainer = "classification"
 
+[data]
+output_type = "db-only"
+data_type = "spectrogram"
+
 [dataset]
 # name = "~/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
 name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
@@ -40,15 +44,15 @@ warmup_steps = 100
 min_lr_ratio = 0.03  # For linear or cosine
 
 [training]
-epochs = 25
+epochs = 15
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 5
 tensorboard = true
 eval_strategy = "steps"
-eval_steps = 500
+eval_steps = 100
 checkpoint_strategy = "steps"
-checkpoint_steps = 500
+checkpoint_steps = 100
 checkpoint_total_limit = 3
 compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"

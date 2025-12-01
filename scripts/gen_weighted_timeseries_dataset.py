@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preprocess", action="store_true", help="Run time-series preprocessors before sampling.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output directory if present.")
     parser.add_argument("--skip-plot", action="store_true", help="Skip saving the weight diagnostic plot.")
+    parser.add_argument("-y", "--force", action="store_true", help="Skip overwrite confirmation and force overwrite.")
     parser.add_argument(
         "--writer-batch-size",
         type=int,
@@ -305,7 +306,7 @@ def main() -> None:
         if not output_dir.is_absolute():
             output_dir = (settings.output_root / output_dir).resolve()
     output_dir = output_dir.resolve()
-    prepare_output_dir(output_dir, overwrite=args.overwrite)
+    prepare_output_dir(output_dir, overwrite=args.overwrite, force=args.force)
 
     if args.preprocess:
         splits = parse_splits(args.splits)

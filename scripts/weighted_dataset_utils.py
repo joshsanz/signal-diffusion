@@ -212,20 +212,27 @@ def validate_splits_compatibility(
         )
 
 
-def prepare_output_dir(output_dir: Path, *, overwrite: bool) -> None:
-    """Prepare the output directory, optionally removing existing directory if overwrite is enabled."""
+def prepare_output_dir(output_dir: Path, *, overwrite: bool, force: bool = False) -> None:
+    """Prepare the output directory, optionally removing existing directory if overwrite is enabled.
+
+    Args:
+        output_dir: Target directory path
+        overwrite: Whether to overwrite if directory exists
+        force: If True, skip confirmation prompt when overwriting
+    """
     if output_dir.exists():
         if not overwrite:
             raise FileExistsError(
                 f"Output directory already exists: {output_dir}. Use --overwrite to replace it."
             )
-        response = input(
-            f"Output directory already exists at {output_dir}.\n"
-            "This will delete all existing files. Continue? [y/N]: "
-        ).strip().lower()
-        if response not in {"y", "yes"}:
-            logger.info("User declined to overwrite %s; aborting.", output_dir)
-            sys.exit(0)
+        if not force:
+            response = input(
+                f"Output directory already exists at {output_dir}.\n"
+                "This will delete all existing files. Continue? [y/N]: "
+            ).strip().lower()
+            if response not in {"y", "yes"}:
+                logger.info("User declined to overwrite %s; aborting.", output_dir)
+                sys.exit(0)
         logger.info("Removing existing output directory at %s", output_dir)
         shutil.rmtree(output_dir)
 

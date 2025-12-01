@@ -4,6 +4,7 @@ config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
 
 [data]
+output_type = "db-only"  # Not used for timeseries
 data_type = "timeseries"
 
 [dataset]

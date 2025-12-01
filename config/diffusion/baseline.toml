@@ -3,6 +3,10 @@
 config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
 
+[data]
+output_type = "db-only"
+data_type = "spectrogram"
+
 [dataset]
 name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"

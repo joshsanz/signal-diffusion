@@ -310,6 +310,7 @@ class ClassificationExperimentConfig:
     optimizer: OptimizerConfig
     scheduler: SchedulerConfig
     training: TrainingConfig
+    data_overrides: dict[str, Any] = field(default_factory=dict)  # Overrides from [data] section
 
 
 @dataclass(slots=True)
@@ -439,6 +440,10 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
     if training.max_best_checkpoints < 1:
         raise ValueError("[training] max_best_checkpoints must be >= 1")
 
+    # Extract optional [data] section overrides
+    data_section = data.get("data", {})
+    data_overrides = dict(data_section) if isinstance(data_section, Mapping) else {}
+
     return ClassificationExperimentConfig(
         path=config_path,
         settings_path=settings_path,
@@ -447,6 +452,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         optimizer=optimizer,
         scheduler=scheduler,
         training=training,
+        data_overrides=data_overrides,
     )
 
 
@@ -464,6 +470,14 @@ def train_from_config(
     """
 
     settings = load_settings(config.settings_path)
+
+    # Apply [data] section overrides from classification config
+    if config.data_overrides:
+        if "output_type" in config.data_overrides:
+            settings.output_type = str(config.data_overrides["output_type"])
+        if "data_type" in config.data_overrides:
+            settings.data_type = str(config.data_overrides["data_type"])
+
     dataset_cfg = config.dataset
     training_cfg = config.training
     _validate_backbone_data_type(getattr(settings, "data_type", "spectrogram"), config.model.backbone)

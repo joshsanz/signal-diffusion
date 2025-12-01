@@ -434,8 +434,11 @@ def load_diffusion_config(path: str | Path) -> DiffusionConfig:
 
         cfg.settings = load_settings(settings_config)
         data_section = mapping.get("data", {})
-        if isinstance(data_section, Mapping) and "data_type" in data_section:
-            cfg.settings.data_type = str(data_section["data_type"])
+        if isinstance(data_section, Mapping):
+            if "data_type" in data_section:
+                cfg.settings.data_type = str(data_section["data_type"])
+            if "output_type" in data_section:
+                cfg.settings.output_type = str(data_section["output_type"])
 
     cfg.validate()
 
