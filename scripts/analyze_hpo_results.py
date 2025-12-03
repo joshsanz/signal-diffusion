@@ -29,6 +29,7 @@ class TrialMetrics:
     health_acc: float = None
     age_mse: float = None
     age_mae: float = None
+    hyperparams: Dict[str, Any] = None
 
     def __repr__(self) -> str:
         parts = [f"trial_{self.trial_num}: obj={self.objective:.4f}"]
@@ -78,12 +79,14 @@ def load_hpo_results(results_path: Path) -> Dict[str, Any]:
 def parse_trial_metrics(
     trial_num: int,
     best_user_attrs: Dict[str, Any],
+    params: Dict[str, Any] = None,
 ) -> TrialMetrics:
     """Extract metrics from trial user attributes.
 
     Args:
         trial_num: Trial number
         best_user_attrs: User attributes from best trial
+        params: Hyperparameters for the trial
 
     Returns:
         TrialMetrics object
@@ -91,6 +94,7 @@ def parse_trial_metrics(
     metrics = TrialMetrics(
         trial_num=trial_num,
         objective=best_user_attrs.get("combined_objective", 0.0),
+        hyperparams=params or {},
     )
 
     # Parse task metrics
@@ -135,14 +139,15 @@ def analyze_hpo_directory(results_dir: Path) -> List[HPORunSummary]:
 
             best_trial = hpo_results["best_trial"]
             best_user_attrs = hpo_results["best_user_attrs"]
+            best_params = hpo_results.get("best_params", {})
             all_trials = hpo_results["all_trials"]
 
             # Parse metrics
-            best_metrics = parse_trial_metrics(best_trial, best_user_attrs)
+            best_metrics = parse_trial_metrics(best_trial, best_user_attrs, best_params)
 
             # Calculate success rate
             completed_trials = sum(
-                1 for t in all_trials if t["state"] == "COMPLETE"
+                1 for t in all_trials if t.get("user_attrs", {}).get("success", False)
             )
             success_rate = completed_trials / len(all_trials)
 
@@ -226,8 +231,8 @@ def print_best_comparison(
         summaries: List of HPORunSummary objects
         metric: Metric to sort by ('objective', 'gender', 'health', 'age_mse', 'age_mae')
     """
-    print(f"\nTop Runs by {metric}:")
-    print("-" * 80)
+    print(f"\nTop Runs by {metric}:".upper())
+    print("=" * 100)
 
     def get_metric_value(summary: HPORunSummary) -> float:
         m = summary.best_metrics
@@ -250,7 +255,19 @@ def print_best_comparison(
     )
 
     for i, summary in enumerate(sorted_summaries[:5], 1):
-        print(f"{i}. {summary.config_name:<25} | {summary.best_metrics}")
+        print(f"\n{i}. {summary.config_name:<25} | {summary.best_metrics}")
+
+        # Print hyperparameters for this run
+        if summary.best_metrics.hyperparams:
+            print("   Hyperparameters:")
+            hyperparams = summary.best_metrics.hyperparams
+            for param_name, param_value in sorted(hyperparams.items()):
+                if isinstance(param_value, float):
+                    print(f"     • {param_name:<20} = {param_value:.6g}")
+                else:
+                    print(f"     • {param_name:<20} = {param_value}")
+
+    print("\n" + "=" * 100)
 
 
 def save_comparison_json(

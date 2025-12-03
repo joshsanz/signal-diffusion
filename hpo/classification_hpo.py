@@ -38,7 +38,7 @@ SEARCH_SPACE = {
     "dropout": [0.1, 0.8],
     "depth": [2, 4],
     "layer_repeats": [1, 4],
-    "embedding_dim": [128, 192, 256, 384],
+    "embedding_dim": [128, 192, 256, 384, 512],
     "batch_size": [64, 128, 192, 256],
 }
 
@@ -169,6 +169,7 @@ def run_training_trial(
                 else:
                     # Regression: normalize MSE to [0, 1] scale using 1/(1+mse)
                     mse = final_epoch.val_mse.get(task_name)
+                    mae = final_epoch.val_mae.get(task_name)
                     if mse is not None:
                         mse_val = max(0.0, float(mse))
                         normalized_score = 1.0 / (1.0 + mse_val)
@@ -176,6 +177,7 @@ def run_training_trial(
                         task_results[task_name] = {
                             "type": "regression",
                             "mse": mse_val,
+                            "mae": float(mae) if mae is not None else None,
                             "normalized_score": normalized_score,
                         }
 
@@ -371,6 +373,8 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
                     trial.set_user_attr(f"task_{task_name}_accuracy", task_result["accuracy"])
                 else:
                     trial.set_user_attr(f"task_{task_name}_mse", task_result["mse"])
+                    if task_result.get("mae") is not None:
+                        trial.set_user_attr(f"task_{task_name}_mae", task_result["mae"])
                     trial.set_user_attr(f"task_{task_name}_normalized_score", task_result["normalized_score"])
 
         # Store training metadata

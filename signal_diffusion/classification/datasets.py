@@ -58,33 +58,56 @@ def default_transform(output_type: str = "db-only"):
 def _preprocess_hf_dataset(
     examples: Mapping[str, Any],
     *,
-    transform: transforms.Compose,
+    transform: transforms.Compose | None,
     tasks: Sequence[str],
     output_type: str = "db-only",
+    is_timeseries: bool = False,
 ) -> Mapping[str, Any]:
-    """Preprocess examples from HuggingFace dataset."""
-    images = examples.get("image") or examples.get("pixel_values")
-    if images is None:
-        raise KeyError("Dataset must provide an 'image' column")
+    """Preprocess examples from HuggingFace dataset.
 
-    # Convert to appropriate mode based on output_type
-    mode = "L" if output_type == "db-only" else "RGB"
-    processed_images = [transform(image.convert(mode)) for image in images]
+    Supports both image-based (spectrogram) and signal-based (time-series) data.
+    """
+    batch: MutableMapping[str, Any] = {}
+    batch_size = None
 
-    # Build targets dict from metadata columns
-    batch: MutableMapping[str, Any] = {"image": processed_images}
+    # Handle time-series data (signal column)
+    if is_timeseries:
+        signals = examples.get("signal")
+        if signals is None:
+            raise KeyError("Time-series dataset must provide a 'signal' column")
+        batch_size = len(signals)
+        # Convert signals to tensors if needed
+        processed_signals = [
+            torch.as_tensor(sig, dtype=torch.float32) if not isinstance(sig, torch.Tensor) else sig
+            for sig in signals
+        ]
+        batch["signal"] = processed_signals
+    else:
+        # Handle image/spectrogram data (image column)
+        images = examples.get("image") or examples.get("pixel_values")
+        if images is None:
+            raise KeyError("Dataset must provide an 'image' or 'signal' column")
+        batch_size = len(images)
+
+        # Convert to appropriate mode based on output_type
+        mode = "L" if output_type == "db-only" else "RGB"
+        if transform is not None:
+            processed_images = [transform(image.convert(mode)) for image in images]
+        else:
+            processed_images = [torch.as_tensor(image) for image in images]
+        batch["image"] = processed_images
 
     # Extract task labels from the examples
     targets_list = []
-    for i in range(len(processed_images)):
+    for i in range(batch_size):
         row_dict = {key: examples[key][i] for key in examples.keys()}
         targets = {task: META_LABELS.encode(task, row_dict) for task in tasks}
         targets_list.append(targets)
 
     batch["targets"] = targets_list
-    # Exclude 'image' and 'pixel_values' from metadata to avoid PIL image issues in collate
-    metadata_keys = [key for key in examples.keys() if key not in ("image", "pixel_values")]
-    batch["metadata"] = [{key: examples[key][i] for key in metadata_keys} for i in range(len(processed_images))]
+    # Exclude 'image', 'pixel_values', and 'signal' from metadata to avoid issues in collate
+    metadata_keys = [key for key in examples.keys() if key not in ("image", "pixel_values", "signal")]
+    batch["metadata"] = [{key: examples[key][i] for key in metadata_keys} for i in range(batch_size)]
 
     return batch
 
@@ -112,13 +135,22 @@ def build_dataset(
         # Load from path using HuggingFace datasets
         ds = hf_load_dataset(str(dataset_path), split=split)
 
+        # Detect if this is a time-series dataset based on available columns
+        is_timeseries_path = "signal" in ds.column_names
+
         # Apply preprocessing transform
-        transform_fn = transform or default_transform(settings.output_type)
+        transform_fn = None
+        if not is_timeseries_path:
+            transform_fn = transform or default_transform(settings.output_type)
+        else:
+            transform_fn = transform
+
         preprocess = partial(
             _preprocess_hf_dataset,
             transform=transform_fn,
             tasks=tasks,
             output_type=settings.output_type,
+            is_timeseries=is_timeseries_path,
         )
         return ds.with_transform(preprocess)
 

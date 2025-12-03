@@ -277,7 +277,7 @@ def get_full_repo_name(
 
 
 def _ensure_gitignore_entries(output_dir: Path, entries: Sequence[str]) -> None:
-    """Append missing gitignore entries for artifacts produced during training."""
+    """Write gitignore entries for artifacts produced during training."""
     gitignore_path = output_dir / ".gitignore"
     existing: Sequence[str]
     if gitignore_path.exists():
@@ -289,8 +289,9 @@ def _ensure_gitignore_entries(output_dir: Path, entries: Sequence[str]) -> None:
     if not missing:
         return
 
-    with gitignore_path.open("a", encoding="utf-8") as handle:
-        for entry in missing:
+    all_entries = list(existing) + missing
+    with gitignore_path.open("w", encoding="utf-8") as handle:
+        for entry in all_entries:
             handle.write(f"{entry}\n")
 
 

@@ -9,10 +9,10 @@ trainer = "classification"
 data_type = "timeseries"
 
 [dataset]
-name = "seed_timeseries"
+name = "/data/data/signal-diffusion/processed/reweighted_timeseries_meta_dataset_n2048_fs125/"
 train_split = "train"
-val_split = "val"
-tasks = ["emotion", "gender"]
+val_split = "validation"
+tasks = ["health", "gender", "age"]
 batch_size = 32
 num_workers = 2
 shuffle = true
@@ -26,6 +26,9 @@ backbone = "cnn_1d"
 input_channels = 20  # 20 selected EEG channels
 embedding_dim = 256
 dropout = 0.3
+depth = 3
+layer_repeats = 3
+
 
 [optimizer]
 name = "adamw"
@@ -40,15 +43,17 @@ warmup_steps = 100
 min_lr_ratio = 0.01
 
 [training]
-epochs = 25
+epochs = 15
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 10
 tensorboard = true
-eval_strategy = "epoch"
+eval_strategy = "steps"
+eval_steps = 100
 checkpoint_strategy = "epoch"
 checkpoint_total_limit = 3
 
 [training.task_weights]
-emotion = 1.0
-gender = 1.0
+health = 1.0
+gender = 2.0
+age = 0.02

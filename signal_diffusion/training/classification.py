@@ -327,6 +327,8 @@ class EpochMetrics:
     train_mse: dict[str, float | None]
     val_mse: dict[str, float | None]
     lr: float
+    train_mae: dict[str, float | None] = field(default_factory=dict)
+    val_mae: dict[str, float | None] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -827,11 +829,14 @@ def train_from_config(
             train_losses = {name: float(train_result["losses"][name]) for name in tasks}
             train_accuracy: dict[str, float | None] = {}
             train_mse: dict[str, float | None] = {}
+            train_mae: dict[str, float | None] = {}
             for name in tasks:
                 value = train_result["accuracy"].get(name)
                 train_accuracy[name] = float(value) if value is not None else None
                 mse_value = train_result.get("mse", {}).get(name)
                 train_mse[name] = float(mse_value) if mse_value is not None else None
+                mae_value = train_result.get("mae", {}).get(name)
+                train_mae[name] = float(mae_value) if mae_value is not None else None
 
             if latest_val is not None:
                 val_loss: float | None = float(latest_val["loss"])
@@ -840,16 +845,20 @@ def train_from_config(
                 }
                 val_accuracy: dict[str, float | None] = {}
                 val_mse: dict[str, float | None] = {}
+                val_mae: dict[str, float | None] = {}
                 for name in tasks:
                     value = latest_val["accuracy"].get(name)
                     val_accuracy[name] = float(value) if value is not None else None
                     mse_value = latest_val.get("mse", {}).get(name)
                     val_mse[name] = float(mse_value) if mse_value is not None else None
+                    mae_value = latest_val.get("mae", {}).get(name)
+                    val_mae[name] = float(mae_value) if mae_value is not None else None
             else:
                 val_loss = None
                 val_losses = {name: None for name in tasks}
                 val_accuracy = {name: None for name in tasks}
                 val_mse = {name: None for name in tasks}
+                val_mae = {name: None for name in tasks}
 
             lr = optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
             epoch_metrics = EpochMetrics(
@@ -863,6 +872,8 @@ def train_from_config(
                 train_mse=train_mse,
                 val_mse=val_mse,
                 lr=lr,
+                train_mae=train_mae,
+                val_mae=val_mae,
             )
             history.append(epoch_metrics)
 
@@ -1548,6 +1559,8 @@ def _save_history(history: list[EpochMetrics], path: Path) -> None:
             "val_accuracy": item.val_accuracy,
             "train_mse": item.train_mse,
             "val_mse": item.val_mse,
+            "train_mae": item.train_mae,
+            "val_mae": item.val_mae,
             "lr": item.lr,
         }
         for item in history
