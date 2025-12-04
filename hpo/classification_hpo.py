@@ -38,8 +38,8 @@ SEARCH_SPACE = {
     "dropout": [0.1, 0.8],
     "depth": [2, 4],
     "layer_repeats": [1, 4],
-    "embedding_dim": [128, 192, 256, 384, 512],
-    "batch_size": [64, 128, 192, 256],
+    "embedding_dim": [128, 192, 256, 384],
+    "batch_size": [64, 128, 192],
 }
 
 

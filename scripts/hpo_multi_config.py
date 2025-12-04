@@ -87,6 +87,7 @@ def create_hpo_configs(
         ("db-only", "config/classification/baseline.toml"),
         ("db-polar", "config/classification/baseline-db-polar.toml"),
         ("db-iq", "config/classification/baseline-db-iq.toml"),
+        ("timeseries", "config/classification/baseline-timeseries.toml"),
     ]
     task_objectives = ["gender", "mixed"]
 
@@ -350,7 +351,7 @@ def main():
         type=str,
         nargs="+",
         default=None,
-        help="Spec types to run (default: all). Choose from: db-only, db-polar, db-iq",
+        help="Spec types to run (default: all). Choose from: db-only, db-polar, db-iq, timeseries",
     )
 
     args = parser.parse_args()
