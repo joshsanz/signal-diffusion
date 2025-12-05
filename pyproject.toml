@@ -38,6 +38,8 @@ dependencies = [
     "causal-conv1d>=1.5.3.post1",
     "mamba-ssm>2",
     "pytest>=9.0.1",
+    "tomli-w>=1.2.0",
+    "wandb>=0.23.1",
 ]
 
 # Optional GPU-accelerated packages (CUDA-dependent)
