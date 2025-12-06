@@ -1,30 +1,29 @@
-# LocalMamba adapter configuration for time-series diffusion (EEG) data.
+# LocalMamba diffusion configuration for db-iq spectrograms (3 channels: dB, I, Q)
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
 
-[data]
-output_type = "db-only"  # Not used for timeseries
-data_type = "timeseries"
-
 [dataset]
-name = "/data/data/signal-diffusion/processed/reweighted_timeseries_meta_dataset_n2048_fs125"
+name = "/data/data/signal-diffusion/processed-iq/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"
 val_split = "validation"
 batch_size = 64
 num_workers = 4
-resolution = 2048  # Sequence length (must match preprocessing nsamps)
+resolution = 256
+center_crop = false
+random_flip = false
+image_column = "image"
+caption_column = ""
 num_classes = 0
 
-[dataset.extras]
-n_eeg_channels = 20  # SEED channel count; set manually when stats are missing
-sequence_length = 2048  # Explicitly match resolution for timeseries runs
-gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+[data]
+output_type = "db-iq"
+data_type = "spectrogram"
 
 [model]
 name = "localmamba"
-sample_size = 2048
-conditioning = "none"  # none, caption, classes
+sample_size = 256
+conditioning = "none"
 
 [model.extras]
 depths = [2, 2, 6, 2]
@@ -36,9 +35,9 @@ scan_directions = ["h", "v", "w7"]
 mapping_width = 256
 mapping_depth = 2
 mapping_dropout_rate = 0.0
-patch_size = [1, 8]  # Asymmetric patches: (channels, timesteps)
-in_channels = 1  # Single channel for time-series (B, 1, n_channels, n_samples)
-out_channels = 1
+patch_size = [2, 2]
+in_channels = 3
+out_channels = 3
 dropout_rate = 0.1
 cfg_dropout = 0.0
 
@@ -57,25 +56,25 @@ betas = [0.9, 0.99]
 
 [scheduler]
 name = "constant_with_warmup"
-warmup_steps = 100
+warmup_steps = 1000
 
 [training]
 seed = 42
-epochs = 100
-mixed_precision = "bf16"
+epochs = 200
+gradient_accumulation_steps = 1
 gradient_checkpointing = true
-gradient_accumulation_steps = 2
+mixed_precision = "bf16"
 gradient_clip_norm = 1.0
-snr_gamma = 5.0
-
 log_every_steps = 10
 checkpoint_interval = 1000
 checkpoint_total_limit = 3
-
-eval_strategy = "epoch"
-eval_num_steps = 100
+eval_strategy = "steps"
+eval_num_steps = 1000
 eval_num_examples = 8
-
+eval_gen_seed = 1234
+eval_batch_size = 256
+eval_mmd_samples = 1000
+eval_mmd_fallback_ntrain = 5000
 ema_use_warmup = true
 ema_inv_gamma = 1
 ema_power = 0.75
@@ -84,8 +83,8 @@ ema_update_after_step = 1000
 
 [logging]
 tensorboard = true
-run_name = "localmamba-timeseries"
-log_dir = "runs/diffusion/tensorboard/localmamba-timeseries"
+log_dir = "runs/diffusion/tensorboard/localmamba-db-iq"
+run_name = "localmamba_db_iq"
 
 [inference]
 denoising_steps = 25

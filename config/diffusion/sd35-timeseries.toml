@@ -1,0 +1,87 @@
+# Stable Diffusion 3.5 Medium configuration for time-series EEG data.
+# Note: SD 3.5 is designed for image generation and may require custom handling for timeseries data.
+# This config uses latent space encoding for efficient training.
+[settings]
+config = "~/git/signal-diffusion/config/default.toml"
+trainer = "diffusion"
+
+[data]
+output_type = "db-only"  # Not used for timeseries
+data_type = "timeseries"
+
+[dataset]
+name = "/data/data/signal-diffusion/processed/reweighted_timeseries_meta_dataset_n2048_fs125"
+train_split = "train"
+val_split = "validation"
+batch_size = 8
+num_workers = 4
+resolution = 2048  # Sequence length (must match preprocessing nsamps)
+latent_space = true
+num_classes = 0
+
+[dataset.extras]
+n_eeg_channels = 20  # SEED channel count
+sequence_length = 2048  # Explicitly match resolution for timeseries runs
+gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+
+[model]
+name = "stable-diffusion-3.5-medium"
+sample_size = 2048
+conditioning = "none"
+pretrained = "stabilityai/stable-diffusion-3.5-medium"
+
+[model.extras]
+skip_t5 = true
+cfg_dropout = 0.1
+train_text_encoder = false
+
+[model.lora]
+enabled = false
+
+[objective]
+prediction_type = "epsilon"
+flow_match_timesteps = 1000
+
+[optimizer]
+name = "adamw"
+learning_rate = 5e-5
+weight_decay = 1e-4
+betas = [0.9, 0.999]
+
+[scheduler]
+name = "constant_with_warmup"
+warmup_steps = 500
+
+[training]
+seed = 42
+epochs = 20
+mixed_precision = "fp16"
+gradient_checkpointing = true
+gradient_accumulation_steps = 8
+gradient_clip_norm = 1.0
+snr_gamma = 5.0
+
+log_every_steps = 10
+checkpoint_interval = 500
+checkpoint_total_limit = 3
+
+eval_strategy = "steps"
+eval_num_steps = 500
+eval_num_examples = 2
+eval_mmd_samples = 100
+eval_mmd_fallback_ntrain = 1000
+
+ema_use_warmup = true
+ema_inv_gamma = 1
+ema_power = 0.75
+ema_decay = 0.9999
+ema_update_after_step = 1000
+
+[logging]
+tensorboard = true
+run_name = "sd35-timeseries"
+log_dir = "runs/diffusion/tensorboard/sd35-timeseries"
+
+[inference]
+denoising_steps = 28
+cfg_scale = 7.5

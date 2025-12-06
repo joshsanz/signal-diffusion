@@ -25,6 +25,10 @@ class DatasetConfig:
     image_column: str | None = None
     caption_column: str | None = None
     class_column: str | None = None
+    # Multi-attribute conditioning columns
+    gender_column: str | None = None  # M/F values
+    health_column: str | None = None  # H/PD values (healthy/parkinsons)
+    age_column: str | None = None     # Integer age values
     dataset_type: str = "auto"
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
@@ -156,6 +160,39 @@ class DiffusionConfig:
 
     def validate(self):
         """Validate configuration for incompatible combinations."""
+        import warnings
+
+        # Validate conditioning mode requirements
+        conditioning = (self.model.conditioning or "none").strip().lower()
+        conditioning_mode = self.model.extras.get("conditioning_mode", "class_age")
+
+        if conditioning == "classes" and conditioning_mode == "class_age":
+            # Multi-attribute class conditioning requires gender and health columns
+            if not self.dataset.gender_column:
+                raise ValueError(
+                    "class_age conditioning requires 'dataset.gender_column' to be set"
+                )
+            if not self.dataset.health_column:
+                raise ValueError(
+                    "class_age conditioning requires 'dataset.health_column' to be set"
+                )
+            # age_column is optional - missing values treated as CFG dropout
+
+        if conditioning == "caption":
+            if not self.dataset.caption_column:
+                raise ValueError(
+                    "caption conditioning requires 'dataset.caption_column' to be set"
+                )
+
+        # Warn if SD model used without latent space
+        if self.model.name.startswith("stable-diffusion"):
+            latent_space = self.model.extras.get("latent_space", True)
+            if not latent_space:
+                warnings.warn(
+                    "Stable Diffusion models work best in latent space. "
+                    "Consider setting model.extras.latent_space = true"
+                )
+
         if self.settings is None:
             return  # Settings not loaded yet
 
@@ -243,6 +280,9 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         image_column=_opt(section.get("image_column")),
         caption_column=_opt(section.get("caption_column")),
         class_column=_opt(section.get("class_column")),
+        gender_column=_opt(section.get("gender_column")),
+        health_column=_opt(section.get("health_column")),
+        age_column=_opt(section.get("age_column")),
         dataset_type=str(section.get("dataset_type", "auto")),
         max_train_samples=section.get("max_train_samples"),
         max_eval_samples=section.get("max_eval_samples"),

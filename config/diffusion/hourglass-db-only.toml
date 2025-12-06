@@ -1,4 +1,4 @@
-# Example configuration for multi-task classifier training.
+# Hourglass transformer configuration for db-only spectrograms (1 channel: dB magnitude)
 [settings]
 config = "~/git/signal-diffusion/config/default.toml"
 trainer = "diffusion"
@@ -10,10 +10,10 @@ data_type = "spectrogram"
 [dataset]
 name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"
-val_split = "val"
-batch_size = 32
+val_split = "validation"
+batch_size = 64
 num_workers = 4
-resolution = 64
+resolution = 256
 center_crop = false
 random_flip = false
 image_column = "image"
@@ -21,19 +21,30 @@ caption_column = ""
 num_classes = 0
 
 [model]
-name = "dit"
-sample_size = 32
-conditioning = "none" # none, caption, classes
+name = "hourglass"
+sample_size = 256
+conditioning = "none"
 
 [model.extras]
-num_attention_heads = 16
-attention_head_dim = 72
-in_channels = 3
-out_channels = 3
-num_layers = 12
-patch_size = 2
-latent_space = false
-num_classes = 0
+mapping_width = 256
+mapping_depth = 2
+mapping_d_ff = 768
+mapping_cond_dim = 0
+mapping_dropout_rate = 0.0
+depths = [2, 2, 3]
+widths = [64, 128, 256]
+d_ffs = [512, 512, 512]
+self_attns = [
+    { type = "neighborhood", d_head = 64, kernel_size = 7 },
+    { type = "neighborhood", d_head = 64, kernel_size = 7 },
+    { type = "global", d_head = 64 }
+]
+dropout_rate = [0.05, 0.05, 0.05]
+augment_wrapper = false
+augment_prob = 0.0
+patch_size = [2, 2]
+in_channels = 1
+out_channels = 1
 cfg_dropout = 0.0
 
 [model.lora]
@@ -57,7 +68,7 @@ warmup_steps = 100
 seed = 42
 epochs = 1
 mixed_precision = "bf16"
-gradient_checkpointing = false
+gradient_checkpointing = true
 gradient_accumulation_steps = 1
 gradient_clip_norm = 1.0
 snr_gamma = 5.0
@@ -66,24 +77,22 @@ log_every_steps = 10
 checkpoint_interval = 1000
 checkpoint_total_limit = 3
 
-eval_strategy = "steps" # or "epoch"
+eval_strategy = "steps"
 eval_num_steps = 100
 eval_num_examples = 8
 eval_mmd_samples = 100
 eval_mmd_fallback_ntrain = 1000
 
 ema_use_warmup = true
-ema_inv_gamma = 1 # always 1
-ema_power = 0.75 # 0.75 reaches decay 0.999 ~10k steps, 0.667 ~30k steps
-ema_decay = 0.999 # if use_warmup=false
-ema_update_after_step = 1000 # if use_warmup=false
+ema_inv_gamma = 1
+ema_power = 0.75
+ema_decay = 0.999
+ema_update_after_step = 1000
 
 [logging]
 tensorboard = true
-run_name = "baseline"
-log_dir = "runs/diffusion/tensorboard/base"
-# wandb_project = "your-project-name"
-
+run_name = "hourglass-db-only"
+log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
 
 [inference]
 denoising_steps = 25

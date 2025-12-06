@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Any
 
 import torch
 from accelerate import Accelerator
@@ -21,6 +21,7 @@ from signal_diffusion.diffusion.models.base import (
 )
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
+    get_sigmas_from_timesteps,
     get_snr,
     sample_timestep_logitnorm,
     verify_scheduler,
@@ -37,6 +38,10 @@ class DiTExtras:
     num_classes: int = 0
     cfg_dropout: float = 0.0
     timestep_embeddings: int = 1000
+    # Multi-attribute conditioning options
+    conditioning_mode: str = "class_age"  # "class_age" or "classes"
+    num_genders: int = 3   # M, F, dropout token
+    num_health: int = 3    # H, PD, dropout token
 
 
 class DiTAdapter:
@@ -70,11 +75,24 @@ class DiTAdapter:
             raise ValueError(f"Unsupported conditioning type '{conditioning}' for DiT models")
         latent_space = bool(extras.get("latent_space", False))
         vae = extras.get("vae")
+        # Fallback to default stable diffusion model ID if VAE is unspecified
+        if vae is None and cfg.settings:
+            vae = cfg.settings.models.get("stable_diffusion_model_id")
+            if vae is not None:
+                self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
         num_classes_value = extras.get("num_classes", cfg.dataset.num_classes)
         num_classes = int(num_classes_value or 0)
         cfg_dropout = float(extras.get("cfg_dropout", 0.0))
         timestep_embeddings = int(cfg.objective.flow_match_timesteps or 1000)
         text_encoder = extras.get("text_encoder")
+
+        # Multi-attribute conditioning options
+        conditioning_mode = str(extras.get("conditioning_mode", "class_age")).strip().lower()
+        if conditioning_mode not in {"class_age", "classes"}:
+            conditioning_mode = "class_age"
+        num_genders = int(extras.get("num_genders", 3))
+        num_health = int(extras.get("num_health", 3))
+
         return DiTExtras(
             conditioning=conditioning,
             latent_space=latent_space,
@@ -83,22 +101,49 @@ class DiTAdapter:
             num_classes=num_classes,
             cfg_dropout=cfg_dropout,
             timestep_embeddings=timestep_embeddings,
+            conditioning_mode=conditioning_mode,
+            num_genders=num_genders,
+            num_health=num_health,
         )
 
     def _dit_prepare_class_labels(
         self,
         images: torch.Tensor,
-        class_labels: torch.Tensor | None,
+        batch: DiffusionBatch,
         extras: DiTExtras,
     ) -> torch.Tensor:
         """Prepare class labels for DiT training with CFG dropout."""
         if extras.conditioning == "classes":
-            if class_labels is None:
-                raise ValueError("Class conditioning requires 'batch.class_labels'")
-            class_labels_out = class_labels.to(device=images.device, dtype=torch.long)
-            if extras.cfg_dropout > 0:
-                mask = torch.rand(class_labels_out.shape, device=class_labels_out.device) < extras.cfg_dropout
-                class_labels_out = class_labels_out.masked_fill(mask, extras.num_classes)
+            # Check if using multi-attribute conditioning mode
+            if extras.conditioning_mode == "class_age" and batch.gender_labels is not None and batch.health_labels is not None:
+                # Use combined gender+health as class label
+                from signal_diffusion.diffusion.conditioning import (
+                    compute_combined_class,
+                    prepare_multi_attribute_labels,
+                )
+
+                gender_labels, health_labels, _ = prepare_multi_attribute_labels(
+                    batch,
+                    device=images.device,
+                    cfg_dropout=extras.cfg_dropout,
+                    dropout_token=2,
+                )
+
+                # Compute combined class: gender * 2 + health, with dropout=num_classes
+                class_labels_out = compute_combined_class(
+                    gender_labels,
+                    health_labels,
+                    num_health_classes=2,
+                    dropout_token=extras.num_classes,
+                )
+            else:
+                # Standard class conditioning
+                if batch.class_labels is None:
+                    raise ValueError("Class conditioning requires 'batch.class_labels'")
+                class_labels_out = batch.class_labels.to(device=images.device, dtype=torch.long)
+                if extras.cfg_dropout > 0:
+                    mask = torch.rand(class_labels_out.shape, device=class_labels_out.device) < extras.cfg_dropout
+                    class_labels_out = class_labels_out.masked_fill(mask, extras.num_classes)
         else:
             # Diffusers' DiT uses AdaLayerNormZero under the hood, which always expects
             # a label embedding. Provide a constant dummy tensor so unconditional runs
@@ -191,7 +236,10 @@ class DiTAdapter:
 
         vae = None
         if self._extras.latent_space and self._extras.vae:
-            vae = AutoencoderKL.from_pretrained(self._extras.vae)
+            if "vae" in self._extras.vae:
+                vae = AutoencoderKL.from_pretrained(self._extras.vae)
+            else:
+                vae = AutoencoderKL.from_pretrained(self._extras.vae, subfolder="vae")
             if accelerator.is_main_process:
                 self._logger.info("Loaded VAE from %s", self._extras.vae)
 
@@ -253,7 +301,7 @@ class DiTAdapter:
         *,
         denoising_steps: int,
         cfg_scale: float,
-        conditioning: torch.Tensor | str | Iterable[str] | None,
+        conditioning: torch.Tensor | str | Iterable[str] | Mapping[str, torch.Tensor] | None,
         generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(modules.noise_scheduler.config)
@@ -272,16 +320,53 @@ class DiTAdapter:
             generator=generator,
         )
         extras = self._extras
+        dropout_label = extras.num_classes
 
-        if conditioning is not None and not isinstance(conditioning, torch.Tensor):
-            raise ValueError("DiT adapter only supports tensor class-label conditioning during sampling")
-        if conditioning is not None and extras.conditioning != "classes":
-            raise ValueError("Class label conditioning is only enabled when 'conditioning' is set to 'classes'")
-        if conditioning is None and extras.conditioning not in {"none", "classes"}:
-            raise ValueError(f"Unsupported conditioning mode '{extras.conditioning}' for DiT sampling")
+        # Initialize conditioning variables
+        class_labels: torch.Tensor | None = None
+        unconditional_labels: torch.Tensor | None = None
+        classifier_free = False
 
-        classifier_free = conditioning is not None
-        if conditioning is not None:
+        if conditioning is None:
+            # Unconditional generation
+            class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
+            classifier_free = False
+
+        elif isinstance(conditioning, Mapping) and not isinstance(conditioning, torch.Tensor):
+            # Multi-attribute conditioning: {"gender": Tensor, "health": Tensor}
+            from signal_diffusion.diffusion.conditioning import compute_combined_class
+
+            gender = conditioning.get("gender")
+            health = conditioning.get("health")
+
+            if gender is not None and health is not None:
+                gender_labels = gender.to(device=device, dtype=torch.long)
+                health_labels = health.to(device=device, dtype=torch.long)
+
+                # Expand if single value provided
+                if gender_labels.shape[0] == 1 and num_images > 1:
+                    gender_labels = gender_labels.expand(num_images)
+                if health_labels.shape[0] == 1 and num_images > 1:
+                    health_labels = health_labels.expand(num_images)
+
+                # Compute combined class labels
+                class_labels = compute_combined_class(
+                    gender_labels,
+                    health_labels,
+                    num_health_classes=2,
+                    dropout_token=dropout_label,
+                )
+                unconditional_labels = torch.full_like(class_labels, dropout_label)
+                classifier_free = True
+            else:
+                # Fall back to unconditional
+                class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
+
+        elif isinstance(conditioning, torch.Tensor):
+            # Standard class-label conditioning tensor
+            if extras.conditioning != "classes":
+                raise ValueError("Class label conditioning is only enabled when 'conditioning' is set to 'classes'")
+            classifier_free = True
             class_labels = conditioning.to(device=device, dtype=torch.long)
             if class_labels.ndim != 1:
                 raise ValueError("Class-label conditioning tensor must be 1D with shape (num_images,)")
@@ -289,7 +374,6 @@ class DiTAdapter:
                 class_labels = class_labels.expand(num_images)
             if class_labels.shape[0] != num_images:
                 raise ValueError("Number of class labels must match num_images")
-            dropout_label = extras.num_classes
             num_embeds = int(getattr(getattr(modules.denoiser, "config", None), "num_embeds_ada_norm", dropout_label + 1))
             if dropout_label >= num_embeds:
                 raise ValueError(
@@ -297,9 +381,9 @@ class DiTAdapter:
                     "increase 'model.extras.num_classes' to include the dropout token."
                 )
             unconditional_labels = torch.full_like(class_labels, dropout_label)
+
         else:
-            class_labels = torch.zeros(num_images, device=device, dtype=torch.long)
-            unconditional_labels = None
+            raise TypeError("DiT adapter only supports tensor or Mapping conditioning during sampling")
 
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
@@ -311,7 +395,7 @@ class DiTAdapter:
                     model_input = scheduler.scale_model_input(model_input, timestep)
 
                 denoiser_timestep = timestep.expand(model_input.shape[0])
-                if classifier_free and unconditional_labels is not None:
+                if classifier_free and unconditional_labels is not None and class_labels is not None:
                     class_input = torch.cat([unconditional_labels, class_labels], dim=0)
                 else:
                     class_input = class_labels
@@ -320,7 +404,7 @@ class DiTAdapter:
                     model_input, timestep=denoiser_timestep, class_labels=class_input
                 ).sample
 
-                if classifier_free and unconditional_labels is not None:
+                if classifier_free:
                     model_output_uncond, model_output_cond = model_output.chunk(2)
                     model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
 
@@ -365,7 +449,7 @@ class DiTAdapter:
         z_t = scheduler.scale_noise(images, timesteps, noise)
         snr = get_snr(scheduler, timesteps, device=images.device)
 
-        class_labels = self._dit_prepare_class_labels(images, batch.class_labels, extras)
+        class_labels = self._dit_prepare_class_labels(images, batch, extras)
 
         if cfg.objective.prediction_type == "epsilon":
             target = noise

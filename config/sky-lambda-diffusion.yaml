@@ -1,0 +1,44 @@
+resources:
+  # Optional; if left out, automatically pick the cheapest cloud.
+  infra: lambda
+  # 1x NVIDIA A6000 GPU
+  accelerators: A6000:1
+  # autostop: 5m  # Stop after this many idle minutes.
+
+file_mounts:
+  /data:
+    source: s3://signal-diffusion/
+    mode: MOUNT
+  ~/.netrc: ~/.netrc
+  ~/.aws: ~/.aws
+  ~/.cache/huggingface/token: ~/.cache/huggingface/token
+
+# Working directory (optional) containing the project codebase.
+# Its contents are synced to ~/sky_workdir/ on the cluster.
+workdir: .
+
+# Typical use: pip install -r requirements.txt
+# Invoked under the workdir (i.e., can use its files).
+setup: |
+  echo "Running setup."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  uv venv --seed --python=3.12
+  uv sync
+  # Once NATTEN is built, store it to /data for future use.
+  ./install-natten.sh
+  cp -r NATTEN /data/NATTEN
+  # If NATTEN is already built, install it from /data.
+  # uv pip install -e /data/NATTEN
+
+# Typical use: make use of resources, such as running training.
+# Invoked under the workdir (i.e., can use its files).
+run: |
+  echo "Hello, SkyPilot!"
+  export MODEL=hourglass
+  export DATASET=db_iq
+  export RUN_ID=$(date +%Y%m%d_%H%M%S)
+  source .venv/bin/activate
+  python train.py \
+    --output_dir /data/runs/$MODEL-$DATASET-$RUN_ID \
+    --config config/diffusion/$MODEL-$DATASET.yaml
+  echo "Run completed."

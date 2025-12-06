@@ -1,6 +1,7 @@
 """Dataset and dataloader builders for diffusion training."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -28,6 +29,12 @@ class DiffusionBatch:
     pixel_values: torch.Tensor
     captions: torch.Tensor | None = None
     class_labels: torch.Tensor | None = None
+    # Multi-attribute conditioning fields
+    gender_labels: torch.Tensor | None = None   # (B,) int: 0=M, 1=F, 2=missing/dropout
+    health_labels: torch.Tensor | None = None   # (B,) int: 0=H, 1=PD, 2=missing/dropout
+    age_values: torch.Tensor | None = None      # (B,) float in [0,1], NaN=missing
+    # Raw caption strings for text encoder (not tokenized)
+    raw_captions: list[str] | None = None
 
 
 class DiffusionCollator:
@@ -43,13 +50,44 @@ class DiffusionCollator:
             pixel_values = torch.stack([torch.as_tensor(example["image"]) for example in examples])
         else:
             raise KeyError("Examples must contain 'signal', 'pixel_values', or 'image' key")
+
         captions = None
         class_labels = None
+        gender_labels = None
+        health_labels = None
+        age_values = None
+        raw_captions = None
+
         if "captions" in examples[0]:
             captions = torch.stack([torch.as_tensor(example["captions"]) for example in examples])
         if "class_labels" in examples[0]:
             class_labels = torch.as_tensor([example["class_labels"] for example in examples])
-        return DiffusionBatch(pixel_values=pixel_values, captions=captions, class_labels=class_labels)
+
+        # Multi-attribute conditioning
+        if "gender_labels" in examples[0]:
+            gender_labels = torch.as_tensor(
+                [example["gender_labels"] for example in examples], dtype=torch.long
+            )
+        if "health_labels" in examples[0]:
+            health_labels = torch.as_tensor(
+                [example["health_labels"] for example in examples], dtype=torch.long
+            )
+        if "age_values" in examples[0]:
+            age_values = torch.as_tensor(
+                [example["age_values"] for example in examples], dtype=torch.float32
+            )
+        if "raw_captions" in examples[0]:
+            raw_captions = [example["raw_captions"] for example in examples]
+
+        return DiffusionBatch(
+            pixel_values=pixel_values,
+            captions=captions,
+            class_labels=class_labels,
+            gender_labels=gender_labels,
+            health_labels=health_labels,
+            age_values=age_values,
+            raw_captions=raw_captions,
+        )
 
 
 def _maybe_load_settings(cfg_path: Path | None) -> Settings | None:
@@ -171,6 +209,9 @@ def _preprocess(
     tokenizer: PreTrainedTokenizerBase | None,
     caption_column: str | None,
     class_column: str | None,
+    gender_column: str | None,
+    health_column: str | None,
+    age_column: str | None,
     is_train: bool,
     data_type: str = "spectrogram",
 ) -> Mapping[str, Any]:
@@ -201,11 +242,63 @@ def _preprocess(
         tokens = _tokenize_captions(tokenizer, captions, is_train=is_train)
         batch["captions"] = [token for token in tokens]
 
+    # Also store raw captions for text encoders that don't use tokenization
+    if caption_column:
+        raw_captions = examples.get(caption_column)
+        if raw_captions is not None:
+            batch["raw_captions"] = [str(c) if c is not None else "" for c in raw_captions]
+
     if class_column:
         labels = examples.get(class_column)
         if labels is None:
             raise KeyError(f"Dataset missing class column '{class_column}'")
         batch["class_labels"] = [int(label) for label in labels]
+
+    # Multi-attribute conditioning: gender
+    if gender_column:
+        genders = examples.get(gender_column)
+        if genders is not None:
+            gender_map = {
+                "M": 0, "m": 0, "male": 0, "Male": 0, "MALE": 0,
+                "F": 1, "f": 1, "female": 1, "Female": 1, "FEMALE": 1,
+            }
+            batch["gender_labels"] = [
+                gender_map.get(str(g).strip(), 2) if g is not None else 2
+                for g in genders
+            ]
+
+    # Multi-attribute conditioning: health
+    if health_column:
+        healths = examples.get(health_column)
+        if healths is not None:
+            health_map = {
+                "H": 0, "h": 0, "healthy": 0, "Healthy": 0, "HEALTHY": 0,
+                "PD": 1, "pd": 1, "parkinsons": 1, "Parkinsons": 1, "PARKINSONS": 1,
+            }
+            batch["health_labels"] = [
+                health_map.get(str(h).strip(), 2) if h is not None else 2
+                for h in healths
+            ]
+
+    # Multi-attribute conditioning: age (normalized to [0,1])
+    if age_column:
+        ages = examples.get(age_column)
+        if ages is not None:
+            age_values = []
+            for a in ages:
+                if a is None:
+                    age_values.append(float('nan'))
+                else:
+                    try:
+                        age_float = float(a)
+                        if math.isnan(age_float):
+                            age_values.append(float('nan'))
+                        else:
+                            # Normalize age to [0,1] range (assuming max age ~100)
+                            age_values.append(age_float / 100.0)
+                    except (TypeError, ValueError):
+                        age_values.append(float('nan'))
+            batch["age_values"] = age_values
 
     return batch
 
@@ -217,6 +310,9 @@ def _prepare_dataset(
     tokenizer: PreTrainedTokenizerBase | None,
     caption_column: str | None,
     class_column: str | None,
+    gender_column: str | None,
+    health_column: str | None,
+    age_column: str | None,
     is_train: bool,
     data_type: str = "spectrogram",
 ) -> Dataset:
@@ -227,6 +323,9 @@ def _prepare_dataset(
         tokenizer=tokenizer,
         caption_column=caption_column,
         class_column=class_column,
+        gender_column=gender_column,
+        health_column=health_column,
+        age_column=age_column,
         is_train=is_train,
         data_type=data_type,
     )
@@ -280,6 +379,9 @@ def build_dataloaders(
         tokenizer=tokenizer,
         caption_column=cfg.caption_column,
         class_column=cfg.class_column,
+        gender_column=cfg.gender_column,
+        health_column=cfg.health_column,
+        age_column=cfg.age_column,
         is_train=True,
         data_type=data_type,
     )
@@ -299,6 +401,9 @@ def build_dataloaders(
             tokenizer=tokenizer,
             caption_column=cfg.caption_column,
             class_column=cfg.class_column,
+            gender_column=cfg.gender_column,
+            health_column=cfg.health_column,
+            age_column=cfg.age_column,
             is_train=False,
             data_type=data_type,
         )

@@ -43,6 +43,8 @@ class Settings:
     output_type: str = "db-only"
     data_type: str = "spectrogram"  # "spectrogram" or "timeseries"
     datasets: dict[str, DatasetSettings] = field(default_factory=dict)
+    # Model paths for shared resources (VAE, text encoders, etc.)
+    models: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate configuration."""
@@ -72,6 +74,14 @@ class Settings:
         max_sampling_weight = data_section.get("max_sampling_weight", None)
         output_type = data_section.get("output_type", "db-only")
         data_type = data_section.get("data_type", "spectrogram")
+
+        # Load shared model paths
+        models_section = mapping.get("models", {})
+        models: dict[str, str] = {}
+        if isinstance(models_section, Mapping):
+            for key, value in models_section.items():
+                if value is not None:
+                    models[str(key)] = str(value)
 
         datasets_section = mapping.get("datasets", {})
         datasets: dict[str, DatasetSettings] = {}
@@ -125,6 +135,7 @@ class Settings:
             output_type=output_type,
             data_type=data_type,
             datasets=datasets,
+            models=models,
         )
 
 
