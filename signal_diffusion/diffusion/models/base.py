@@ -282,7 +282,9 @@ def finalize_generated_sample(
     if latent_space:
         if vae is None:
             raise RuntimeError("VAE expected for latent-space sampling")
-        sample = sample / getattr(vae.config, "scaling_factor", 1.0)
+        scaling_factor = getattr(vae.config, "scaling_factor", 1.0)
+        shift_factor = getattr(vae.config, "shift_factor", 0.0)
+        sample = sample / scaling_factor + shift_factor
         with torch.no_grad():
             sample = vae.decode(sample.to(device=device, dtype=vae.dtype)).sample
 

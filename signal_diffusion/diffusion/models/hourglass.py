@@ -155,9 +155,9 @@ class HourglassAdapter:
             if vae is not None:
                 self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
 
-        # Multi-attribute conditioning options
+        # Multi-attribute conditioning options (only used when model.conditioning="classes")
         conditioning_mode = str(data.get("conditioning_mode", "class_age")).strip().lower()
-        if conditioning_mode not in {"class_age", "caption"}:
+        if conditioning_mode not in {"class_age", "classes"}:
             conditioning_mode = "class_age"
         num_genders = int(data.get("num_genders", 3))
         num_health = int(data.get("num_health", 3))
@@ -272,13 +272,15 @@ class HourglassAdapter:
         self._num_dataset_classes = cfg.dataset.num_classes
         self._use_gradient_checkpointing = bool(cfg.training.gradient_checkpointing)
 
-        # Initialize text encoder and age embedding based on conditioning mode
+        # Initialize text encoder and age embedding based on model.conditioning
         self._text_encoder = None
         self._age_embedding = None
         self._age_proj = None
 
-        conditioning_mode = self._extras.conditioning_mode
-        if conditioning_mode == "caption":
+        # Primary conditioning check
+        conditioning = str(cfg.model.conditioning or "none").strip().lower()
+
+        if conditioning == "caption":
             # Load dual CLIP text encoders for caption conditioning
             from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 
@@ -307,31 +309,35 @@ class HourglassAdapter:
                     "Caption conditioning enabled with mapping_cond_dim=%d",
                     self._extras.mapping_cond_dim,
                 )
-        elif conditioning_mode == "class_age":
-            # Set up age embedding for class_age mode
-            from signal_diffusion.diffusion.conditioning import AgeEmbedding
+        elif conditioning == "classes":
+            # Only when conditioning="classes", check conditioning_mode
+            conditioning_mode = self._extras.conditioning_mode
+            if conditioning_mode == "class_age":
+                # Set up age embedding for class+age conditioning
+                from signal_diffusion.diffusion.conditioning import AgeEmbedding
 
-            self._age_embedding = AgeEmbedding(
-                out_features=self._extras.age_embedding_dim
-            )
-            # Project age embedding to mapping_cond_dim if needed
-            if self._extras.age_embedding_dim != self._extras.mapping_width:
-                self._age_proj = torch.nn.Linear(
-                    self._extras.age_embedding_dim,
-                    self._extras.mapping_width,
-                    bias=False,
+                self._age_embedding = AgeEmbedding(
+                    out_features=self._extras.age_embedding_dim
                 )
-            else:
-                self._age_proj = torch.nn.Identity()
+                # Project age embedding to mapping_cond_dim if needed
+                if self._extras.age_embedding_dim != self._extras.mapping_width:
+                    self._age_proj = torch.nn.Linear(
+                        self._extras.age_embedding_dim,
+                        self._extras.mapping_width,
+                        bias=False,
+                    )
+                else:
+                    self._age_proj = torch.nn.Identity()
 
-            # For class_age mode, set mapping_cond_dim to mapping_width for age
-            self._extras.mapping_cond_dim = self._extras.mapping_width
-            if accelerator.is_main_process:
-                self._logger.info(
-                    "Class+age conditioning enabled with age_embedding_dim=%d, mapping_cond_dim=%d",
-                    self._extras.age_embedding_dim,
-                    self._extras.mapping_cond_dim,
-                )
+                # For class_age mode, set mapping_cond_dim to mapping_width for age
+                self._extras.mapping_cond_dim = self._extras.mapping_width
+                if accelerator.is_main_process:
+                    self._logger.info(
+                        "Class+age conditioning enabled with age_embedding_dim=%d, mapping_cond_dim=%d",
+                        self._extras.age_embedding_dim,
+                        self._extras.mapping_cond_dim,
+                    )
+            # else: standard class conditioning (conditioning_mode="classes")
 
         if accelerator.is_main_process:
             self._logger.info("Building Hourglass2DModel with extras=%s", self._extras)
@@ -355,17 +361,54 @@ class HourglassAdapter:
         if self._age_proj is not None and not isinstance(self._age_proj, torch.nn.Identity):
             self._age_proj.to(accelerator.device, dtype=weight_dtype)
 
-        # Load VAE if specified
+        # Load VAE only when latent_space is enabled
         vae = None
-        if self._extras.vae:
+        vae_latent_channels = None
+        if self._extras.latent_space:
+            if not self._extras.vae:
+                raise ValueError("latent_space mode requires 'vae' path in model extras")
+
             if "vae" in self._extras.vae:
                 vae = AutoencoderKL.from_pretrained(self._extras.vae)
             else:
                 vae = AutoencoderKL.from_pretrained(self._extras.vae, subfolder="vae")
+
             vae.requires_grad_(False)
             vae.to(accelerator.device, dtype=weight_dtype)
+
+            # Inspect and verify VAE latent channels
+            vae_latent_channels = getattr(vae.config, "latent_channels", None)
+            if vae_latent_channels is None:
+                self._logger.warning(
+                    "VAE config does not specify latent_channels, cannot verify dimensions"
+                )
+            else:
+                # Verify model channels match VAE latent channels
+                model_in_channels = self._extras.in_channels
+                model_out_channels = self._extras.out_channels
+
+                if model_in_channels != vae_latent_channels:
+                    raise ValueError(
+                        f"Model in_channels ({model_in_channels}) does not match "
+                        f"VAE latent_channels ({vae_latent_channels}). "
+                        f"Update model.extras.in_channels={vae_latent_channels} in your config."
+                    )
+
+                if model_out_channels != vae_latent_channels:
+                    raise ValueError(
+                        f"Model out_channels ({model_out_channels}) does not match "
+                        f"VAE latent_channels ({vae_latent_channels}). "
+                        f"Update model.extras.out_channels={vae_latent_channels} in your config."
+                    )
+
+                if accelerator.is_main_process:
+                    self._logger.info(
+                        "Verified: model channels (%d) match VAE latent_channels (%d)",
+                        model_in_channels, vae_latent_channels
+                    )
+
             if accelerator.is_main_process:
-                self._logger.info("Loaded VAE from %s", self._extras.vae)
+                self._logger.info("Loaded VAE from %s for latent space mode", self._extras.vae)
 
         if self._use_gradient_checkpointing and accelerator.is_main_process:
             self._logger.info("Enabled gradient checkpointing for Hourglass denoiser")
@@ -404,13 +447,18 @@ class HourglassAdapter:
             vae = modules.vae
             if vae is None:
                 raise RuntimeError("VAE expected but not initialised")
-            images = vae.encode(images).latent_dist.sample() * vae.config.scaling_factor  # type: ignore
+            scaling_factor = getattr(vae.config, "scaling_factor", 1.0)
+            shift_factor = getattr(vae.config, "shift_factor", 0.0)
+            images = (vae.encode(images).latent_dist.sample() - shift_factor) * scaling_factor  # type: ignore
 
-        # Prepare conditioning based on mode
+        # Prepare conditioning based on model.conditioning
         class_labels: torch.Tensor | None = None
         mapping_cond: torch.Tensor | None = None
 
-        if extras.conditioning_mode == "caption":
+        # Primary conditioning check
+        conditioning = str(cfg.model.conditioning or "none").strip().lower()
+
+        if conditioning == "caption":
             # Caption conditioning: encode raw captions to mapping_cond
             if self._text_encoder is not None and batch.raw_captions is not None:
                 with torch.no_grad():
@@ -424,45 +472,49 @@ class HourglassAdapter:
                         torch.zeros_like(mapping_cond),
                         mapping_cond,
                     )
-        elif extras.conditioning_mode == "class_age":
-            # Class+age conditioning: combined class → class_cond, age → mapping_cond
-            if batch.gender_labels is not None and batch.health_labels is not None:
-                from signal_diffusion.diffusion.conditioning import (
-                    compute_combined_class,
-                    prepare_multi_attribute_labels,
-                )
+        elif conditioning == "classes":
+            # Only when conditioning="classes", check conditioning_mode
+            conditioning_mode = extras.conditioning_mode
+            if conditioning_mode == "class_age":
+                # Class+age conditioning: combined class → class_cond, age → mapping_cond
+                if batch.gender_labels is not None and batch.health_labels is not None:
+                    from signal_diffusion.diffusion.conditioning import (
+                        compute_combined_class,
+                        prepare_multi_attribute_labels,
+                    )
 
-                gender_labels, health_labels, age_values = prepare_multi_attribute_labels(
-                    batch,
-                    device=device,
-                    cfg_dropout=extras.cfg_dropout,
-                    dropout_token=2,
-                )
+                    gender_labels, health_labels, age_values = prepare_multi_attribute_labels(
+                        batch,
+                        device=device,
+                        cfg_dropout=extras.cfg_dropout,
+                        dropout_token=2,
+                    )
 
-                # Compute combined class: gender * 2 + health, with dropout=4
-                class_labels = compute_combined_class(
-                    gender_labels,
-                    health_labels,
-                    num_health_classes=2,
-                    dropout_token=self._num_dataset_classes,  # Use num_dataset_classes as dropout
-                )
+                    # Compute combined class: gender * 2 + health, with dropout=4
+                    class_labels = compute_combined_class(
+                        gender_labels,
+                        health_labels,
+                        num_health_classes=2,
+                        dropout_token=self._num_dataset_classes,  # Use num_dataset_classes as dropout
+                    )
 
-                # Age embedding → mapping_cond
-                if age_values is not None and self._age_embedding is not None:
-                    age_emb = self._age_embedding(age_values)
-                    if self._age_proj is not None:
-                        age_emb = self._age_proj(age_emb)
-                    mapping_cond = age_emb.to(dtype=modules.weight_dtype)
-            else:
-                # Fall back to standard class labels if multi-attribute not available
+                    # Age embedding → mapping_cond
+                    if age_values is not None and self._age_embedding is not None:
+                        age_emb = self._age_embedding(age_values)
+                        if self._age_proj is not None:
+                            age_emb = self._age_proj(age_emb)
+                        mapping_cond = age_emb.to(dtype=modules.weight_dtype)
+                else:
+                    # Fall back to standard class labels if multi-attribute not available
+                    class_labels = prepare_class_labels(
+                        batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
+                    )
+            else:  # conditioning_mode == "classes"
+                # Standard class conditioning
                 class_labels = prepare_class_labels(
                     batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
                 )
-        else:
-            # Default: standard class labels
-            class_labels = prepare_class_labels(
-                batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
-            )
+        # else: conditioning == "none", leave class_labels and mapping_cond as None
 
         noise = torch.randn_like(images)
         timesteps = sample_timestep_logitnorm(

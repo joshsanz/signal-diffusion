@@ -136,7 +136,7 @@ test_config_with_conditioning() {
 }
 
 # Run all configurations with both conditioning types
-CONDITIONING_TYPES=("class_age" "caption")
+CONDITIONING_TYPES=("classes" "caption")
 TOTAL_TESTS=$((${#CONFIGS[@]} * ${#CONDITIONING_TYPES[@]}))
 
 echo "Testing ${#CONFIGS[@]} configurations × ${#CONDITIONING_TYPES[@]} conditioning types = $TOTAL_TESTS tests..."
