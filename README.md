@@ -78,6 +78,97 @@ uv run python -m signal_diffusion.training.diffusion config/diffusion/flowers.to
 
 `scripts/run_diffusion_training.sh` wraps the invocation, resolves repository paths, and ensures the output directory exists.
 
+## Caption-Conditioned Diffusion
+
+Generate EEG spectrograms conditioned on text descriptions like "an EEG spectrogram of a healthy 73 year old female subject" or "an EEG spectrogram of a 55 year old male subject with parkinsons disease".
+
+### Supported Models
+
+| Model | Caption Support | Text Encoder |
+|-------|----------------|--------------|
+| **Hourglass** | ✅ Full | DualCLIP (2048D) |
+| **LocalMamba** | ✅ Full | DualCLIP (2048D) |
+| **Stable Diffusion 3.5** | ✅ Native | DualCLIP (2048D) |
+| DiT | ❌ Not supported | - |
+
+### Quick Start
+
+**1. Prepare a caption dataset:**
+
+Your dataset must include a caption column (e.g., "text"):
+
+```python
+# Example dataset structure
+{
+    "image": <PIL.Image>,
+    "text": "an EEG spectrogram of a healthy 73 year old female subject"
+}
+```
+
+**2. Configure caption conditioning:**
+
+```toml
+# config/diffusion/caption-example.toml
+[dataset]
+name = "path/to/dataset"
+caption_column = "text"              # Column containing captions
+
+[model]
+name = "hourglass"                   # or "localmamba", "stable-diffusion-3.5-medium"
+conditioning = "caption"             # Enable caption conditioning
+
+[model.extras]
+cfg_dropout = 0.1                    # 10% CFG dropout for guidance training
+mapping_cond_dim = 2048              # DualCLIP output dimension
+```
+
+**3. Train with captions:**
+
+```bash
+uv run python -m signal_diffusion.training.diffusion config/diffusion/caption-example.toml --output-dir runs/caption
+```
+
+**4. Sample with prompts:**
+
+```python
+from signal_diffusion.diffusion.models.base import registry
+
+adapter = registry.get("hourglass")
+samples = adapter.generate_conditional_samples(
+    conditioning="an EEG spectrogram of a healthy 73 year old female subject",
+    guidance_scale=7.5,
+    num_samples=4
+)
+```
+
+### Architecture
+
+Caption conditioning uses **DualCLIPTextEncoder** which combines two CLIP text encoders from Stable Diffusion 3.5:
+
+```
+Input: "healthy EEG signal"
+  ↓
+CLIP-L → 768D pooler_output
+CLIP-G → 1280D text_embeds
+  ↓
+Concatenate → 2048D caption embedding
+  ↓
+Condition diffusion model
+```
+
+**Classifier-Free Guidance (CFG):**
+- During training: 10% of captions randomly zeroed (cfg_dropout)
+- During sampling: Use guidance_scale (5.0-7.5 recommended) to strengthen conditioning
+
+### Configuration Tips
+
+- **cfg_dropout**: 0.1 (10%) works well for most cases
+- **guidance_scale**: Start with 7.5, adjust based on results
+  - Lower (3.0-5.0): More diversity, weaker conditioning
+  - Higher (10.0+): Stronger conditioning, less diversity
+- **Latent space**: Optional for Hourglass/LocalMamba, native for SD 3.5
+- **skip_t5**: Keep true for SD 3.5 to save ~11GB memory
+
 ## Classification Training
 
 Classifier runs use the same module-based entry point:
@@ -107,4 +198,3 @@ uv run python metrics/calculate-metrics.py --help
 ## Data Peculiarities
 
 File `7_1_20180411.cnt` in the SEED V dataset has a broken header which causes errors in versions of `mne` newer than ~1.6. Something about the number of samples or size of data block is corrupted, breaking data size (bytes) inference or number of samples inference depending on the version.
-
