@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
         "--config-path",
         type=Path,
         default=Path("config/default.toml"),
-        help="TOML config path that holds `models.stable_diffusion_model_id`",
+        help="TOML config path that holds `hf_models.stable_diffusion_model_id`",
     )
     parser.add_argument(
         "--output-dir",
@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
 def load_model_id(config_path: Path) -> str:
     with config_path.open("rb") as f:
         cfg = tomllib.load(f)
-    return cfg["models"]["stable_diffusion_model_id"]
+    return cfg["hf_models"]["stable_diffusion_model_id"]
 
 
 def load_dataset_split(dataset_dir: Path):
