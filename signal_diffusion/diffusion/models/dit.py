@@ -38,6 +38,8 @@ class DiTExtras:
     num_classes: int = 0
     cfg_dropout: float = 0.0
     timestep_embeddings: int = 1000
+    in_channels: int = 3
+    out_channels: int = 3
 
 
 class DiTAdapter:
@@ -67,7 +69,7 @@ class DiTAdapter:
         vae = extras.get("vae")
         # Fallback to default stable diffusion model ID if VAE is unspecified
         if vae is None and cfg.settings:
-            vae = cfg.settings.models.get("stable_diffusion_model_id")
+            vae = cfg.settings.hf_models.get("stable_diffusion_model_id")
             if vae is not None:
                 self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
         num_classes_value = extras.get("num_classes", cfg.dataset.num_classes)
@@ -75,6 +77,8 @@ class DiTAdapter:
         cfg_dropout = float(extras.get("cfg_dropout", 0.0))
         timestep_embeddings = int(cfg.objective.flow_match_timesteps or 1000)
         text_encoder = extras.get("text_encoder")
+        in_channels = int(extras.get("in_channels", 4 if latent_space else 3))
+        out_channels = int(extras.get("out_channels", 4 if latent_space else 3))
 
         return DiTExtras(
             latent_space=latent_space,
@@ -83,6 +87,8 @@ class DiTAdapter:
             num_classes=num_classes,
             cfg_dropout=cfg_dropout,
             timestep_embeddings=timestep_embeddings,
+            in_channels=in_channels,
+            out_channels=out_channels,
         )
 
     def _dit_prepare_class_labels(
@@ -159,7 +165,9 @@ class DiTAdapter:
             if conditioning == "classes":
                 if self._extras.num_classes <= 0:
                     raise ValueError("Class conditioning requires 'model.extras.num_classes' to be greater than 0")
-                num_embeds_ada_norm = self._extras.num_classes
+                # Allocate num_classes + 1 embeddings to include the dropout token for CFG
+                # E.g., 5 classes (0-4) need 6 embeddings (0-5), where 5 is the unconditional token
+                num_embeds_ada_norm = self._extras.num_classes + 1
             else:
                 # unconditional / caption runs fall back to timestep embedding count
                 num_embeds_ada_norm = self._extras.timestep_embeddings

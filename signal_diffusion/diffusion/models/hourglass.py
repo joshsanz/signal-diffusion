@@ -75,7 +75,86 @@ class HourglassExtras:
 
 
 class HourglassAdapter:
-    """Adapter instantiating the hourglass transformer denoiser."""
+    """Adapter for Hourglass Diffusion Transformer (HDiT) with caption conditioning support.
+
+    The Hourglass adapter provides a hierarchical transformer architecture for diffusion
+    models with support for both class-based and caption-based conditioning. The model
+    features a U-Net-like structure with down sampling and upsampling paths, enabling
+    efficient processing of spectrogram data.
+
+    Caption Conditioning:
+        Caption conditioning allows the model to generate EEG spectrograms conditioned on
+        text descriptions. This uses the DualCLIPTextEncoder to convert captions into
+        2048-dimensional embeddings that guide the generation process.
+
+        Architecture Flow:
+            1. Captions → DualCLIPTextEncoder → 2048D embeddings
+            2. Embeddings → mapping_cond parameter in model forward pass
+            3. Model injects conditioning via cross-attention or adaptive normalization
+            4. CFG dropout (10% default) enables classifier-free guidance during inference
+
+        Configuration Example:
+            ```toml
+            [dataset]
+            caption_column = "text"              # Column containing captions
+
+            [model]
+            name = "hourglass"
+            conditioning = "caption"             # Enable caption conditioning
+
+            [model.extras]
+            cfg_dropout = 0.1                    # 10% CFG dropout for guidance training
+            mapping_cond_dim = 2048              # DualCLIP output dimension
+            mapping_width = 256                  # Mapping network width
+            mapping_depth = 2                    # Mapping network depth
+            ```
+
+        Training with Captions:
+            ```bash
+            uv run python -m signal_diffusion.training.diffusion config.toml
+            ```
+
+        Sampling with Prompts:
+            ```python
+            # Single prompt
+            samples = adapter.generate_conditional_samples(
+                accelerator=accelerator,
+                cfg=cfg,
+                modules=modules,
+                conditioning="healthy EEG signal from young adult",
+                guidance_scale=7.5,
+                num_samples=4
+            )
+
+            # Multiple prompts
+            samples = adapter.generate_conditional_samples(
+                conditioning=["healthy EEG", "parkinsons tremor", "emotional arousal"],
+                guidance_scale=7.5
+            )
+            ```
+
+        CFG Guidance Scale:
+            - 1.0: No guidance (purely conditional)
+            - 5.0-7.5: Recommended range (good balance)
+            - 10.0+: Strong guidance (may reduce diversity)
+
+    Class Conditioning:
+        Alternative to caption conditioning, supports discrete class labels for attributes
+        like gender, health status, emotion, etc. See conditioning_mode parameter for
+        multi-attribute combinations.
+
+    Latent Space Training:
+        Optionally train in VAE latent space for memory efficiency:
+        ```toml
+        [model.extras]
+        latent_space = true
+        vae = "stabilityai/stable-diffusion-3.5-medium"
+        ```
+
+    Note:
+        Caption conditioning and class conditioning are mutually exclusive. Set
+        `model.conditioning = "caption"` for text-based or `"classes"` for discrete labels.
+    """
 
     name = "hourglass"
 
@@ -151,7 +230,7 @@ class HourglassAdapter:
         vae = data.get("vae")
         # Fallback to default stable diffusion model ID if VAE is unspecified
         if vae is None and cfg.settings:
-            vae = cfg.settings.models.get("stable_diffusion_model_id")
+            vae = cfg.settings.hf_models.get("stable_diffusion_model_id")
             if vae is not None:
                 self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
 
@@ -285,8 +364,8 @@ class HourglassAdapter:
             from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 
             sd_model_id = "stabilityai/stable-diffusion-3.5-medium"
-            if cfg.settings and hasattr(cfg.settings, "models"):
-                sd_model_id = cfg.settings.models.get("stable_diffusion_model_id", sd_model_id)
+            if cfg.settings and hasattr(cfg.settings, "hf_models"):
+                sd_model_id = cfg.settings.hf_models.get("stable_diffusion_model_id", sd_model_id)
 
             if accelerator.is_main_process:
                 self._logger.info("Loading dual CLIP text encoders from %s", sd_model_id)

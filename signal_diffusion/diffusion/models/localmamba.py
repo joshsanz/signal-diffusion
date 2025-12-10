@@ -77,7 +77,97 @@ class LocalMambaExtras:
 
 
 class LocalMambaAdapter:
-    """Adapter instantiating the LocalMamba denoiser."""
+    """Adapter for LocalMamba hierarchical selective-scan diffusion model with caption conditioning.
+
+    LocalMamba provides an efficient State Space Model (SSM) based architecture for diffusion,
+    featuring hierarchical Mamba blocks with fixed multi-directional scanning patterns. The
+    adapter supports both class-based and caption-based conditioning, matching Hourglass's
+    conditioning interface while using Mamba's efficient selective scan mechanism.
+
+    Caption Conditioning:
+        Caption conditioning in LocalMamba works identically to Hourglass, using DualCLIPTextEncoder
+        to convert text descriptions into 2048-dimensional embeddings that condition the generation.
+        The embeddings are injected via the mapping_cond parameter and processed through adaptive
+        normalization layers in the Mamba blocks.
+
+        Architecture Flow:
+            1. Captions → DualCLIPTextEncoder → 2048D embeddings
+            2. Embeddings → mapping_cond parameter in model forward pass
+            3. Mamba blocks inject conditioning via AdaRMSNorm layers
+            4. CFG dropout (10% default) enables classifier-free guidance during inference
+
+        Configuration Example:
+            ```toml
+            [dataset]
+            caption_column = "text"              # Column containing captions
+
+            [model]
+            name = "localmamba"
+            conditioning = "caption"             # Enable caption conditioning
+
+            [model.extras]
+            cfg_dropout = 0.1                    # 10% CFG dropout for guidance training
+            mapping_cond_dim = 2048              # DualCLIP output dimension
+            mapping_width = 256                  # Mapping network width
+            mapping_depth = 2                    # Mapping network depth
+            depths = [2, 2, 9, 2]               # Mamba stage depths
+            dims = [96, 192, 384, 768]          # Channel dimensions per stage
+            scan_directions = ["h", "v", "w7"]  # Horizontal, vertical, window-7
+            ```
+
+        Training with Captions:
+            ```bash
+            uv run python -m signal_diffusion.training.diffusion config.toml
+            ```
+
+        Sampling with Prompts:
+            ```python
+            # Single prompt
+            samples = adapter.generate_conditional_samples(
+                accelerator=accelerator,
+                cfg=cfg,
+                modules=modules,
+                conditioning="healthy EEG signal",
+                guidance_scale=7.5,
+                num_samples=4
+            )
+
+            # Multiple prompts
+            samples = adapter.generate_conditional_samples(
+                conditioning=["healthy EEG", "parkinsons pattern", "seizure activity"],
+                guidance_scale=7.5
+            )
+            ```
+
+        CFG Guidance Scale:
+            - 1.0: No guidance (purely conditional)
+            - 5.0-7.5: Recommended range (good balance)
+            - 10.0+: Strong guidance (may reduce diversity)
+
+    Mamba Architecture:
+        LocalMamba uses hierarchical VSS (Visual State Space) blocks with:
+        - Fixed multi-directional scanning (horizontal, vertical, window-based)
+        - BiAttn fusion for combining scan directions
+        - PatchMerging downsampling and TokenSplit upsampling
+        - Efficient SS2D kernels from mamba-ssm v2.0
+
+    Class Conditioning:
+        Alternative to caption conditioning, supports discrete class labels. Can combine
+        with age embeddings via conditioning_mode="class_age" for multi-attribute control.
+
+    Latent Space Training:
+        Optionally train in VAE latent space:
+        ```toml
+        [model.extras]
+        latent_space = true
+        vae = "stabilityai/stable-diffusion-3.5-medium"
+        ```
+
+    Note:
+        Caption and class conditioning are mutually exclusive. Set `model.conditioning = "caption"`
+        for text-based or `"classes"` for discrete labels. The caption conditioning implementation
+        is identical to Hourglass for consistency across adapters.
+    """
 
     name = "localmamba"
 
@@ -160,7 +250,7 @@ class LocalMambaAdapter:
         vae = data.get("vae")
         # Fallback to default stable diffusion model ID if VAE is unspecified
         if vae is None and cfg.settings:
-            vae = cfg.settings.models.get("stable_diffusion_model_id")
+            vae = cfg.settings.hf_models.get("stable_diffusion_model_id")
             if vae is not None:
                 self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
 
@@ -294,8 +384,8 @@ class LocalMambaAdapter:
             from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 
             sd_model_id = "stabilityai/stable-diffusion-3.5-medium"
-            if cfg.settings and hasattr(cfg.settings, "models"):
-                sd_model_id = cfg.settings.models.get("stable_diffusion_model_id", sd_model_id)
+            if cfg.settings and hasattr(cfg.settings, "hf_models"):
+                sd_model_id = cfg.settings.hf_models.get("stable_diffusion_model_id", sd_model_id)
 
             if accelerator.is_main_process:
                 self._logger.info("Loading dual CLIP text encoders from %s", sd_model_id)

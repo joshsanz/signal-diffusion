@@ -37,13 +37,112 @@ class SD35Extras:
 
 
 class StableDiffusion35Adapter:
-    """Adapter for Stable Diffusion 3.5 Medium with dual CLIP conditioning.
+    """Adapter for Stable Diffusion 3.5 Medium with native caption conditioning and latent space training.
 
-    This adapter uses:
-    - SD3Transformer2DModel as the denoiser
-    - FlowMatchEulerDiscreteScheduler for flow matching
-    - DualCLIPTextEncoder (CLIP-L 768D + CLIP-G 1280D = 2048D)
-    - AutoencoderKL VAE for latent space encoding
+    This adapter provides production-ready diffusion training using Stable Diffusion 3.5 Medium's
+    architecture, featuring native latent space operation, dual CLIP text encoders, and flow matching.
+    Unlike Hourglass/LocalMamba which optionally support latent space, SD 3.5 always operates in
+    latent space for memory efficiency.
+
+    Architecture Components:
+        - **Denoiser:** SD3Transformer2DModel (MMDiT architecture from SD 3.5)
+        - **Scheduler:** FlowMatchEulerDiscreteScheduler for flow matching
+        - **Text Encoder:** DualCLIPTextEncoder (CLIP-L 768D + CLIP-G 1280D = 2048D pooled)
+        - **VAE:** AutoencoderKL with 16 latent channels and 8× spatial compression
+        - **T5XXL:** Skipped by default (skip_t5=True) for memory efficiency
+
+    Caption Conditioning:
+        SD 3.5 has native caption conditioning built into the architecture via pooled_projections
+        parameter in the transformer. Text embeddings are processed through the dual CLIP encoders
+        and injected directly into the MMDiT blocks.
+
+        Architecture Flow:
+            1. Captions → DualCLIPTextEncoder → 2048D pooled embeddings
+            2. Embeddings → pooled_projections parameter in SD3Transformer2DModel
+            3. MMDiT blocks inject conditioning via joint attention mechanism
+            4. CFG dropout (10% default) enables classifier-free guidance
+
+        Configuration Example:
+            ```toml
+            [dataset]
+            caption_column = "text"              # Column containing captions
+            latent_space = true                  # Always true for SD 3.5 (native)
+
+            [model]
+            name = "stable-diffusion-3.5-medium"
+            conditioning = "caption"             # Enable caption conditioning
+            pretrained = "stabilityai/stable-diffusion-3.5-medium"
+
+            [model.extras]
+            skip_t5 = true                       # Skip T5XXL encoder (recommended)
+            cfg_dropout = 0.1                    # 10% CFG dropout
+            train_text_encoder = false           # Keep CLIP encoders frozen
+            ```
+
+        Training with Captions:
+            ```bash
+            uv run python -m signal_diffusion.training.diffusion config.toml
+            ```
+
+        Sampling with Prompts:
+            ```python
+            # Single prompt
+            samples = adapter.generate_conditional_samples(
+                accelerator=accelerator,
+                cfg=cfg,
+                modules=modules,
+                conditioning="healthy EEG signal from adult patient",
+                guidance_scale=7.5,
+                num_samples=4
+            )
+
+            # Multiple prompts
+            samples = adapter.generate_conditional_samples(
+                conditioning=[
+                    "healthy EEG pattern",
+                    "parkinsons tremor with alpha rhythm suppression",
+                    "seizure activity in temporal lobe"
+                ],
+                guidance_scale=7.5
+            )
+            ```
+
+        CFG Guidance Scale:
+            - 1.0: No guidance (purely conditional)
+            - 5.0-7.5: Recommended range (balanced quality and diversity)
+            - 10.0+: Strong guidance (higher fidelity, lower diversity)
+
+    Latent Space:
+        SD 3.5 always operates in VAE latent space with:
+        - **Compression:** 8× spatial (64×64 → 8×8)
+        - **Channels:** 16 latent channels
+        - **Scaling:** scaling_factor from VAE config (applied during encode/decode)
+        - **Memory:** ~64× reduction compared to pixel space
+
+        Images are automatically encoded to latents during training and decoded during sampling.
+        No configuration needed - this is native to SD 3.5 architecture.
+
+    Differences from SD v1.5:
+        - **Text Encoders:** Dual CLIP (L+G) vs. single CLIP → 2048D vs. 768D embeddings
+        - **Latent Channels:** 16 vs. 4 channels
+        - **Architecture:** MMDiT (joint attention) vs. UNet (cross-attention)
+        - **Scheduler:** Flow matching vs. DDPM
+        - **Pooling:** Pooled embeddings (pooled_projections) vs. sequence (encoder_hidden_states)
+
+    skip_t5 Parameter:
+        By default, skip_t5=True to avoid loading the large T5XXL text encoder (~11GB). The dual
+        CLIP encoders provide sufficient caption conditioning for EEG spectrogram generation tasks.
+        Set skip_t5=False only if you need the full SD 3.5 text conditioning capacity.
+
+    Training Text Encoders:
+        By default, CLIP encoders are frozen (train_text_encoder=False) for stability and memory
+        efficiency. Set train_text_encoder=True to fine-tune the encoders, but note this requires
+        significantly more memory and may destabilize training.
+
+    Note:
+        This adapter requires `dataset.latent_space = true` in the config, though this is implicit
+        for SD 3.5. Unconditional generation uses empty caption strings ("") processed through the
+        same dual CLIP pipeline.
     """
 
     name = "stable-diffusion-3.5-medium"
@@ -81,8 +180,8 @@ class StableDiffusion35Adapter:
 
         # Get model path from config or settings
         model_id = cfg.model.pretrained or "stabilityai/stable-diffusion-3.5-medium"
-        if cfg.settings and hasattr(cfg.settings, "models"):
-            model_id = cfg.settings.models.get("stable_diffusion_model_id", model_id)
+        if cfg.settings and hasattr(cfg.settings, "hf_models"):
+            model_id = cfg.settings.hf_models.get("stable_diffusion_model_id", model_id)
 
         if accelerator.is_main_process:
             self._logger.info(
