@@ -12,13 +12,62 @@ LOGGER = get_logger(__name__)
 
 
 class DualCLIPTextEncoder(nn.Module):
-    """Dual CLIP text encoder for Hourglass/LocalMamba caption conditioning.
+    """Dual CLIP text encoder for caption conditioning in diffusion models.
 
-    Loads CLIP-L (768D) and CLIP-G (1280D) text encoders and concatenates
-    their pooled outputs to produce a 2048D embedding per caption.
+    This module combines two CLIP text encoders (CLIP-L and CLIP-G) from Stable
+    Diffusion 3.5 to produce rich 2048-dimensional caption embeddings for conditioning
+    diffusion models on text descriptions. Both encoders are frozen during training for
+    memory efficiency and stability.
 
-    This follows the SD 3.5 architecture pattern but only uses the two CLIP
-    encoders, skipping T5XXL for efficiency.
+    Architecture:
+        The encoder processes captions through two parallel pathways:
+
+        1. CLIP-L (OpenAI CLIP): Tokenizes to 77 tokens, encodes to 768-dimensional
+           pooler_output using CLIPTextModel
+        2. CLIP-G (OpenCLIP): Tokenizes to 77 tokens, encodes to 1280-dimensional
+           text_embeds using CLIPTextModelWithProjection
+        3. Concatenates both outputs along feature dimension: 768 + 1280 = 2048D
+
+        Both encoders are loaded from the Stable Diffusion 3.5 checkpoint and frozen
+        (requires_grad=False) to prevent gradient updates during training.
+
+    Supported Adapters:
+        - Hourglass: Uses embeddings via mapping_cond parameter
+        - LocalMamba: Uses embeddings via mapping_cond parameter
+        - Stable Diffusion 3.5: Uses embeddings via pooled_projections parameter
+
+    Tokenization:
+        - Max length: 77 tokens (standard CLIP)
+        - Padding: "max_length"
+        - Truncation: Enabled for longer captions
+
+    Example:
+        Basic usage with single caption:
+
+        >>> from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
+        >>> import torch
+        >>>
+        >>> text_encoder = DualCLIPTextEncoder(device="cuda", dtype=torch.float16)
+        >>> captions = ["healthy EEG signal from a 25-year-old patient"]
+        >>> embeddings = text_encoder.encode(captions)
+        >>> embeddings.shape
+        torch.Size([1, 2048])
+
+        Batch encoding multiple captions:
+
+        >>> captions = [
+        ...     "healthy EEG signal",
+        ...     "parkinsons tremor pattern in elderly patient",
+        ...     "emotional arousal during positive stimulus"
+        ... ]
+        >>> embeddings = text_encoder.encode(captions)
+        >>> embeddings.shape
+        torch.Size([3, 2048])
+
+    Note:
+        This encoder skips the T5XXL encoder from the full SD 3.5 pipeline for
+        efficiency. The dual CLIP encoders provide sufficient caption conditioning
+        for most EEG spectrogram generation tasks.
     """
 
     def __init__(
@@ -27,6 +76,22 @@ class DualCLIPTextEncoder(nn.Module):
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float16,
     ):
+        """Initialize the dual CLIP text encoder.
+
+        Args:
+            sd_model_id: HuggingFace model ID for Stable Diffusion 3.5 checkpoint.
+                Must contain both CLIP-L and CLIP-G text encoders in subfolders
+                "text_encoder" and "text_encoder_2" respectively.
+                Default: "stabilityai/stable-diffusion-3.5-medium"
+            device: Target device for the encoders ("cuda", "cpu", or torch.device).
+                If None, encoders remain on CPU until moved explicitly.
+            dtype: Data type for encoder weights (torch.float16, torch.float32, etc.).
+                Default: torch.float16 for memory efficiency.
+
+        Note:
+            Both CLIP encoders are automatically frozen (requires_grad=False) after
+            loading to prevent gradient updates during training.
+        """
         super().__init__()
         from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
@@ -60,12 +125,38 @@ class DualCLIPTextEncoder(nn.Module):
         )
 
     def encode(self, captions: Sequence[str]) -> torch.Tensor:
-        """Encode captions to pooled embeddings.
+        """Encode text captions to pooled 2048-dimensional embeddings.
+
+        This method processes captions through both CLIP-L and CLIP-G encoders in parallel,
+        extracts their pooled outputs, and concatenates them along the feature dimension.
+        All encoding is performed under torch.no_grad() context for efficiency.
+
+        Processing Pipeline:
+            1. Convert input to list of strings
+            2. CLIP-L: Tokenize → Encode → Extract pooler_output (768D)
+            3. CLIP-G: Tokenize → Encode → Extract text_embeds (1280D)
+            4. Concatenate along dim=-1 → (B, 2048) output
 
         Args:
-            captions: List/sequence of caption strings
+            captions: Sequence of caption strings to encode. Can be list, tuple, or any
+                sequence type. Empty strings are valid and will produce zero-like embeddings.
+
         Returns:
-            (B, 2048) pooled embedding tensor
+            torch.Tensor: Concatenated embeddings of shape (B, 2048) where B is the
+                batch size (number of captions). Output dtype matches the encoder dtype
+                (typically float16), and device matches the encoder device.
+
+        Example:
+            >>> text_encoder = DualCLIPTextEncoder(device="cuda")
+            >>> captions = ["healthy EEG", "parkinsons pattern"]
+            >>> emb = text_encoder.encode(captions)
+            >>> emb.shape, emb.dtype, emb.device
+            (torch.Size([2, 2048]), torch.float16, device(type='cuda', index=0))
+
+        Note:
+            - Captions longer than 77 tokens are automatically truncated
+            - Shorter captions are padded to 77 tokens
+            - Empty captions ("") produce valid embeddings (useful for CFG)
         """
         device = next(self.parameters()).device
         captions = list(captions)
@@ -144,8 +235,8 @@ def create_text_encoder_for_adapter(
         return None
 
     sd_model_id = "stabilityai/stable-diffusion-3.5-medium"
-    if settings and "stable_diffusion_model_id" in settings:
-        sd_model_id = settings["stable_diffusion_model_id"]
+    if settings and hasattr(settings, "hf_models") and "stable_diffusion_model_id" in settings.hf_models:
+        sd_model_id = settings.hf_models["stable_diffusion_model_id"]
 
     return DualCLIPTextEncoder(
         sd_model_id=sd_model_id,
