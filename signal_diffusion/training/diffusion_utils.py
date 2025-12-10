@@ -59,13 +59,39 @@ def build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg: Any) -> torch
     params = list(parameters)
     if not params:
         raise ValueError("No trainable parameters found for optimizer")
-    return torch.optim.AdamW(
-        params,
-        lr=cfg.optimizer.learning_rate,
-        betas=cfg.optimizer.betas,
-        eps=cfg.optimizer.eps,
-        weight_decay=cfg.optimizer.weight_decay,
-    )
+
+    optimizer_name = cfg.optimizer.name.lower()
+    lr = cfg.optimizer.learning_rate
+    betas = cfg.optimizer.betas
+    eps = cfg.optimizer.eps
+    weight_decay = cfg.optimizer.weight_decay
+
+    if optimizer_name == "adamw":
+        return torch.optim.AdamW(
+            params,
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+    elif optimizer_name == "adamw_8bit":
+        try:
+            import bitsandbytes as bnb
+        except ImportError as exc:
+            raise ImportError(
+                "bitsandbytes is required for adamw_8bit optimizer. "
+                "Install with: pip install bitsandbytes"
+            ) from exc
+        return bnb.optim.AdamW8bit(
+            params,
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer '{cfg.optimizer.name}'")
+
 
 
 def _compute_per_channel_stats(tensor: torch.Tensor) -> dict[str, dict[str, float]]:

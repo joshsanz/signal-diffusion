@@ -238,7 +238,13 @@ def _preprocess(
     if tokenizer is not None and caption_column:
         captions = examples.get(caption_column)
         if captions is None:
-            raise KeyError(f"Dataset missing caption column '{caption_column}'")
+            raise KeyError(
+                f"Dataset is missing the caption column '{caption_column}'. "
+                f"Please either:\n"
+                f"  1. Add a '{caption_column}' column to your dataset, or\n"
+                f"  2. Set dataset.caption_column in your config to match your dataset's column name, or\n"
+                f"  3. Set model.conditioning = 'none' if captions are not needed."
+            )
         tokens = _tokenize_captions(tokenizer, captions, is_train=is_train)
         batch["captions"] = [token for token in tokens]
 
@@ -251,7 +257,13 @@ def _preprocess(
     if class_column:
         labels = examples.get(class_column)
         if labels is None:
-            raise KeyError(f"Dataset missing class column '{class_column}'")
+            raise KeyError(
+                f"Dataset is missing the class column '{class_column}'. "
+                f"Please either:\n"
+                f"  1. Add a '{class_column}' column to your dataset, or\n"
+                f"  2. Set dataset.class_column in your config to match your dataset's column name, or\n"
+                f"  3. Set model.conditioning = 'none' or 'caption' if class labels are not needed."
+            )
         batch["class_labels"] = [int(label) for label in labels]
 
     # Multi-attribute conditioning: gender
