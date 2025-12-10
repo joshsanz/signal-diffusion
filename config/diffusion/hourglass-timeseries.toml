@@ -46,7 +46,7 @@ augment_prob = 0.0
 patch_size = [1, 8]  # Asymmetric patches: (channels, timesteps)
 in_channels = 1  # Single channel for time-series (B, 1, n_channels, n_samples)
 out_channels = 1
-cfg_dropout = 0.0
+cfg_dropout = 0.1
 
 [model.lora]
 enabled = false

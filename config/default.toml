@@ -2,8 +2,8 @@
 # Override these values by setting the SIGNAL_DIFFUSION_CONFIG environment variable
 # to point at another TOML file or by providing custom paths when loading settings.
 
-# Shared model identifiers for diffusion training
-[models]
+# Shared HuggingFace model identifiers for diffusion training
+[hf_models]
 stable_diffusion_model_id = "stabilityai/stable-diffusion-3.5-medium"
 
 [data]
