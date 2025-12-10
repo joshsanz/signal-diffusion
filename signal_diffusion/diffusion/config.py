@@ -22,13 +22,13 @@ class DatasetConfig:
     resolution: int = 256
     center_crop: bool = False
     random_flip: bool = False
-    image_column: str | None = None
-    caption_column: str | None = None
-    class_column: str | None = None
+    image_column: str | None = "image"
+    caption_column: str | None = "text"
+    class_column: str | None = "class_label"
     # Multi-attribute conditioning columns
-    gender_column: str | None = None  # M/F values
-    health_column: str | None = None  # H/PD values (healthy/parkinsons)
-    age_column: str | None = None     # Integer age values
+    gender_column: str | None = "gender"  # M/F values
+    health_column: str | None = "health"  # H/PD values (healthy/parkinsons)
+    age_column: str | None = "age"        # Integer age values
     dataset_type: str = "auto"
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
@@ -252,10 +252,19 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         raise TypeError("dataset.extras must be a mapping if provided")
     extras = dict(extras_section)
 
-    def _opt(column: str | None) -> str | None:
-        if column in (None, ""):
-            return None
-        return column
+    def _with_default(value: str | None, default: str) -> str | None:
+        """Apply default column name if value is None or empty string.
+
+        Args:
+            value: User-provided column name (from TOML config)
+            default: Default column name to use if value is None or ""
+
+        Returns:
+            The default if value is None/"", otherwise the provided value
+        """
+        if value in (None, ""):
+            return default
+        return value
 
     def _split(value: Any, *, default: str | None = None) -> str | None:
         if value is None:
@@ -277,12 +286,12 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         resolution=int(section.get("resolution", 256)),
         center_crop=bool(section.get("center_crop", False)),
         random_flip=bool(section.get("random_flip", False)),
-        image_column=_opt(section.get("image_column")),
-        caption_column=_opt(section.get("caption_column")),
-        class_column=_opt(section.get("class_column")),
-        gender_column=_opt(section.get("gender_column")),
-        health_column=_opt(section.get("health_column")),
-        age_column=_opt(section.get("age_column")),
+        image_column=_with_default(section.get("image_column"), "image"),
+        caption_column=_with_default(section.get("caption_column"), "text"),
+        class_column=_with_default(section.get("class_column"), "class_label"),
+        gender_column=_with_default(section.get("gender_column"), "gender"),
+        health_column=_with_default(section.get("health_column"), "health"),
+        age_column=_with_default(section.get("age_column"), "age"),
         dataset_type=str(section.get("dataset_type", "auto")),
         max_train_samples=section.get("max_train_samples"),
         max_eval_samples=section.get("max_eval_samples"),
