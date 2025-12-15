@@ -43,8 +43,8 @@ class Settings:
     output_type: str = "db-only"
     data_type: str = "spectrogram"  # "spectrogram" or "timeseries"
     datasets: dict[str, DatasetSettings] = field(default_factory=dict)
-    # Model paths for shared resources (VAE, text encoders, etc.)
-    models: dict[str, str] = field(default_factory=dict)
+    # HuggingFace model IDs for shared resources (VAE, text encoders, etc.)
+    hf_models: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate configuration."""
@@ -75,13 +75,13 @@ class Settings:
         output_type = data_section.get("output_type", "db-only")
         data_type = data_section.get("data_type", "spectrogram")
 
-        # Load shared model paths
-        models_section = mapping.get("models", {})
-        models: dict[str, str] = {}
-        if isinstance(models_section, Mapping):
-            for key, value in models_section.items():
+        # Load shared HuggingFace model IDs
+        hf_models_section = mapping.get("hf_models", {})
+        hf_models: dict[str, str] = {}
+        if isinstance(hf_models_section, Mapping):
+            for key, value in hf_models_section.items():
                 if value is not None:
-                    models[str(key)] = str(value)
+                    hf_models[str(key)] = str(value)
 
         datasets_section = mapping.get("datasets", {})
         datasets: dict[str, DatasetSettings] = {}
@@ -135,7 +135,7 @@ class Settings:
             output_type=output_type,
             data_type=data_type,
             datasets=datasets,
-            models=models,
+            hf_models=hf_models,
         )
 
 

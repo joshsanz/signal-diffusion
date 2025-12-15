@@ -384,7 +384,7 @@ class LocalMambaAdapter:
             from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 
             sd_model_id = "stabilityai/stable-diffusion-3.5-medium"
-            if cfg.settings and hasattr(cfg.settings, "hf_models"):
+            if cfg.settings:
                 sd_model_id = cfg.settings.hf_models.get("stable_diffusion_model_id", sd_model_id)
 
             if accelerator.is_main_process:

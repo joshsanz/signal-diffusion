@@ -235,7 +235,7 @@ def create_text_encoder_for_adapter(
         return None
 
     sd_model_id = "stabilityai/stable-diffusion-3.5-medium"
-    if settings and hasattr(settings, "hf_models") and "stable_diffusion_model_id" in settings.hf_models:
+    if settings and "stable_diffusion_model_id" in settings.hf_models:
         sd_model_id = settings.hf_models["stable_diffusion_model_id"]
 
     return DualCLIPTextEncoder(

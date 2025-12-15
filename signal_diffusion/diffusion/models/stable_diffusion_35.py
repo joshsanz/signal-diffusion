@@ -180,7 +180,7 @@ class StableDiffusion35Adapter:
 
         # Get model path from config or settings
         model_id = cfg.model.pretrained or "stabilityai/stable-diffusion-3.5-medium"
-        if cfg.settings and hasattr(cfg.settings, "hf_models"):
+        if cfg.settings:
             model_id = cfg.settings.hf_models.get("stable_diffusion_model_id", model_id)
 
         if accelerator.is_main_process:
