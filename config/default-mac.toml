@@ -2,32 +2,41 @@
 # Override these values by setting the SIGNAL_DIFFUSION_CONFIG environment variable
 # to point at another TOML file or by providing custom paths when loading settings.
 
+# Shared HuggingFace model identifiers for diffusion training
+[hf_models]
+stable_diffusion_model_id = "stabilityai/stable-diffusion-3.5-medium"
+
 [data]
 root = "~/data/signal-diffusion"
-output_root = "~/data/signal-diffusion/processed"
+output_root = "~/data/signal-diffusion/processed" # Or processed-iq, processed-polar
 max_sampling_weight = 5.0
 output_type = "db-only"  # Output format: "db-only", "db-iq", or "db-polar"
+data_type = "spectrogram"  # Data format: "spectrogram" (default) or "timeseries"
 
 [datasets.math]
 root = "eeg_math"
 output = "eeg_math/stfts"
+timeseries_output = "eeg_math/timeseries"
 min_db = -127.028
 max_db = -44.068
 
 [datasets.parkinsons]
 root = "parkinsons"
 output = "parkinsons/stfts"
+timeseries_output = "parkinsons/timeseries"
 min_db = -120.0675
 max_db = 2.9085
 
 [datasets.seed]
 root = "seed"
 output = "seed/stfts"
+timeseries_output = "seed/timeseries"
 min_db = -119.0125
 max_db = -5.0875
 
 [datasets.longitudinal]
 root = "longitudinal"
 output = "longitudinal/stfts"
+timeseries_output = "longitudinal/timeseries"
 min_db = -130.984
 max_db = -4.088

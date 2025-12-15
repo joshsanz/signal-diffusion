@@ -14,7 +14,7 @@ center_crop = false
 random_flip = false
 image_column = "image"
 caption_column = ""
-num_classes = 0
+num_classes = 4
 
 [data]
 output_type = "db-only"
