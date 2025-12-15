@@ -43,7 +43,7 @@ warmup_steps = 100
 min_lr_ratio = 0.01
 
 [training]
-epochs = 15
+epochs = 20
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 10
@@ -52,6 +52,9 @@ eval_strategy = "steps"
 eval_steps = 100
 checkpoint_strategy = "epoch"
 checkpoint_total_limit = 3
+swa_enabled = true
+swa_start_ratio = 0.75
+swa_lr_frac = 0.25
 
 [training.task_weights]
 health = 1.0

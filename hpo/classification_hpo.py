@@ -30,16 +30,22 @@ from signal_diffusion.classification import build_task_specs
 coloredlogs.install(level='INFO', fmt='%(levelname)s:%(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Hyperparameter search space
+# Hyperparameter search space (refined based on HPO analysis)
+# - Dropout: Narrowed from [0.1, 0.8] → [0.15, 0.50] (top performers cluster here)
+# - Embedding dim: Removed 128 → [192, 256, 384] (128 underperformed)
+# - Layer repeats: Removed 1 added 5 → [2, 5] (all top performers use 2-4)
+# - Learning rate: Narrowed from [1e-5, 1e-2] → [5e-5, 5e-3] (removes ineffective extremes)
+# - Weight decay: Narrowed from [1e-5, 1e-1] → [1e-5, 1e-2] (most successful ≤ 1e-2)
+# - Batch size: Removed [64, 128] → [192] (size 64 from failed trials, 128 unsuccessful)
 SEARCH_SPACE = {
-    "learning_rate": [1e-5, 1e-2],  # log scale range
-    "weight_decay": [1e-5, 1e-1],   # log scale range
+    "learning_rate": [5e-5, 5e-3],
+    "weight_decay": [1e-5, 1e-2],
     "scheduler": ["constant", "linear", "cosine"],
-    "dropout": [0.1, 0.8],
+    "dropout": [0.15, 0.50],
     "depth": [2, 4],
-    "layer_repeats": [1, 4],
-    "embedding_dim": [128, 192, 256, 384],
-    "batch_size": [64, 128, 192],
+    "layer_repeats": [2, 5],
+    "embedding_dim": [192, 256, 384],
+    "batch_size": [192],
 }
 
 

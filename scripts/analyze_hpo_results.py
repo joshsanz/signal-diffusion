@@ -270,6 +270,140 @@ def print_best_comparison(
     print("\n" + "=" * 100)
 
 
+def print_top_hyperparameters_by_dataset(summaries: List[HPORunSummary]) -> None:
+    """Print top 5 hyperparameter settings for each dataset type.
+
+    Args:
+        summaries: List of HPORunSummary objects
+    """
+    from collections import defaultdict
+
+    # Group summaries by dataset type (e.g., "db-iq", "db-only", "db-polar")
+    dataset_groups = defaultdict(list)
+    for summary in summaries:
+        # Extract dataset type from config_name
+        # Format: "{spec_type}_{task}" (e.g., "db-iq_gender", "db-only_mixed")
+        parts = summary.config_name.split("_")
+        if len(parts) >= 2:
+            # Handle multi-part dataset types like "db-iq" or "db-polar"
+            if parts[0] == "db" and len(parts) >= 2:
+                dataset_type = f"{parts[0]}-{parts[1]}"
+            else:
+                dataset_type = parts[0]
+        else:
+            dataset_type = summary.config_name
+
+        dataset_groups[dataset_type].append(summary)
+
+    # Mapping of parameter names to shortened headers
+    header_map = {
+        "batch_size": "Batch",
+        "depth": "Depth",
+        "dropout": "Dropout",
+        "embedding_dim": "Embed",
+        "layer_repeats": "Layers",
+        "learning_rate": "LR",
+        "scheduler": "Sched",
+        "weight_decay": "WD",
+    }
+
+    # Print table for each dataset type
+    for dataset_type in sorted(dataset_groups.keys()):
+        group_summaries = dataset_groups[dataset_type]
+
+        # Sort by objective score (descending)
+        sorted_group = sorted(
+            group_summaries,
+            key=lambda s: s.best_metrics.objective,
+            reverse=True,
+        )[:5]  # Top 5
+
+        print(f"\nTOP 5 HYPERPARAMETERS - {dataset_type.upper()}")
+        print("=" * 110)
+
+        # Collect all unique hyperparameter keys from this group
+        all_param_keys = set()
+        for summary in sorted_group:
+            if summary.best_metrics.hyperparams:
+                all_param_keys.update(summary.best_metrics.hyperparams.keys())
+
+        # Sort param keys for consistent ordering
+        param_keys = sorted(all_param_keys)
+
+        # Build header with shortened names
+        header_parts = ["Obj", "Task", "Trial"]
+        for key in param_keys:
+            header_parts.append(header_map.get(key, key.replace("_", " ").title()[:8]))
+
+        # Calculate column widths based on content type
+        col_widths = [6, 8, 5]  # Obj, Task, Trial
+        for key in param_keys:
+            if key in ["batch_size", "embedding_dim"]:
+                col_widths.append(6)
+            elif key in ["depth", "layer_repeats"]:
+                col_widths.append(5)
+            elif key in ["dropout", "learning_rate", "weight_decay"]:
+                col_widths.append(9)
+            elif key == "scheduler":
+                col_widths.append(8)
+            else:
+                col_widths.append(8)
+
+        # Print header
+        header_line = " | ".join(
+            header_parts[i].ljust(col_widths[i]) for i in range(len(header_parts))
+        )
+        print(header_line)
+        print("-" * len(header_line))
+
+        # Print each run
+        for summary in sorted_group:
+            # Extract task name from config_name
+            parts = summary.config_name.split("_")
+            if len(parts) >= 2:
+                # For "db-iq_gender", task is everything after dataset type
+                if parts[0] == "db" and len(parts) >= 3:
+                    task_name = "_".join(parts[2:])
+                else:
+                    task_name = "_".join(parts[1:])
+            else:
+                task_name = "unknown"
+
+            # Build row data
+            row_parts = [
+                f"{summary.best_metrics.objective:.4f}",
+                task_name[:10],
+                str(summary.best_metrics.trial_num),
+            ]
+
+            # Add hyperparameter values with custom formatting
+            for param_key in param_keys:
+                if summary.best_metrics.hyperparams and param_key in summary.best_metrics.hyperparams:
+                    param_value = summary.best_metrics.hyperparams[param_key]
+                    if isinstance(param_value, float):
+                        # Special formatting for specific parameters
+                        if param_key in ["learning_rate", "weight_decay"]:
+                            # Scientific notation with 2 significant figures
+                            row_parts.append(f"{param_value:.1e}")
+                        elif param_key == "dropout":
+                            # Two decimal places
+                            row_parts.append(f"{param_value:.2f}")
+                        else:
+                            row_parts.append(f"{param_value:.6g}")
+                    else:
+                        row_parts.append(str(param_value)[:10])
+                else:
+                    row_parts.append("N/A")
+
+            # Print row
+            row_line = " | ".join(
+                row_parts[i].ljust(col_widths[i]) for i in range(len(row_parts))
+            )
+            print(row_line)
+
+        print("=" * len(header_line))
+
+
 def save_comparison_json(
     summaries: List[HPORunSummary],
     output_path: Path,
@@ -357,6 +491,9 @@ def main():
 
     # Print best comparison
     print_best_comparison(summaries, metric=args.metric)
+
+    # Print top hyperparameters by dataset type
+    print_top_hyperparameters_by_dataset(summaries)
 
     # Save comparison if requested
     if args.save_comparison:

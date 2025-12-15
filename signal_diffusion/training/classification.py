@@ -297,6 +297,9 @@ class TrainingConfig:
     early_stopping_patience: int = 5
     compile_model: bool = True
     compile_mode: str = "default"
+    swa_enabled: bool = False
+    swa_start_ratio: float = 0.75
+    swa_lr_frac: float = 0.25
 
 
 @dataclass(slots=True)
@@ -342,6 +345,7 @@ class TrainingSummary:
     best_epoch: int | None
     best_global_step: int | None
     top_checkpoints: list["CheckpointRecord"]
+    swa_checkpoint: Path | None = None
 
 
 @dataclass(slots=True)
@@ -435,6 +439,9 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         early_stopping_patience=int(training_section.get("early_stopping_patience", 5)),
         compile_model=bool(training_section.get("compile_model", True)),
         compile_mode=str(training_section.get("compile_mode", "default")).lower(),
+        swa_enabled=bool(training_section.get("swa_enabled", False)),
+        swa_start_ratio=float(training_section.get("swa_start_ratio", 0.75)),
+        swa_lr_frac=float(training_section.get("swa_lr_frac", 0.25)),
     )
 
     _validate_eval_config(training)
@@ -600,6 +607,38 @@ def train_from_config(
         **config.scheduler.kwargs,
     )
 
+    # Initialize SWA components if enabled
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = None
+
+    if training_cfg.swa_enabled:
+        if training_cfg.swa_start_ratio <= 0.0 or training_cfg.swa_start_ratio >= 1.0:
+            raise ValueError(f"swa_start_ratio must be in (0, 1), got {training_cfg.swa_start_ratio}")
+
+        from torch.optim.swa_utils import AveragedModel, SWALR
+
+        # Calculate SWA start epoch (last 25% of training by default)
+        swa_start_epoch = max(1, int(training_cfg.epochs * training_cfg.swa_start_ratio) + 1)
+
+        # Create averaged model wrapper
+        swa_model = AveragedModel(model)
+
+        # Create SWA learning rate scheduler
+        swa_lr = config.optimizer.learning_rate * training_cfg.swa_lr_frac
+        anneal_epochs = max(1, int((training_cfg.epochs - swa_start_epoch) * 0.2))  # 20% of SWA period
+        swa_scheduler = SWALR(
+            optimizer,
+            swa_lr=swa_lr,
+            anneal_epochs=anneal_epochs,
+            anneal_strategy='cos',  # Cosine annealing to swa_lr
+        )
+
+        LOGGER.info(
+            f"SWA enabled: will start at epoch {swa_start_epoch}/{training_cfg.epochs} "
+            f"with LR {swa_lr:.6f} ({training_cfg.swa_lr_frac}x base LR)"
+        )
+
     scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
     criteria: dict[str, nn.Module] = {}
     for name in tasks:
@@ -638,6 +677,9 @@ def train_from_config(
     patience_counter = 0
     best_metric_for_patience = float("-inf")
     early_stopped_at_epoch: int | None = None
+
+    # Track whether we're in SWA phase
+    in_swa_phase = False
 
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(
@@ -683,12 +725,23 @@ def train_from_config(
             if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
                 break
 
+            # Check if we're entering SWA phase
+            if training_cfg.swa_enabled and swa_start_epoch is not None and epoch == swa_start_epoch:
+                LOGGER.info(f"Entering SWA phase at epoch {epoch}/{training_cfg.epochs}")
+                in_swa_phase = True
+                # Disable early stopping during SWA
+                if early_stopping_enabled:
+                    LOGGER.info("Early stopping disabled during SWA phase")
+
             progress_bar.set_description(f"Epoch {epoch}/{training_cfg.epochs}")
 
             # Train one epoch. If using Optuna HPO, the trial may be pruned during validation
             # (when _run_epoch calls _report_and_check_pruning). Ensure proper cleanup by
             # catching exceptions and explicitly releasing DataLoader resources.
             try:
+                # Select appropriate scheduler based on SWA phase
+                active_lr_scheduler = swa_scheduler if (in_swa_phase and swa_scheduler is not None) else lr_scheduler
+
                 train_result, global_step = _run_epoch(
                     model,
                     data_loader=train_loader,
@@ -697,7 +750,8 @@ def train_from_config(
                     task_specs=task_lookup,
                     device=device,
                     optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
+                    lr_scheduler=active_lr_scheduler,
+                    scheduler_step_per_batch=not in_swa_phase,  # Disable per-batch stepping during SWA
                     scaler=scaler,
                     clip_grad=training_cfg.clip_grad_norm,
                     log_every=training_cfg.log_every_batches,
@@ -799,7 +853,8 @@ def train_from_config(
                     torch.save(state_dict, best_checkpoint)
 
                 # Check early stopping: update patience counter based on metric improvement
-                if early_stopping_enabled:
+                # Note: Early stopping is disabled during SWA phase to ensure full averaging period
+                if early_stopping_enabled and not in_swa_phase:
                     if mean_eval_acc > best_metric_for_patience:
                         # Metric improved: reset patience counter
                         best_metric_for_patience = mean_eval_acc
@@ -945,6 +1000,17 @@ def train_from_config(
                         oldest_checkpoint = periodic_checkpoints.pop(0)
                         oldest_checkpoint.unlink(missing_ok=True)
 
+            # Update SWA model and scheduler (if in SWA phase)
+            if in_swa_phase:
+                # Step SWA scheduler per epoch (not per batch like regular schedulers)
+                if swa_scheduler is not None:
+                    swa_scheduler.step()
+
+                # Update SWA averaged model weights
+                if swa_model is not None:
+                    swa_model.update_parameters(model)
+                    LOGGER.debug(f"Updated SWA model weights at epoch {epoch}")
+
     except KeyboardInterrupt:
         # User interrupted training - ensure progress bar is closed before re-raising
         LOGGER.info("Training interrupted by user")
@@ -959,6 +1025,25 @@ def train_from_config(
                 progress_bar.close()
             except Exception:
                 pass  # Ignore errors during progress bar cleanup
+
+    # Update batch normalization statistics for SWA model
+    if training_cfg.swa_enabled and swa_model is not None:
+        LOGGER.info("Updating batch normalization statistics for SWA model...")
+        from torch.optim.swa_utils import update_bn
+
+        # Use the existing train_loader
+        try:
+            update_bn(train_loader, swa_model, device=device)
+            LOGGER.info("Batch normalization statistics updated successfully")
+        except Exception as e:
+            LOGGER.warning(f"Failed to update BN statistics: {e}")
+
+    # Save SWA checkpoint if enabled
+    swa_checkpoint_path = None
+    if training_cfg.swa_enabled and swa_model is not None:
+        swa_checkpoint_path = checkpoints_dir / "swa.pt"
+        torch.save(swa_model.state_dict(), swa_checkpoint_path)
+        LOGGER.info(f"SWA model checkpoint saved to {swa_checkpoint_path}")
 
     # Save final checkpoint for recovery if needed
     last_checkpoint = checkpoints_dir / "last.pt"
@@ -992,6 +1077,7 @@ def train_from_config(
         best_epoch=best_epoch,
         best_global_step=best_metric_step,
         top_checkpoints=list(best_records),
+        swa_checkpoint=swa_checkpoint_path,
     )
     _write_summary(summary, run_dir / "summary.json")
     if training_cfg.metrics_summary_path is not None:
@@ -1131,6 +1217,7 @@ def _run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scheduler_step_per_batch: bool = True,
     scaler: torch.amp.GradScaler | None = None,
     clip_grad: float | None,
     log_every: int,
@@ -1229,7 +1316,8 @@ def _run_epoch(
                 optimizer.step()
 
             # Update learning rate according to scheduler
-            if lr_scheduler is not None:
+            # Note: SWA scheduler steps per epoch, not per batch
+            if lr_scheduler is not None and scheduler_step_per_batch:
                 lr_scheduler.step()
 
             # Accumulate gradient norm for logging
@@ -1586,6 +1674,7 @@ def _write_summary(summary: TrainingSummary, path: Path) -> None:
             }
             for item in summary.top_checkpoints
         ],
+        "swa_checkpoint": str(summary.swa_checkpoint) if summary.swa_checkpoint else None,
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
