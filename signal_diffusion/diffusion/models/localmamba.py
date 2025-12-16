@@ -436,7 +436,11 @@ class LocalMambaAdapter:
                         self._extras.age_embedding_dim,
                         self._extras.mapping_cond_dim,
                     )
-            # else: standard class conditioning (conditioning_mode="classes")
+            else:  # standard class conditioning (conditioning_mode="classes")
+                # Disable caption/mapping conditioning for standard class-only mode
+                self._extras.mapping_cond_dim = 0
+                if accelerator.is_main_process:
+                    self._logger.info("Standard class conditioning enabled, mapping_cond_dim set to 0")
 
         if accelerator.is_main_process:
             self._logger.info("Building LocalMamba2DModel with extras=%s", self._extras)
@@ -581,6 +585,12 @@ class LocalMambaAdapter:
             conditioning_mode = extras.conditioning_mode
             if conditioning_mode == "class_age":
                 # Class+age conditioning: combined class → class_cond, age → mapping_cond
+                if batch.age_values is None:
+                    raise ValueError(
+                        "class_age conditioning mode requires age_values in the batch, but they are None. "
+                        "Ensure your dataset config has age_column set to the correct column name (default: 'age'). "
+                        "If age data is unavailable, use conditioning_mode='classes' instead."
+                    )
                 if batch.gender_labels is not None and batch.health_labels is not None:
                     from signal_diffusion.diffusion.conditioning import (
                         compute_combined_class,
@@ -759,6 +769,9 @@ class LocalMambaAdapter:
             # Unconditional generation
             class_labels = torch.full((num_images,), dropout_label, device=device, dtype=torch.long)
             classifier_free = False
+            # If model expects mapping_cond (e.g., in class_age mode), provide zero tensor
+            if extras.mapping_cond_dim > 0:
+                mapping_cond = torch.zeros(num_images, extras.mapping_cond_dim, device=device, dtype=dtype)
 
         elif isinstance(conditioning, Mapping) and not isinstance(conditioning, torch.Tensor):
             # Multi-attribute conditioning: {"gender": Tensor, "health": Tensor, "age": Tensor}
@@ -846,6 +859,10 @@ class LocalMambaAdapter:
                     f"Class labels must be in [0, {self._num_dataset_classes - 1}] for LocalMamba adapter"
                 )
             unconditional_labels = torch.full_like(class_labels, dropout_label)
+            # If model expects mapping_cond (e.g., in class_age mode), provide zero tensor
+            if extras.mapping_cond_dim > 0:
+                mapping_cond = torch.zeros(num_images, extras.mapping_cond_dim, device=device, dtype=dtype)
+                unconditional_mapping_cond = torch.zeros_like(mapping_cond)
 
         else:
             raise TypeError("Unsupported conditioning value for LocalMamba sampling")

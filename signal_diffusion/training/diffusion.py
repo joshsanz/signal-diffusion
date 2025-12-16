@@ -34,7 +34,8 @@ from signal_diffusion.training.diffusion_utils import (
 )
 
 
-app = typer.Typer(add_completion=False, no_args_is_help=True)
+app = typer.Typer(add_completion=False, no_args_is_help=True,
+                  pretty_exceptions_show_locals=False)
 
 
 LOGGER = get_logger(__name__)

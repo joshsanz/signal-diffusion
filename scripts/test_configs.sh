@@ -136,10 +136,10 @@ test_config_with_conditioning() {
 
             FAILED=$((FAILED + 1))
 
-            # Show last 20 lines of log for debugging
+            # Show last 50 lines of log for debugging
             if [ -f "$log_file" ]; then
                 echo "  Last log lines:"
-                tail -20 "$log_file" | sed 's/^/    /'
+                tail -50 "$log_file" | sed 's/^/    /'
             fi
 
             return 1
