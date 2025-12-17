@@ -69,7 +69,7 @@ def main(
     cfg = load_diffusion_config(dataset_config)
     d_config = cfg.dataset
 
-    train_loader, _ = build_dataloaders(d_config, tokenizer=None, settings_path=None)
+    train_loader, _ = build_dataloaders(d_config, tokenizer=None, settings_path=None, data_type=cfg.settings.data_type)
     dataset = train_loader.dataset
 
     conditioning_mode = resolve_conditioning_mode(cfg)
