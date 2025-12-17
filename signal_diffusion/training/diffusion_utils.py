@@ -110,6 +110,34 @@ def _compute_per_channel_stats(tensor: torch.Tensor) -> dict[str, dict[str, floa
     return stats
 
 
+def _build_caption(age: int, gender: str, health: str, modality: str) -> str:
+    # Inline caption building (avoiding import of build_caption for simplicity)
+    gender_word = "female" if gender == "F" else "male"
+    if health == "PD":
+        health_primary = None
+        health_clause = "with Parkinson's disease"
+    else:
+        health_primary = "healthy"
+        health_clause = None
+
+    primary_bits = [f"{age} year old"]
+    if health_primary:
+        primary_bits.append(health_primary)
+    primary_bits.append(gender_word)
+
+    if modality == "spectrogram":
+        modality_desc = "spectrogram image"
+    elif modality == "timeseries":
+        modality_desc = "timeseries"
+    else:
+        raise ValueError(f"Unknown modality '{modality}' for caption building")
+
+    caption = f"a {modality_desc} of a {', '.join(primary_bits)} subject"
+    if health_clause:
+        caption += f" {health_clause}"
+    return caption
+
+
 def run_evaluation(
     accelerator: Accelerator,
     adapter: Any,
@@ -133,6 +161,12 @@ def run_evaluation(
     if eval_gen_seed is not None:
         generator = torch.Generator(device=accelerator.device).manual_seed(eval_gen_seed)
 
+    # Extract conditioning mode from config
+    default_conditioning = "caption" if cfg.model.name.startswith("stable-diffusion") else "none"
+    conditioning_mode = cfg.model.conditioning
+    if conditioning_mode is None:
+        conditioning_mode = default_conditioning
+
     eval_batch_size = cfg.training.eval_batch_size or cfg.dataset.batch_size
     was_training = modules.denoiser.training
     modules.denoiser.eval()
@@ -146,15 +180,22 @@ def run_evaluation(
                 unconditional_eval = min(unconditional_eval, eval_examples)
             class_eval = max(eval_examples - unconditional_eval, 0)
 
+            # Determine if we should use conditional generation
+            use_conditioning = (
+                (conditioning_mode == "classes" and num_classes > 0)
+                or conditioning_mode == "gend_hlth_age"
+                or conditioning_mode == "caption"
+            )
+
             conditioning_plan: list[tuple[str, int]] = []
             if unconditional_eval > 0:
                 conditioning_plan.append(("uncond", unconditional_eval))
             if class_eval > 0:
-                conditioning_plan.append(("classes" if num_classes > 0 else "uncond", class_eval))
+                conditioning_plan.append((conditioning_mode if use_conditioning else "uncond", class_eval))
 
             remaining = num_generate - eval_examples
             if remaining > 0:
-                conditioning_plan.append(("classes" if num_classes > 0 else "uncond", remaining))
+                conditioning_plan.append((conditioning_mode if use_conditioning else "uncond", remaining))
 
             if not conditioning_plan:
                 conditioning_plan.append(("uncond", num_generate))
@@ -175,7 +216,7 @@ def run_evaluation(
                     task_queue.popleft()
                     continue
 
-                conditioning_input: torch.Tensor | None
+                conditioning_input: torch.Tensor | dict[str, torch.Tensor] | str | list[str] | None
                 if task_type == "classes" and num_classes > 0:
                     conditioning_input = torch.randint(
                         low=0,
@@ -184,6 +225,33 @@ def run_evaluation(
                         device=accelerator.device,
                         generator=generator,
                     )
+                elif task_type == "gend_hlth_age":
+                    # Generate random gender (0 or 1), health (0 or 1), and age (20-80)
+                    gender = torch.randint(0, 2, (batch_size,), device=accelerator.device, generator=generator)
+                    health = torch.randint(0, 2, (batch_size,), device=accelerator.device, generator=generator)
+                    # Sample age uniformly from 20-80 years
+                    age = torch.rand(batch_size, device=accelerator.device, generator=generator) * 60 + 20
+                    conditioning_input = {
+                        "gender": gender,
+                        "health": health,
+                        "age": age,
+                    }
+                elif task_type == "caption":
+                    # Generate random captions using the dataset caption format
+                    captions = []
+                    for _ in range(batch_size):
+                        # Generate random attributes
+                        age_val = int(random.randint(20, 80))
+                        gender_code = random.choice(["M", "F"])
+                        health_code = random.choice(["H", "PD"])
+
+                        # Build caption using the weighted dataset format
+                        metadata = {"age": age_val, "gender": gender_code, "health": health_code,
+                                    "modality": cfg.settings.data_type}
+                        caption = _build_caption(**metadata)
+                        captions.append(caption)
+
+                    conditioning_input = captions
                 else:
                     conditioning_input = None
 
