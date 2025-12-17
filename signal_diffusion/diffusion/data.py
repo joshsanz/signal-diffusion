@@ -349,12 +349,12 @@ def build_dataloaders(
     *,
     tokenizer: PreTrainedTokenizerBase | None,
     settings_path: Path | None,
-    data_type: str = "spectrogram",
+    data_type: str | None,
 ) -> tuple[DataLoader, DataLoader | None]:
     """Construct training (and optional validation) dataloaders."""
 
     settings = _maybe_load_settings(settings_path)
-    if settings and hasattr(settings, "data_type"):
+    if data_type is None and settings and hasattr(settings, "data_type"):
         data_type = settings.data_type
     hf_dataset, local_path = _resolve_dataset(cfg, settings)
 

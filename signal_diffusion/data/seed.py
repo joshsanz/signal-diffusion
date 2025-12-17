@@ -249,6 +249,7 @@ class SEEDPreprocessor(BaseSpectrogramPreprocessor):
         split: str,
         resolution: int | None = None,
         hop_length: int | None = None,
+        **kwargs: Mapping[str, object],
     ) -> Iterable[SpectrogramExample]:
         resolution = resolution or self.DEFAULT_RESOLUTION
         hop_length = hop_length or self._derive_hop_length(resolution)
@@ -434,6 +435,7 @@ class SEEDTimeSeriesPreprocessor(SEEDPreprocessor):
         split: str,
         resolution: int | None = None,
         hop_length: int | None = None,
+        **kwargs: Mapping[str, object],
     ) -> Iterable[SpectrogramExample]:
         resolution = resolution or self.DEFAULT_RESOLUTION
         if resolution != self.nsamps:
