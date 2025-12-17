@@ -117,6 +117,17 @@ def train(
     is_timeseries = bool(cfg.settings and getattr(cfg.settings, "data_type", "") == "timeseries")
 
     if is_timeseries:
+        # ------------------------------------------------------------------
+        # Auto-populate n_eeg_channels from normalization stats (optional)
+        # ------------------------------------------------------------------
+        # For time-series training, we need to know the number of EEG channels.
+        # If using a configured dataset identifier (from default.toml), we can
+        # auto-load this from the {dataset}_normalization_stats.json file.
+        # Otherwise, users must set n_eeg_channels manually in [dataset.extras].
+        #
+        # NOTE: This is separate from data normalization itself, which happens
+        # in the dataset classes (e.g., SEEDTimeseriesDataset). This is just
+        # for getting the channel count dimension.
         extras = cfg.dataset.extras
         if extras is None:
             raise ValueError(
@@ -128,14 +139,27 @@ def train(
         dataset_key = cfg.dataset.identifier
         dataset_base = dataset_key.replace("_timeseries", "")
         lookup_key = dataset_key if dataset_key in settings.datasets else dataset_base
+        LOGGER.debug(
+            "Attempting to auto-load n_eeg_channels for time-series training. "
+            "Dataset identifier: '%s', lookup key: '%s'",
+            dataset_key,
+            lookup_key,
+        )
         dataset_settings = None
         if cfg.settings_config:
             try:
                 dataset_settings = settings.dataset(lookup_key)
             except KeyError:
-                LOGGER.warning(
-                    "Dataset '%s' not found in settings; skipping normalization stats lookup",
+                LOGGER.info(
+                    "Dataset identifier '%s' not found in settings. "
+                    "Unable to auto-load n_eeg_channels from normalization stats.",
                     lookup_key,
+                )
+                LOGGER.info(
+                    "To resolve: (1) Set 'n_eeg_channels' manually in [dataset.extras] "
+                    "(e.g., n_eeg_channels = 20 for SEED), or "
+                    "(2) Use a configured dataset identifier from config/default.toml "
+                    "(e.g., 'seed_timeseries' instead of absolute path)."
                 )
 
         if dataset_settings is not None:
@@ -170,7 +194,10 @@ def train(
         if "n_eeg_channels" not in extras:
             raise ValueError(
                 "Time-series diffusion requires 'n_eeg_channels' in [dataset.extras]. "
-                "Run preprocessing to generate normalization stats or set the value manually."
+                "This value specifies the number of EEG channels in your data. "
+                "Either: (1) Set it manually in config (e.g., n_eeg_channels = 20 for SEED), or "
+                "(2) Use a dataset identifier from config/default.toml (e.g., 'seed_timeseries') "
+                "instead of an absolute path to enable auto-loading from normalization stats."
             )
 
     log_with = []
