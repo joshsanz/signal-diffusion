@@ -29,7 +29,74 @@ TOTAL=0
 PASSED=0
 FAILED=0
 SKIPPED=0
-TIMEOUT=0
+TIMEOUT_COUNT=0
+
+# Associative array to store durations
+declare -A DURATIONS
+
+# Function to extract steps completed from log file
+extract_steps() {
+    local log_file=$1
+
+    if [ ! -f "$log_file" ]; then
+        echo "?"
+        return
+    fi
+
+    # Look for step information in common formats
+    # Match: "after 50 steps", "Step 45", "step 45", "steps: 45", "50/50"
+    local steps=$(grep -oE "after [0-9]+ steps|Step [0-9]+|step [0-9]+|steps: [0-9]+|[0-9]+/[0-9]+" "$log_file" | tail -1 | grep -oE "[0-9]+" | tail -1) || true
+
+    if [ -z "$steps" ]; then
+        echo "?"
+    else
+        echo "$steps"
+    fi
+}
+
+# Function to extract duration from log file
+extract_duration() {
+    local log_file=$1
+
+    if [ ! -f "$log_file" ]; then
+        echo "N/A"
+        return
+    fi
+
+    # Get first and last timestamps from log
+    local first_timestamp=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' "$log_file" | head -1)
+    local last_timestamp=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' "$log_file" | tail -1)
+
+    if [ -z "$first_timestamp" ] || [ -z "$last_timestamp" ]; then
+        echo "N/A"
+        return
+    fi
+
+    # Convert to seconds since epoch
+    local start_sec=$(date -d "$first_timestamp" +%s 2>/dev/null || echo "")
+    local end_sec=$(date -d "$last_timestamp" +%s 2>/dev/null || echo "")
+
+    if [ -z "$start_sec" ] || [ -z "$end_sec" ]; then
+        echo "N/A"
+        return
+    fi
+
+    # Calculate duration in seconds
+    local duration=$((end_sec - start_sec))
+
+    # Format as mm:ss or Xm Ys
+    if [ $duration -lt 60 ]; then
+        echo "${duration}s"
+    elif [ $duration -lt 3600 ]; then
+        local minutes=$((duration / 60))
+        local seconds=$((duration % 60))
+        printf "%dm %ds" $minutes $seconds
+    else
+        local hours=$((duration / 3600))
+        local minutes=$(((duration % 3600) / 60))
+        printf "%dh %dm" $hours $minutes
+    fi
+}
 
 # Create output directory
 mkdir -p "$TEST_OUTPUT"
@@ -128,35 +195,34 @@ test_config_with_conditioning() {
         --max-train-steps $MAX_STEPS \
         > "$log_file" 2>&1; then
 
-        # Extract step count from logs for successful runs
-        local steps_completed=0
-        if [ -f "$log_file" ]; then
-            # Look for step information in common formats (e.g., "Step 45/50", "step 45")
-            steps_completed=$(grep -oE "Step [0-9]+|step [0-9]+|steps: [0-9]+" "$log_file" | tail -1 | grep -oE "[0-9]+")
-        fi
+        # Extract duration and step count from logs for successful runs
+        local duration=$(extract_duration "$log_file")
+        local steps_completed=$(extract_steps "$log_file")
 
-        echo -e "${GREEN}✓ PASSED${NC} $test_name (completed ${steps_completed:-?} steps)"
+        DURATIONS["$test_name"]="$duration"
+        echo -e "${GREEN}✓ PASSED${NC} $test_name (completed $steps_completed steps in $duration)"
         PASSED=$((PASSED + 1))
         return 0
     else
         local exit_code=$?
 
         if [ $exit_code -eq 124 ]; then
-            # Extract step count from logs
-            local steps_completed=0
-            if [ -f "$log_file" ]; then
-                # Look for step information in common formats (e.g., "Step 45/50", "step 45")
-                steps_completed=$(grep -oE "Step [0-9]+|step [0-9]+|steps: [0-9]+" "$log_file" | tail -1 | grep -oE "[0-9]+")
-            fi
+            # Extract duration and step count from logs
+            local duration=$(extract_duration "$log_file")
+            local steps_completed=$(extract_steps "$log_file")
 
-            echo -e "${YELLOW}⏱ TIMEOUT${NC} $test_name (exceeded ${TIMEOUT}s, completed ${steps_completed:-?} steps)"
-            echo "Test timed out after ${TIMEOUT}s (completed ${steps_completed:-unknown} steps)" >> "$log_file"
+            DURATIONS["$test_name"]="$duration"
+            echo -e "${YELLOW}⏱ TIMEOUT${NC} $test_name (exceeded ${TIMEOUT}s, completed $steps_completed steps in $duration)"
+            echo "Test timed out after ${TIMEOUT}s (completed $steps_completed steps)" >> "$log_file"
 
             PASSED=$((PASSED + 1))
-            TIMEOUT=$((TIMEOUT + 1))
+            TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1))
             return 0
         else
-            echo -e "${RED}✗ FAILED${NC} $test_name (exit code: $exit_code)"
+            local duration=$(extract_duration "$log_file")
+            local steps_completed=$(extract_steps "$log_file")
+            DURATIONS["$test_name"]="$duration"
+            echo -e "${RED}✗ FAILED${NC} $test_name (exit code: $exit_code, completed $steps_completed steps in $duration)"
             echo "Training failed with exit code: $exit_code" >> "$log_file"
 
             FAILED=$((FAILED + 1))
@@ -192,7 +258,7 @@ echo "                              TEST SUMMARY"
 echo "================================================================================"
 echo "Total:     $TOTAL"
 echo -e "Passed:    ${GREEN}$PASSED${NC}"
-echo -e "Timeouts:  ${YELLOW}$TIMEOUT${NC}"
+echo -e "Timeouts:  ${YELLOW}$TIMEOUT_COUNT${NC}"
 echo -e "Failed:    ${RED}$FAILED${NC}"
 echo -e "Skipped:   ${YELLOW}$SKIPPED${NC}"
 echo ""
@@ -213,11 +279,13 @@ echo "==========================================================================
 echo ""
 echo "Log Files:"
 for config in "${CONFIGS[@]}"; do
-    log_file="${TEST_OUTPUT}/${config}.log"
-    if [ -f "$log_file" ]; then
-        log_size=$(wc -l < "$log_file")
-        echo "  $config.log ($log_size lines)"
-    fi
+    for conditioning in "${CONDITIONING_TYPES[@]}"; do
+        log_file="${TEST_OUTPUT}/${config}-${conditioning}.log"
+        if [ -f "$log_file" ]; then
+            log_size=$(wc -l < "$log_file")
+            echo "  ${config}-${conditioning}.log ($log_size lines)"
+        fi
+    done
 done
 
 exit $EXIT_CODE
