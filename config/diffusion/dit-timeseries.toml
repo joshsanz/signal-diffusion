@@ -17,7 +17,7 @@ resolution = 2048  # Sequence length (must match preprocessing nsamps)
 num_classes = 0
 
 [dataset.extras]
-gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+gaussian_noise_std = 0.001  # Set to 0 to disable augmentation
 # n_eeg_channels will be auto-loaded from normalization stats
 # sequence_length will be auto-populated from resolution
 

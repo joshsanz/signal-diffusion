@@ -20,7 +20,7 @@ num_classes = 4
 [dataset.extras]
 n_eeg_channels = 20  # SEED channel count; set manually when stats are missing
 sequence_length = 2048  # Explicitly match resolution for timeseries runs
-gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
+gaussian_noise_std = 0.001  # Set to 0 to disable augmentation
 
 [model]
 name = "localmamba"
