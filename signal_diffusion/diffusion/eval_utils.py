@@ -55,10 +55,17 @@ def compute_kid_score(
 ) -> Tuple[float, float]:
     generated_dataset = TensorDataset(generated_samples.cpu())
 
+    # KID requires subset_size <= min(num_gen, num_ref)
+    # Use the smaller of the two, but clamp to reasonable range
+    num_gen = len(generated_dataset)
+    num_ref = len(ref_dataset)
+    kid_subset_size = min(num_gen, num_ref, 1000)
+
     metrics = calculate_metrics(
         input1=_WrappedDataset(generated_dataset, image_column=0),
         input2=_WrappedDataset(ref_dataset, image_column="pixel_values"),
         kid=True,
+        kid_subset_size=kid_subset_size,
         feature_extractor="dinov2-vit-s-14",
         feature_extractor_internal_dtype="float32",
         verbose=False,

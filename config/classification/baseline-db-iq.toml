@@ -45,7 +45,7 @@ warmup_steps = 100
 min_lr_ratio = 0.03  # For linear or cosine
 
 [training]
-epochs = 20
+epochs = 15
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 5
@@ -57,7 +57,7 @@ checkpoint_steps = 100
 checkpoint_total_limit = 3
 compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
-swa_enabled = true
+swa_enabled = false
 swa_start_ratio = 0.75
 swa_lr_frac = 0.25
 

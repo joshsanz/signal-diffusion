@@ -18,12 +18,13 @@ center_crop = false
 random_flip = false
 image_column = "image"
 caption_column = ""
+class_column = ""
 num_classes = 4
 
 [model]
 name = "hourglass"
 sample_size = 256
-conditioning = "none"
+conditioning = "gend_hlth_age"
 
 [model.extras]
 mapping_width = 256

@@ -87,10 +87,15 @@ def main(
         print(f"Selected classes: {[name for _, name in condition_indices]}")
     elif conditioning_mode == "caption":
         raise NotImplementedError("Caption-based sampling is not supported by this script yet.")
+    elif conditioning_mode == "gend_hlth_age":
+        raise NotImplementedError("Multi-attribute (gend_hlth_age) sampling is not supported by this script yet.")
     elif conditioning_mode == "none":
         condition_indices = []
     else:
-        raise ValueError(f"Unsupported conditioning mode '{conditioning_mode}'")
+        raise ValueError(
+            f"Unsupported conditioning mode '{conditioning_mode}'. "
+            f"Must be one of: 'none', 'classes', 'caption', 'gend_hlth_age'"
+        )
 
     adapter = registry.get(cfg.model.name)
     tokenizer = adapter.create_tokenizer(cfg)

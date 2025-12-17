@@ -36,6 +36,8 @@ class FourierFeatures(nn.Module):
         """
         if x.ndim == 1:
             x = x.unsqueeze(-1)
+        # Ensure input matches weight dtype for mixed precision training
+        x = x.to(self.weight.dtype)
         f = 2 * math.pi * x @ self.weight.T
         return torch.cat([f.cos(), f.sin()], dim=-1)
 

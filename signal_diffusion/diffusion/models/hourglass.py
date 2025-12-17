@@ -67,8 +67,7 @@ class HourglassExtras:
     out_channels: int = 3
     latent_space: str | None = None
     vae: str | None = None
-    # Multi-attribute conditioning options
-    conditioning_mode: str = "class_age"  # "class_age" or "caption"
+    # Multi-attribute conditioning options (for gend_hlth_age)
     num_genders: int = 3   # M, F, dropout token
     num_health: int = 3    # H, PD, dropout token
     age_embedding_dim: int = 256  # Fourier features dimension for age
@@ -139,9 +138,9 @@ class HourglassAdapter:
             - 10.0+: Strong guidance (may reduce diversity)
 
     Class Conditioning:
-        Alternative to caption conditioning, supports discrete class labels for attributes
-        like gender, health status, emotion, etc. See conditioning_mode parameter for
-        multi-attribute combinations.
+        Use `conditioning = "classes"` for standard discrete class labels, or
+        `conditioning = "gend_hlth_age"` for multi-attribute combinations of
+        gender, health status, and age.
 
     Latent Space Training:
         Optionally train in VAE latent space for memory efficiency:
@@ -234,10 +233,7 @@ class HourglassAdapter:
             if vae is not None:
                 self._logger.info("VAE not specified in extras, using default from settings: %s", vae)
 
-        # Multi-attribute conditioning options (only used when model.conditioning="classes")
-        conditioning_mode = str(data.get("conditioning_mode", "class_age")).strip().lower()
-        if conditioning_mode not in {"class_age", "classes"}:
-            conditioning_mode = "class_age"
+        # Multi-attribute conditioning options (for gend_hlth_age conditioning)
         num_genders = int(data.get("num_genders", 3))
         num_health = int(data.get("num_health", 3))
         age_embedding_dim = int(data.get("age_embedding_dim", mapping_width))
@@ -260,7 +256,6 @@ class HourglassAdapter:
             out_channels=int(data.get("out_channels", 3)),
             latent_space=latent_space,
             vae=vae,
-            conditioning_mode=conditioning_mode,
             num_genders=num_genders,
             num_health=num_health,
             age_embedding_dim=age_embedding_dim,
@@ -389,38 +384,37 @@ class HourglassAdapter:
                     self._extras.mapping_cond_dim,
                 )
         elif conditioning == "classes":
-            # Only when conditioning="classes", check conditioning_mode
-            conditioning_mode = self._extras.conditioning_mode
-            if conditioning_mode == "class_age":
-                # Set up age embedding for class+age conditioning
-                from signal_diffusion.diffusion.conditioning import AgeEmbedding
+            # Standard class conditioning
+            self._extras.mapping_cond_dim = 0
+            if accelerator.is_main_process:
+                self._logger.info("Standard class conditioning enabled, mapping_cond_dim set to 0")
 
-                self._age_embedding = AgeEmbedding(
-                    out_features=self._extras.age_embedding_dim
+        elif conditioning == "gend_hlth_age":
+            # Multi-attribute: gender×health classes + age as mapping_cond
+            from signal_diffusion.diffusion.conditioning import AgeEmbedding
+
+            self._age_embedding = AgeEmbedding(
+                out_features=self._extras.age_embedding_dim
+            )
+            # Project age embedding to mapping_cond_dim if needed
+            if self._extras.age_embedding_dim != self._extras.mapping_width:
+                self._age_proj = torch.nn.Linear(
+                    self._extras.age_embedding_dim,
+                    self._extras.mapping_width,
+                    bias=False,
                 )
-                # Project age embedding to mapping_cond_dim if needed
-                if self._extras.age_embedding_dim != self._extras.mapping_width:
-                    self._age_proj = torch.nn.Linear(
-                        self._extras.age_embedding_dim,
-                        self._extras.mapping_width,
-                        bias=False,
-                    )
-                else:
-                    self._age_proj = torch.nn.Identity()
+            else:
+                self._age_proj = torch.nn.Identity()
 
-                # For class_age mode, set mapping_cond_dim to mapping_width for age
-                self._extras.mapping_cond_dim = self._extras.mapping_width
-                if accelerator.is_main_process:
-                    self._logger.info(
-                        "Class+age conditioning enabled with age_embedding_dim=%d, mapping_cond_dim=%d",
-                        self._extras.age_embedding_dim,
-                        self._extras.mapping_cond_dim,
-                    )
-            else:  # standard class conditioning (conditioning_mode="classes")
-                # Disable caption/mapping conditioning for standard class-only mode
-                self._extras.mapping_cond_dim = 0
-                if accelerator.is_main_process:
-                    self._logger.info("Standard class conditioning enabled, mapping_cond_dim set to 0")
+            # For gend_hlth_age mode, set mapping_cond_dim to mapping_width for age
+            self._extras.mapping_cond_dim = self._extras.mapping_width
+            if accelerator.is_main_process:
+                self._logger.info(
+                    "Multi-attribute (gender+health+age) conditioning enabled with "
+                    "age_embedding_dim=%d, mapping_cond_dim=%d",
+                    self._extras.age_embedding_dim,
+                    self._extras.mapping_cond_dim,
+                )
 
         if accelerator.is_main_process:
             self._logger.info("Building Hourglass2DModel with extras=%s", self._extras)
@@ -556,53 +550,50 @@ class HourglassAdapter:
                         mapping_cond,
                     )
         elif conditioning == "classes":
-            # Only when conditioning="classes", check conditioning_mode
-            conditioning_mode = extras.conditioning_mode
-            if conditioning_mode == "class_age":
-                # Class+age conditioning: combined class → class_cond, age → mapping_cond
-                if batch.age_values is None:
-                    raise ValueError(
-                        "class_age conditioning mode requires age_values in the batch, but they are None. "
-                        "Ensure your dataset config has age_column set to the correct column name (default: 'age'). "
-                        "If age data is unavailable, use conditioning_mode='classes' instead."
-                    )
-                if batch.gender_labels is not None and batch.health_labels is not None:
-                    from signal_diffusion.diffusion.conditioning import (
-                        compute_combined_class,
-                        prepare_multi_attribute_labels,
-                    )
+            # Standard class conditioning
+            class_labels = prepare_class_labels(
+                batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
+            )
 
-                    gender_labels, health_labels, age_values = prepare_multi_attribute_labels(
-                        batch,
-                        device=device,
-                        cfg_dropout=extras.cfg_dropout,
-                        dropout_token=2,
-                    )
-
-                    # Compute combined class: gender * 2 + health, with dropout=4
-                    class_labels = compute_combined_class(
-                        gender_labels,
-                        health_labels,
-                        num_health_classes=2,
-                        dropout_token=self._num_dataset_classes,  # Use num_dataset_classes as dropout
-                    )
-
-                    # Age embedding → mapping_cond
-                    if age_values is not None and self._age_embedding is not None:
-                        age_emb = self._age_embedding(age_values)
-                        if self._age_proj is not None:
-                            age_emb = self._age_proj(age_emb)
-                        mapping_cond = age_emb.to(dtype=modules.weight_dtype)
-                else:
-                    # Fall back to standard class labels if multi-attribute not available
-                    class_labels = prepare_class_labels(
-                        batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
-                    )
-            else:  # conditioning_mode == "classes"
-                # Standard class conditioning
-                class_labels = prepare_class_labels(
-                    batch, device=device, num_dataset_classes=self._num_dataset_classes, cfg_dropout=extras.cfg_dropout
+        elif conditioning == "gend_hlth_age":
+            # Multi-attribute: combine gender+health → class_labels, age → mapping_cond
+            if batch.age_values is None:
+                raise ValueError(
+                    "gend_hlth_age conditioning requires age_values in the batch. "
+                    "Ensure dataset.age_column is set and the column exists in your dataset."
                 )
+            if batch.gender_labels is None or batch.health_labels is None:
+                raise ValueError(
+                    "gend_hlth_age conditioning requires gender_labels and health_labels in the batch. "
+                    "Ensure dataset.gender_column and dataset.health_column are set."
+                )
+
+            from signal_diffusion.diffusion.conditioning import (
+                compute_combined_class,
+                prepare_multi_attribute_labels,
+            )
+
+            gender_labels, health_labels, age_values = prepare_multi_attribute_labels(
+                batch,
+                device=device,
+                cfg_dropout=extras.cfg_dropout,
+                dropout_token=2,
+            )
+
+            # Compute combined class: gender * 2 + health, with dropout=num_dataset_classes
+            class_labels = compute_combined_class(
+                gender_labels,
+                health_labels,
+                num_health_classes=2,
+                dropout_token=self._num_dataset_classes,  # Use num_dataset_classes as dropout
+            )
+
+            # Age embedding → mapping_cond
+            if self._age_embedding is not None:
+                age_emb = self._age_embedding(age_values)
+                if self._age_proj is not None:
+                    age_emb = self._age_proj(age_emb)
+                mapping_cond = age_emb.to(dtype=modules.weight_dtype)
         # else: conditioning == "none", leave class_labels and mapping_cond as None
 
         noise = torch.randn_like(images)
@@ -738,7 +729,7 @@ class HourglassAdapter:
             # Unconditional generation
             class_labels = torch.full((num_images,), dropout_label, device=device, dtype=torch.long)
             classifier_free = False
-            # If model expects mapping_cond (e.g., in class_age mode), provide zero tensor
+            # If model expects mapping_cond (e.g., in gend_hlth_age mode), provide zero tensor
             if extras.mapping_cond_dim > 0:
                 mapping_cond = torch.zeros(num_images, extras.mapping_cond_dim, device=device, dtype=dtype)
 
@@ -828,7 +819,7 @@ class HourglassAdapter:
                     f"Class labels must be in [0, {self._num_dataset_classes - 1}] for hourglass adapter"
                 )
             unconditional_labels = torch.full_like(class_labels, dropout_label)
-            # If model expects mapping_cond (e.g., in class_age mode), provide zero tensor
+            # If model expects mapping_cond (e.g., in gend_hlth_age mode), provide zero tensor
             if extras.mapping_cond_dim > 0:
                 mapping_cond = torch.zeros(num_images, extras.mapping_cond_dim, device=device, dtype=dtype)
                 unconditional_mapping_cond = torch.zeros_like(mapping_cond)

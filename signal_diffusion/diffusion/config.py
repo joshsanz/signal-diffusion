@@ -164,25 +164,52 @@ class DiffusionConfig:
 
         # Validate conditioning mode requirements
         conditioning = (self.model.conditioning or "none").strip().lower()
-        conditioning_mode = self.model.extras.get("conditioning_mode", "class_age")
-
-        if conditioning == "classes" and conditioning_mode == "class_age":
-            # Multi-attribute class conditioning requires gender and health columns
-            if not self.dataset.gender_column:
-                raise ValueError(
-                    "class_age conditioning requires 'dataset.gender_column' to be set"
-                )
-            if not self.dataset.health_column:
-                raise ValueError(
-                    "class_age conditioning requires 'dataset.health_column' to be set"
-                )
-            # age_column is optional - missing values treated as CFG dropout
 
         if conditioning == "caption":
             if not self.dataset.caption_column:
                 raise ValueError(
                     "caption conditioning requires 'dataset.caption_column' to be set"
                 )
+
+        elif conditioning == "classes":
+            if not self.dataset.class_column:
+                raise ValueError(
+                    "classes conditioning requires 'dataset.class_column' to be set"
+                )
+            if self.dataset.num_classes <= 0:
+                raise ValueError(
+                    "classes conditioning requires 'dataset.num_classes' > 0"
+                )
+
+        elif conditioning == "gend_hlth_age":
+            # Multi-attribute conditioning requires gender, health, and age columns
+            if not self.dataset.gender_column:
+                raise ValueError(
+                    "gend_hlth_age conditioning requires 'dataset.gender_column' to be set"
+                )
+            if not self.dataset.health_column:
+                raise ValueError(
+                    "gend_hlth_age conditioning requires 'dataset.health_column' to be set"
+                )
+            if not self.dataset.age_column:
+                raise ValueError(
+                    "gend_hlth_age conditioning requires 'dataset.age_column' to be set"
+                )
+
+            # Auto-set num_classes for combined gender×health classes
+            expected_num_classes = 4  # 2 genders × 2 health states
+            if self.dataset.num_classes != expected_num_classes:
+                warnings.warn(
+                    f"Setting dataset.num_classes={expected_num_classes} for gend_hlth_age conditioning "
+                    f"(2 genders × 2 health states = 4 combined classes)"
+                )
+                self.dataset.num_classes = expected_num_classes
+
+        elif conditioning not in {"none", ""}:
+            raise ValueError(
+                f"Unsupported conditioning type '{conditioning}'. "
+                f"Must be one of: 'none', 'classes', 'caption', 'gend_hlth_age'"
+            )
 
         # Warn if SD model used without latent space
         if self.model.name.startswith("stable-diffusion"):
@@ -252,20 +279,6 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         raise TypeError("dataset.extras must be a mapping if provided")
     extras = dict(extras_section)
 
-    def _with_default(value: str | None, default: str) -> str | None:
-        """Apply default column name if value is None or empty string.
-
-        Args:
-            value: User-provided column name (from TOML config)
-            default: Default column name to use if value is None or ""
-
-        Returns:
-            The default if value is None/"", otherwise the provided value
-        """
-        if value in (None, ""):
-            return default
-        return value
-
     def _split(value: Any, *, default: str | None = None) -> str | None:
         if value is None:
             return default
@@ -286,12 +299,12 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         resolution=int(section.get("resolution", 256)),
         center_crop=bool(section.get("center_crop", False)),
         random_flip=bool(section.get("random_flip", False)),
-        image_column=_with_default(section.get("image_column"), "image"),
-        caption_column=_with_default(section.get("caption_column"), "text"),
-        class_column=_with_default(section.get("class_column"), "class_label"),
-        gender_column=_with_default(section.get("gender_column"), "gender"),
-        health_column=_with_default(section.get("health_column"), "health"),
-        age_column=_with_default(section.get("age_column"), "age"),
+        image_column=_split(section.get("image_column"), default="image"),
+        caption_column=_split(section.get("caption_column"), default="text"),
+        class_column=_split(section.get("class_column"), default="class_label"),
+        gender_column=_split(section.get("gender_column"), default="gender"),
+        health_column=_split(section.get("health_column"), default="health"),
+        age_column=_split(section.get("age_column"), default="age"),
         dataset_type=str(section.get("dataset_type", "auto")),
         max_train_samples=section.get("max_train_samples"),
         max_eval_samples=section.get("max_eval_samples"),

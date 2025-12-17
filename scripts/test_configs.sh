@@ -93,6 +93,24 @@ test_config_with_conditioning() {
             # Add conditioning after [model] line
             awk "/^\[model\]/{p=1} p && !done && /^[a-zA-Z]/{print \"conditioning = \\\"$conditioning\\\"\"; done=1} {print}" "$config_file" > "$temp_config"
         fi
+
+        # If conditioning is "caption", also set caption_column to "caption" and num_classes to 0
+        if [ "$conditioning" = "caption" ]; then
+            if grep -q "^caption_column = " "$temp_config"; then
+                sed -i "s/^caption_column = .*/caption_column = \"caption\"/" "$temp_config"
+            else
+                # Add caption_column after [dataset] line if it doesn't exist
+                awk "/^\[dataset\]/{p=1} p && !done && /^[a-zA-Z]/{print \"caption_column = \\\"caption\\\"\"; done=1} {print}" "$temp_config" > "$temp_config.tmp" && mv "$temp_config.tmp" "$temp_config"
+            fi
+
+            # Set num_classes to 0 for caption conditioning
+            if grep -q "^num_classes = " "$temp_config"; then
+                sed -i "s/^num_classes = .*/num_classes = 0/" "$temp_config"
+            else
+                # Add num_classes after [dataset] line if it doesn't exist
+                awk "/^\[dataset\]/{p=1} p && !done && /^[a-zA-Z]/{print \"num_classes = 0\"; done=1} {print}" "$temp_config" > "$temp_config.tmp" && mv "$temp_config.tmp" "$temp_config"
+            fi
+        fi
     else
         echo -e "${YELLOW}⊘ SKIPPED${NC} $test_name (config not found)"
         SKIPPED=$((SKIPPED + 1))
@@ -110,7 +128,14 @@ test_config_with_conditioning() {
         --max-train-steps $MAX_STEPS \
         > "$log_file" 2>&1; then
 
-        echo -e "${GREEN}✓ PASSED${NC} $test_name"
+        # Extract step count from logs for successful runs
+        local steps_completed=0
+        if [ -f "$log_file" ]; then
+            # Look for step information in common formats (e.g., "Step 45/50", "step 45")
+            steps_completed=$(grep -oE "Step [0-9]+|step [0-9]+|steps: [0-9]+" "$log_file" | tail -1 | grep -oE "[0-9]+")
+        fi
+
+        echo -e "${GREEN}✓ PASSED${NC} $test_name (completed ${steps_completed:-?} steps)"
         PASSED=$((PASSED + 1))
         return 0
     else
@@ -148,7 +173,7 @@ test_config_with_conditioning() {
 }
 
 # Run all configurations with both conditioning types
-CONDITIONING_TYPES=("classes" "caption")
+CONDITIONING_TYPES=("gend_hlth_age" "caption")
 TOTAL_TESTS=$((${#CONFIGS[@]} * ${#CONDITIONING_TYPES[@]}))
 
 echo "Testing ${#CONFIGS[@]} configurations × ${#CONDITIONING_TYPES[@]} conditioning types = $TOTAL_TESTS tests..."

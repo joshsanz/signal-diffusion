@@ -14,6 +14,7 @@ val_split = "validation"
 batch_size = 64
 num_workers = 4
 resolution = 2048  # Sequence length (must match preprocessing nsamps)
+class_column = ""
 num_classes = 4
 
 [dataset.extras]
@@ -24,7 +25,7 @@ gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 [model]
 name = "localmamba"
 sample_size = 2048
-conditioning = "none"  # none, caption, classes
+conditioning = "gend_hlth_age"  # none, caption, classes
 
 [model.extras]
 depths = [2, 2, 6, 2]

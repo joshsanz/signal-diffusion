@@ -88,17 +88,29 @@ def train(
     conditioning = str(conditioning_value).strip().lower()
     if not conditioning:
         conditioning = default_conditioning
-    if conditioning not in {"none", "caption", "classes"}:
-        raise ValueError(f"Unsupported conditioning type '{conditioning}'")
+    if conditioning not in {"none", "caption", "classes", "gend_hlth_age"}:
+        raise ValueError(
+            f"Unsupported conditioning type '{conditioning}'. "
+            f"Must be one of: 'none', 'classes', 'caption', 'gend_hlth_age'"
+        )
 
     if conditioning == "caption":
         if not cfg.dataset.caption_column:
-            raise ValueError("Caption conditioning requires 'dataset.caption_column' to be set")
-    if conditioning == "classes":
+            raise ValueError("caption conditioning requires 'dataset.caption_column' to be set")
+
+    elif conditioning == "classes":
         if cfg.dataset.num_classes <= 1:
-            raise ValueError("Class conditioning requires 'dataset.num_classes' to be greater than 1")
+            raise ValueError("classes conditioning requires 'dataset.num_classes' > 1")
         if not cfg.dataset.class_column:
-            raise ValueError("Class conditioning requires 'dataset.class_column' to be set")
+            raise ValueError("classes conditioning requires 'dataset.class_column' to be set")
+
+    elif conditioning == "gend_hlth_age":
+        if not cfg.dataset.gender_column:
+            raise ValueError("gend_hlth_age conditioning requires 'dataset.gender_column' to be set")
+        if not cfg.dataset.health_column:
+            raise ValueError("gend_hlth_age conditioning requires 'dataset.health_column' to be set")
+        if not cfg.dataset.age_column:
+            raise ValueError("gend_hlth_age conditioning requires 'dataset.age_column' to be set")
 
     tokenizer = adapter.create_tokenizer(cfg) if conditioning == "caption" else None
 

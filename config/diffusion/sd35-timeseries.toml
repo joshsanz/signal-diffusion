@@ -27,7 +27,7 @@ gaussian_noise_std = 0.01  # Set to 0 to disable augmentation
 [model]
 name = "stable-diffusion-3.5-medium"
 sample_size = 2048
-conditioning = "none"
+conditioning = "caption"
 pretrained = "stabilityai/stable-diffusion-3.5-medium"
 
 [model.extras]

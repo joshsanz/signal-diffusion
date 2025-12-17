@@ -25,7 +25,7 @@ num_classes = 0
 [model]
 name = "stable-diffusion-3.5-medium"
 sample_size = 256
-conditioning = "none"
+conditioning = "caption"
 pretrained = "stabilityai/stable-diffusion-3.5-medium"
 
 [model.extras]
