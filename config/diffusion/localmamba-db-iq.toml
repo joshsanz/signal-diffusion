@@ -7,7 +7,7 @@ trainer = "diffusion"
 name = "/data/data/signal-diffusion/processed-iq/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"
 val_split = "validation"
-batch_size = 64
+batch_size = 1
 num_workers = 4
 resolution = 256
 center_crop = false
@@ -25,20 +25,21 @@ data_type = "spectrogram"
 name = "localmamba"
 sample_size = 256
 conditioning = "gend_hlth_age"
+latent_space = true
 
 [model.extras]
-depths = [2, 2, 6, 2]
-dims = [64, 128, 256, 512]
+depths = [2, 2, 2]
+dims = [128, 256, 512]
 d_state = 16
 ssm_ratio = 2.0
-mlp_ratio = 4.0
+mlp_ratio = 3.0
 scan_directions = ["h", "v", "w7"]
 mapping_width = 256
 mapping_depth = 2
 mapping_dropout_rate = 0.0
 patch_size = [2, 2]
-in_channels = 3
-out_channels = 3
+in_channels = 16
+out_channels = 16
 dropout_rate = 0.1
 cfg_dropout = 0.1
 
@@ -73,7 +74,7 @@ eval_strategy = "steps"
 eval_num_steps = 1000
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 256
+eval_batch_size = 1
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 ema_use_warmup = true
@@ -88,5 +89,5 @@ log_dir = "runs/diffusion/tensorboard/localmamba-db-iq"
 run_name = "localmamba_db_iq"
 
 [inference]
-denoising_steps = 25
+denoising_steps = 10
 cfg_scale = 1.0

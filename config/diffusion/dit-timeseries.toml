@@ -57,7 +57,7 @@ warmup_steps = 100
 [training]
 seed = 42
 epochs = 100
-mixed_precision = "fp16"
+mixed_precision = "bf16"
 gradient_checkpointing = false
 gradient_accumulation_steps = 1
 gradient_clip_norm = 1.0

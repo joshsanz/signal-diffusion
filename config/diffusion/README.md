@@ -64,7 +64,7 @@ uv run python -m signal_diffusion.training.diffusion config/diffusion/sd35-times
 | **DiT** | 12 | 72×16 attn heads | 1e-4 | bf16 | 32 |
 | **Hourglass** | [2,2,3] | [64,128,256] | 1e-4 | bf16 | 64 |
 | **LocalMamba** | [2,2,6,2] | [64,128,256,512] | 3e-4 | bf16 | 64 |
-| **SD3.5** | transformer | 16 (latent) | 5e-5 | fp16 | 16 |
+| **SD3.5** | transformer | 16 (latent) | 5e-5 | bf16 | 16 |
 
 ## Conditional Models (Future)
 

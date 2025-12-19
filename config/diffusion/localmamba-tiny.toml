@@ -8,7 +8,7 @@ trainer = "diffusion"
 name = "nkirschi/oxford-flowers"
 train_split = "train"
 val_split = "test"
-batch_size = 16
+batch_size = 4
 num_workers = 4
 resolution = 128
 center_crop = true
@@ -23,7 +23,7 @@ sample_size = 64
 conditioning = "classes" # none, caption, classes
 
 [model.extras]
-depths = [2, 3, 4, 2]
+depths = [2, 2, 2]
 dims = [96, 192, 384, 768]
 d_state = 16
 ssm_ratio = 2.0
@@ -69,7 +69,7 @@ eval_strategy = "steps"
 eval_num_steps = 500
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 256
+eval_batch_size = 4
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 ema_use_warmup = true

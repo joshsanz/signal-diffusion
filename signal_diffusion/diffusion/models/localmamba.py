@@ -67,7 +67,7 @@ class LocalMambaExtras:
     cfg_dropout: float = 0.0
     augment_wrapper: bool = False
     augment_prob: float = 0.0
-    latent_space: str | None = None
+    latent_space: bool = False
     vae: str | None = None
     # Multi-attribute conditioning options (for gend_hlth_age)
     num_genders: int = 3   # M, F, dropout token
@@ -246,7 +246,7 @@ class LocalMambaAdapter:
         # Parse augmentation settings
         augment_wrapper = bool(data.get("augment_wrapper", False))
         augment_prob = float(data.get("augment_prob", 0.0))
-        latent_space = str(data.get("latent_space")) if "latent_space" in data else None
+        latent_space = bool(data.get("latent_space", False))
         vae = data.get("vae")
         # Fallback to default stable diffusion model ID if VAE is unspecified
         if vae is None and cfg.settings:

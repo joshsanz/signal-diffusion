@@ -24,7 +24,7 @@ class DatasetConfig:
     random_flip: bool = False
     image_column: str | None = "image"
     caption_column: str | None = "text"
-    class_column: str | None = "class_label"
+    class_column: str | None = None
     # Multi-attribute conditioning columns
     gender_column: str | None = "gender"  # M/F values
     health_column: str | None = "health"  # H/PD values (healthy/parkinsons)
@@ -117,7 +117,7 @@ class TrainingConfig:
 
     seed: int = 42
     output_dir: Path | None = None
-    mixed_precision: str | None = "fp16"
+    mixed_precision: str | None = "bf16"
     gradient_checkpointing: bool = False
     gradient_accumulation_steps: int = 1
     epochs: int = 1
@@ -301,7 +301,7 @@ def _load_dataset(section: Mapping[str, Any]) -> DatasetConfig:
         random_flip=bool(section.get("random_flip", False)),
         image_column=_split(section.get("image_column"), default="image"),
         caption_column=_split(section.get("caption_column"), default="text"),
-        class_column=_split(section.get("class_column"), default="class_label"),
+        class_column=_split(section.get("class_column"), default=None),
         gender_column=_split(section.get("gender_column"), default="gender"),
         health_column=_split(section.get("health_column"), default="health"),
         age_column=_split(section.get("age_column"), default="age"),
@@ -431,7 +431,7 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
     return TrainingConfig(
         seed=int(section.get("seed", 42)),
         output_dir=output_dir,
-        mixed_precision=section.get("mixed_precision", "fp16"),
+        mixed_precision=section.get("mixed_precision", "bf16"),
         gradient_checkpointing=bool(
             section.get("gradient_checkpointing", section.get("grad_checkpointing", False))
         ),

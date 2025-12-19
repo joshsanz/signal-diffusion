@@ -66,7 +66,6 @@ class StableDiffusion35Adapter:
             ```toml
             [dataset]
             caption_column = "text"              # Column containing captions
-            latent_space = true                  # Always true for SD 3.5 (native)
 
             [model]
             name = "stable-diffusion-3.5-medium"
@@ -77,6 +76,7 @@ class StableDiffusion35Adapter:
             skip_t5 = true                       # Skip T5XXL encoder (recommended)
             cfg_dropout = 0.1                    # 10% CFG dropout
             train_text_encoder = false           # Keep CLIP encoders frozen
+            latent_space = true                  # Always true for SD 3.5 (native)
             ```
 
         Training with Captions:
