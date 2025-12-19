@@ -101,13 +101,13 @@ class DualCLIPTextEncoder(nn.Module):
         LOGGER.info("Loading CLIP-L text encoder from %s", sd_model_id)
         self.tokenizer_l = CLIPTokenizer.from_pretrained(sd_model_id, subfolder="tokenizer")
         self.text_encoder_l = CLIPTextModel.from_pretrained(
-            sd_model_id, subfolder="text_encoder", torch_dtype=dtype
+            sd_model_id, subfolder="text_encoder", dtype=dtype
         )
 
         LOGGER.info("Loading CLIP-G text encoder from %s", sd_model_id)
         self.tokenizer_g = CLIPTokenizer.from_pretrained(sd_model_id, subfolder="tokenizer_2")
         self.text_encoder_g = CLIPTextModelWithProjection.from_pretrained(
-            sd_model_id, subfolder="text_encoder_2", torch_dtype=dtype
+            sd_model_id, subfolder="text_encoder_2", dtype=dtype
         )
 
         # Freeze encoders
@@ -209,7 +209,7 @@ def load_sd35_vae(
     from diffusers import AutoencoderKL
 
     LOGGER.info("Loading VAE from %s", model_id)
-    vae = AutoencoderKL.from_pretrained(model_id, subfolder="vae", torch_dtype=dtype)
+    vae = AutoencoderKL.from_pretrained(model_id, subfolder="vae", dtype=dtype)
     return vae
 
 
