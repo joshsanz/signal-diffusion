@@ -29,37 +29,27 @@ def generate_localmamba_configs() -> Iterator[dict]:
 
     Strategy:
     1. Vary depths with base dims/mlp_ratio
-    2. Try reduced mlp_ratio (3.0 instead of 4.0)
+    2. Try reduced mlp_ratio (2/3.0 instead of 4.0)
     3. Reduce dims to smaller multiples of 64
     """
     base_dims = [96, 192, 384, 768]
     base_mlp = 4.0
 
-    # Strategy 1: Vary depths with base dims/mlp_ratio
-    for depths in [
-        [2, 2, 9, 2],
-        [2, 2, 7, 2],
-        [2, 2, 5, 2],
-        [2, 2, 4, 2],
-        [2, 2, 3, 2],
-        [2, 2, 2, 2],
-        [2, 2, 2],  # Drop last level
-    ]:
-        yield {"depths": depths, "dims": base_dims[: len(depths)], "mlp_ratio": base_mlp}
-
     # Strategy 2: Try reduced mlp_ratio
-    for depths in [
-        [2, 2, 9, 2],
-        [2, 2, 7, 2],
-        [2, 2, 5, 2],
-        [2, 2, 4, 2],
-        [2, 2, 3, 2],
-        [2, 2, 2, 2],
-        [2, 2, 2],
-    ]:
-        yield {"depths": depths, "dims": base_dims[: len(depths)], "mlp_ratio": 3.0}
+    for mlp_ratio in [4.0, 3.0, 2.0]:
+        # Strategy 1: Vary depths with base dims/mlp_ratio
+        for depths in [
+            [2, 2, 9, 2],
+            [2, 2, 7, 2],
+            [2, 2, 5, 2],
+            [2, 2, 4, 2],
+            [2, 2, 3, 2],
+            [2, 2, 2, 2],
+            [2, 2, 2],  # Drop last level
+        ]:
+            yield {"depths": depths, "dims": base_dims[: len(depths)], "mlp_ratio": mlp_ratio}
 
-    # Strategy 3: Reduce dims (multiples of 64)
+    # Strategy 3: Reduce dims (multiples of 64) with small depths and reduced mlp ratio
     for dims_scale in [[64, 128, 256, 512], [64, 128, 256, 384], [64, 128, 192, 256]]:
         for depths in [[2, 2, 2, 2], [2, 2, 2]]:
             yield {"depths": depths, "dims": dims_scale[: len(depths)], "mlp_ratio": 3.0}
