@@ -332,10 +332,19 @@ class StableDiffusion35Adapter:
             raise ValueError(f"Unsupported prediction type {cfg.objective.prediction_type}")
 
         # Forward pass through transformer
-        # SD3Transformer2DModel expects pooled_projections for CLIP conditioning
+        # Since we skip T5 (text_encoder_3), pass zero tensors for encoder_hidden_states
+        # to match behavior of official SD 3.5 pipeline when text_encoder_3=None
+        joint_attention_dim = transformer.config.joint_attention_dim
+        encoder_hidden_states = torch.zeros(
+            (z_t.shape[0], 77, joint_attention_dim),
+            device=device,
+            dtype=modules.weight_dtype,
+        )
+
         model_pred = transformer(
             hidden_states=z_t,
             timestep=timesteps,
+            encoder_hidden_states=encoder_hidden_states,
             pooled_projections=text_embeddings,
             return_dict=False,
         )[0]
@@ -463,10 +472,20 @@ class StableDiffusion35Adapter:
                 pooled_projections = torch.cat([uncond_embeddings, text_embeddings], dim=0)
                 timesteps_input = timestep.expand(latent_input.shape[0])
 
+                # Since we skip T5 (text_encoder_3), pass zero tensors for encoder_hidden_states
+                # to match behavior of official SD 3.5 pipeline when text_encoder_3=None
+                joint_attention_dim = modules.denoiser.config.joint_attention_dim
+                encoder_hidden_states = torch.zeros(
+                    (latent_input.shape[0], 77, joint_attention_dim),
+                    device=device,
+                    dtype=dtype,
+                )
+
                 # Forward pass
                 model_output = modules.denoiser(
                     hidden_states=latent_input,
                     timestep=timesteps_input,
+                    encoder_hidden_states=encoder_hidden_states,
                     pooled_projections=pooled_projections,
                     return_dict=False,
                 )[0]

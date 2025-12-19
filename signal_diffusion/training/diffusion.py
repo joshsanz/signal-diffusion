@@ -490,6 +490,33 @@ def train(
             val_example_count if val_example_count is not None else "unknown",
         )
 
+    # Report model parameters and memory usage
+    if accelerator.is_main_process:
+        total_params = sum(p.numel() for p in modules.denoiser.parameters())
+        trainable_params = sum(p.numel() for p in modules.denoiser.parameters() if p.requires_grad)
+
+        # Estimate memory based on dtype
+        dtype = modules.weight_dtype
+        bytes_per_param = {
+            torch.float32: 4,
+            torch.float16: 2,
+            torch.bfloat16: 2,
+            torch.float64: 8,
+            torch.int8: 1,
+        }.get(dtype, 4)  # default to 4 bytes
+
+        total_memory_mb = (total_params * bytes_per_param) / (1024 * 1024)
+        trainable_memory_mb = (trainable_params * bytes_per_param) / (1024 * 1024)
+
+        LOGGER.info(
+            "Model parameters: total=%s (%.2f MB), trainable=%s (%.2f MB), dtype=%s",
+            f"{total_params:,}",
+            total_memory_mb,
+            f"{trainable_params:,}",
+            trainable_memory_mb,
+            dtype,
+        )
+
     if accelerator.is_main_process:
         LOGGER.info("Running initial evaluation...")
         torch.cuda.empty_cache()

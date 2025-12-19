@@ -765,7 +765,7 @@ class VAETrainConfig:
     allow_tf32: bool = True
     dataloader_num_workers: int = 2
     logging_dir: str = "logs"
-    mixed_precision: Optional[str] = "fp16"
+    mixed_precision: Optional[str] = "bf16"
     report_to: str = "wandb"
     local_rank: int = -1
     enable_xformers_memory_efficient_attention: bool = True
