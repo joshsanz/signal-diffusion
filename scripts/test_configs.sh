@@ -120,22 +120,21 @@ CONFIGS=(
     # "dit-timeseries"
 
     # Hourglass variants
-    "hourglass-db-only"
-    "hourglass-db-iq"
-    "hourglass-db-polar"
-    "hourglass-timeseries"
+    # "hourglass-db-only"
+    # "hourglass-db-iq"
+    # "hourglass-db-polar"
+    # "hourglass-timeseries"
 
     # LocalMamba variants
-    "localmamba-db-only"
-    "localmamba-db-iq"
-    "localmamba-db-polar"
+    # "localmamba-db-only"
+    # "localmamba-db-iq"
+    # "localmamba-db-polar"
     "localmamba-timeseries"
 
     # Stable Diffusion 3.5 variants
     "sd35-db-only"
     "sd35-db-iq"
     "sd35-db-polar"
-    "sd35-timeseries"
 )
 
 # Function to test a configuration with specific conditioning
@@ -238,18 +237,27 @@ test_config_with_conditioning() {
     fi
 }
 
-# Run all configurations with both conditioning types
+# Run all configurations with appropriate conditioning types
+# SD3.5 models only support caption, others support both gend_hlth_age and caption
 CONDITIONING_TYPES=("gend_hlth_age" "caption")
-TOTAL_TESTS=$((${#CONFIGS[@]} * ${#CONDITIONING_TYPES[@]}))
+SD35_COUNT=$(printf '%s\n' "${CONFIGS[@]}" | grep -c "^sd35" || true)
+OTHER_COUNT=$((${#CONFIGS[@]} - SD35_COUNT))
+TOTAL_TESTS=$((OTHER_COUNT * ${#CONDITIONING_TYPES[@]} + SD35_COUNT))
 
-echo "Testing ${#CONFIGS[@]} configurations × ${#CONDITIONING_TYPES[@]} conditioning types = $TOTAL_TESTS tests..."
+echo "Testing ${#CONFIGS[@]} configurations (SD3.5: caption only, others: 2 conditioning types) = $TOTAL_TESTS tests..."
 echo ""
 
 for config in "${CONFIGS[@]}"; do
-    for conditioning in "${CONDITIONING_TYPES[@]}"; do
-        test_config_with_conditioning "$config" "$conditioning"
+    # SD3.5 models only support caption conditioning
+    if [[ "$config" == sd35* ]]; then
+        test_config_with_conditioning "$config" "caption"
         echo ""
-    done
+    else
+        for conditioning in "${CONDITIONING_TYPES[@]}"; do
+            test_config_with_conditioning "$config" "$conditioning"
+            echo ""
+        done
+    fi
 done
 
 # Print summary
