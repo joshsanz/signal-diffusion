@@ -298,7 +298,8 @@ class TrainingConfig:
     compile_model: bool = True
     compile_mode: str = "default"
     swa_enabled: bool = False
-    swa_start_ratio: float = 0.75
+    # When enabled, append extra SWA epochs after base training completes.
+    swa_extra_ratio: float = 0.333
     swa_lr_frac: float = 0.25
 
 
@@ -440,7 +441,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         compile_model=bool(training_section.get("compile_model", True)),
         compile_mode=str(training_section.get("compile_mode", "default")).lower(),
         swa_enabled=bool(training_section.get("swa_enabled", False)),
-        swa_start_ratio=float(training_section.get("swa_start_ratio", 0.75)),
+        swa_extra_ratio=float(training_section.get("swa_extra_ratio", 0.333)),
         swa_lr_frac=float(training_section.get("swa_lr_frac", 0.25)),
     )
 
@@ -596,7 +597,13 @@ def train_from_config(
     optimizer = _build_optimizer(model, config.optimizer)
 
     # Create learning rate scheduler (always configured, defaults to constant with 0 warmup)
-    num_training_steps = training_cfg.epochs * len(train_loader)
+    if training_cfg.swa_enabled:
+        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+        total_epochs = training_cfg.epochs + swa_epoch_count
+        num_training_steps = training_cfg.epochs * len(train_loader)
+    else:
+        total_epochs = training_cfg.epochs
+        num_training_steps = training_cfg.epochs * len(train_loader)
     if training_cfg.max_steps > 0:
         num_training_steps = min(num_training_steps, training_cfg.max_steps)
     lr_scheduler = create_scheduler(
@@ -611,32 +618,41 @@ def train_from_config(
     swa_model = None
     swa_scheduler = None
     swa_start_epoch = None
+    swa_epoch_count = 0
 
     if training_cfg.swa_enabled:
-        if training_cfg.swa_start_ratio <= 0.0 or training_cfg.swa_start_ratio >= 1.0:
-            raise ValueError(f"swa_start_ratio must be in (0, 1), got {training_cfg.swa_start_ratio}")
+        if training_cfg.swa_extra_ratio <= 0.0:
+            raise ValueError(f"swa_extra_ratio must be > 0, got {training_cfg.swa_extra_ratio}")
 
         from torch.optim.swa_utils import AveragedModel, SWALR
 
-        # Calculate SWA start epoch (last 25% of training by default)
-        swa_start_epoch = max(1, int(training_cfg.epochs * training_cfg.swa_start_ratio) + 1)
+        # Append SWA epochs after base training completes.
+        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+        swa_start_epoch = training_cfg.epochs + 1
 
         # Create averaged model wrapper
         swa_model = AveragedModel(model)
 
         # Create SWA learning rate scheduler
         swa_lr = config.optimizer.learning_rate * training_cfg.swa_lr_frac
-        anneal_epochs = max(1, int((training_cfg.epochs - swa_start_epoch) * 0.2))  # 20% of SWA period
+        # We step per batch, so anneal_epochs represents step count for ~90% of one epoch.
+        anneal_epochs = max(1, int(0.9 * len(train_loader)))
         swa_scheduler = SWALR(
             optimizer,
             swa_lr=swa_lr,
             anneal_epochs=anneal_epochs,
-            anneal_strategy='cos',  # Cosine annealing to swa_lr
+            anneal_strategy='linear',
         )
 
         LOGGER.info(
-            f"SWA enabled: will start at epoch {swa_start_epoch}/{training_cfg.epochs} "
-            f"with LR {swa_lr:.6f} ({training_cfg.swa_lr_frac}x base LR)"
+            "SWA enabled: %s base epochs + %s SWA epochs = %s total. "
+            "SWA LR = %.6f (%sx base LR) with linear anneal over %s steps.",
+            training_cfg.epochs,
+            swa_epoch_count,
+            total_epochs,
+            swa_lr,
+            training_cfg.swa_lr_frac,
+            anneal_epochs,
         )
 
     scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
@@ -715,25 +731,25 @@ def train_from_config(
     global_step = 0
 
     progress_bar = tqdm(
-        total=training_cfg.epochs,
+        total=total_epochs,
         desc="Training",
         dynamic_ncols=True,
     )
 
     try:
-        for epoch in range(1, training_cfg.epochs + 1):
+        for epoch in range(1, total_epochs + 1):
             if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
                 break
 
             # Check if we're entering SWA phase
             if training_cfg.swa_enabled and swa_start_epoch is not None and epoch == swa_start_epoch:
-                LOGGER.info(f"Entering SWA phase at epoch {epoch}/{training_cfg.epochs}")
+                LOGGER.info("Entering SWA phase at epoch %s/%s", epoch, total_epochs)
                 in_swa_phase = True
                 # Disable early stopping during SWA
                 if early_stopping_enabled:
                     LOGGER.info("Early stopping disabled during SWA phase")
 
-            progress_bar.set_description(f"Epoch {epoch}/{training_cfg.epochs}")
+            progress_bar.set_description(f"Epoch {epoch}/{total_epochs}")
 
             # Train one epoch. If using Optuna HPO, the trial may be pruned during validation
             # (when _run_epoch calls _report_and_check_pruning). Ensure proper cleanup by
@@ -751,7 +767,7 @@ def train_from_config(
                     device=device,
                     optimizer=optimizer,
                     lr_scheduler=active_lr_scheduler,
-                    scheduler_step_per_batch=not in_swa_phase,  # Disable per-batch stepping during SWA
+                    scheduler_step_per_batch=True,
                     scaler=scaler,
                     clip_grad=training_cfg.clip_grad_norm,
                     log_every=training_cfg.log_every_batches,
@@ -1002,10 +1018,6 @@ def train_from_config(
 
             # Update SWA model and scheduler (if in SWA phase)
             if in_swa_phase:
-                # Step SWA scheduler per epoch (not per batch like regular schedulers)
-                if swa_scheduler is not None:
-                    swa_scheduler.step()
-
                 # Update SWA averaged model weights
                 if swa_model is not None:
                     swa_model.update_parameters(model)
@@ -1315,8 +1327,7 @@ def _run_epoch(
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
                 optimizer.step()
 
-            # Update learning rate according to scheduler
-            # Note: SWA scheduler steps per epoch, not per batch
+            # Update learning rate according to scheduler (per-batch for both base and SWA).
             if lr_scheduler is not None and scheduler_step_per_batch:
                 lr_scheduler.step()
 
