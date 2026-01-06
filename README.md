@@ -179,6 +179,20 @@ uv run python -m signal_diffusion.training.classification config/classification/
 
 `scripts/run_classification_training.sh` demonstrates launching multiple datasets with a single template config.
 
+### SWA (Stochastic Weight Averaging)
+
+When `swa_enabled = true`, training appends extra SWA epochs after the base schedule completes:
+
+- SWA epochs = base epochs × `swa_extra_ratio` (default 0.333, ~25% of total)
+- The main LR scheduler (linear/cosine) completes during the base epochs only
+- SWA phase uses `SWALR` with:
+  - Linear anneal to `swa_lr = base_lr * swa_lr_frac` (default 0.25)
+  - Anneal over 90% of one epoch's steps, then hold constant
+  - Per-batch stepping (same cadence as the base scheduler)
+- SWA weights are averaged and saved to `checkpoints/swa.pt`
+
+Example: `epochs = 30` with defaults yields 30 base epochs + 10 SWA epochs = 40 total.
+
 ## Metrics & Evaluation
 
 Install the metrics extras to access evaluation tooling:
