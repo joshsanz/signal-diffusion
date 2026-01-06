@@ -32,8 +32,9 @@ import typer
 from signal_diffusion.training.classification import (
     load_experiment_config,
     train_from_config,
-    ClassificationExperimentConfig,
+    TrainingSummary,
 )
+from signal_diffusion.classification.tasks import build_task_specs
 from signal_diffusion.log_setup import get_logger
 
 LOGGER = get_logger(__name__)
@@ -237,10 +238,15 @@ def merge_hpo_params_to_config(
                 "early_stopping_patience", 5
             )
 
+    if "swa_enabled" in user_overrides:
+        config["training"]["swa_enabled"] = user_overrides["swa_enabled"]
+    if "swa_extra_ratio" in user_overrides and user_overrides["swa_extra_ratio"] is not None:
+        config["training"]["swa_extra_ratio"] = user_overrides["swa_extra_ratio"]
+
     return config
 
 
-def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[Path], Optional[str]]:
+def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[TrainingSummary], Optional[str]]:
     """
     Execute a single training job.
 
@@ -287,12 +293,74 @@ def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[Pa
 
         LOGGER.info(f"Training complete: {summary.best_checkpoint}")
 
-        return True, summary.best_checkpoint, None
+        return True, summary, None
 
     except Exception as e:
         error_msg = f"Training failed: {e}"
         LOGGER.error(error_msg, exc_info=True)
         return False, None, error_msg
+
+
+def execute_training_job_with_swa_comparison(
+    job: TrainingJob,
+    cwd: Path,
+) -> Tuple[
+    Tuple[bool, Optional[TrainingSummary], Optional[str]],
+    Tuple[bool, Optional[TrainingSummary], Optional[str]],
+]:
+    """Train without SWA, then with SWA, for side-by-side comparison."""
+    base_job = copy.deepcopy(job)
+    base_job.output_dir = job.output_dir / "no_swa"
+    base_job.user_overrides = {**job.user_overrides, "swa_enabled": False}
+    base_result = execute_training_job(base_job, cwd)
+
+    swa_job = copy.deepcopy(job)
+    swa_job.output_dir = job.output_dir / "with_swa"
+    swa_job.user_overrides = {**job.user_overrides, "swa_enabled": True}
+    swa_result = execute_training_job(swa_job, cwd)
+
+    return base_result, swa_result
+
+
+def _load_classification_targets(run_dir: Path) -> list[str]:
+    config_path = run_dir / "config_resolved.json"
+    if not config_path.exists():
+        return []
+    with config_path.open("r") as handle:
+        config = json.load(handle)
+    dataset = config.get("dataset", {})
+    dataset_name = dataset.get("name")
+    task_names = dataset.get("tasks", [])
+    if not dataset_name or not task_names:
+        return []
+    task_specs = build_task_specs(dataset_name, task_names)
+    return [spec.name for spec in task_specs if spec.task_type == "classification"]
+
+
+def _load_best_val_accuracies(run_dir: Path) -> dict[str, float]:
+    history_path = run_dir / "history.json"
+    if not history_path.exists():
+        return {}
+    with history_path.open("r") as handle:
+        history = json.load(handle)
+
+    classification_targets = set(_load_classification_targets(run_dir))
+    if not classification_targets:
+        LOGGER.warning(
+            "Could not resolve classification targets for %s; using all tasks in val_accuracy.",
+            run_dir,
+        )
+    best: dict[str, float] = {}
+    for epoch_metrics in history:
+        val_accuracy = epoch_metrics.get("val_accuracy", {})
+        for task_name, accuracy in val_accuracy.items():
+            if classification_targets and task_name not in classification_targets:
+                continue
+            if accuracy is None:
+                continue
+            value = float(accuracy)
+            best[task_name] = max(best.get(task_name, float("-inf")), value)
+    return best
 
 
 def create_training_jobs(
@@ -330,25 +398,66 @@ def create_training_jobs(
     return jobs
 
 
-def print_summary(results: List[dict]) -> None:
+def print_summary(results: List[dict], compare_swa: bool = False) -> None:
     """Print summary table of training results."""
     print("\n" + "="*80)
     print("TRAINING SUMMARY")
     print("="*80)
-    print(f"{'Config':<35} {'Spec Type':<15} {'Task Type':<10} {'Status':<10}")
-    print("-"*80)
 
-    for result in results:
-        config_name = f"{result['spec_type']}_{result['task_type']}_optimized"
-        status = "✓ SUCCESS" if result["success"] else "✗ FAILED"
-        print(
-            f"{config_name:<35} "
-            f"{result['spec_type']:<15} "
-            f"{result['task_type']:<10} "
-            f"{status:<10}"
-        )
+    if compare_swa:
+        print(f"{'Config':<35} {'Base Status':<12} {'SWA Status':<12}")
+        print("-"*80)
+        for result in results:
+            config_name = f"{result['spec_type']}_{result['task_type']}_optimized"
+            base_status = "✓ SUCCESS" if result["base"]["success"] else "✗ FAILED"
+            swa_status = "✓ SUCCESS" if result["swa"]["success"] else "✗ FAILED"
+            print(f"{config_name:<35} {base_status:<12} {swa_status:<12}")
+    else:
+        print(f"{'Config':<35} {'Spec Type':<15} {'Task Type':<10} {'Status':<10}")
+        print("-"*80)
+        for result in results:
+            config_name = f"{result['spec_type']}_{result['task_type']}_optimized"
+            status = "✓ SUCCESS" if result["success"] else "✗ FAILED"
+            print(
+                f"{config_name:<35} "
+                f"{result['spec_type']:<15} "
+                f"{result['task_type']:<10} "
+                f"{status:<10}"
+            )
 
     print("="*80)
+
+
+def print_swa_comparison_summary(comparisons: List[dict]) -> None:
+    """Print per-target accuracy comparison for SWA vs non-SWA runs."""
+    print("\n" + "="*90)
+    print("SWA VS NON-SWA ACCURACY COMPARISON")
+    print("="*90)
+    print(f"{'Config':<30} {'Target':<20} {'Base Acc':<12} {'SWA Acc':<12} {'Delta':<10}")
+    print("-"*90)
+
+    for comp in comparisons:
+        config_name = f"{comp['spec_type']}_{comp['task_type']}"
+        base_metrics = comp.get("base_metrics", {})
+        swa_metrics = comp.get("swa_metrics", {})
+        targets = sorted(set(base_metrics) | set(swa_metrics))
+        if not targets:
+            print(f"{config_name:<30} {'n/a':<20} {'FAILED':<12} {'FAILED':<12} {'N/A':<10}")
+            continue
+        for target in targets:
+            base_value = base_metrics.get(target)
+            swa_value = swa_metrics.get(target)
+            base_display = f"{base_value:.4f}" if base_value is not None else "FAILED"
+            swa_display = f"{swa_value:.4f}" if swa_value is not None else "FAILED"
+            if base_value is not None and swa_value is not None:
+                delta_display = f"{(swa_value - base_value):+.4f}"
+            else:
+                delta_display = "N/A"
+            print(
+                f"{config_name:<30} {target:<20} {base_display:<12} {swa_display:<12} {delta_display:<10}"
+            )
+
+    print("="*90)
 
 
 app = typer.Typer(help="Train classifiers using HPO-optimized hyperparameters")
@@ -375,6 +484,16 @@ def main(
     epochs: Optional[int] = typer.Option(None, "--epochs", help="Override epochs"),
     early_stopping: bool = typer.Option(False, "--early-stopping", help="Enable early stopping"),
     early_stopping_patience: int = typer.Option(5, "--early-stopping-patience", help="Early stopping patience"),
+    compare_swa: bool = typer.Option(
+        True,
+        "--compare-swa/--no-compare-swa",
+        help="Train both with and without SWA for comparison",
+    ),
+    swa_extra_ratio: float = typer.Option(
+        0.333,
+        "--swa-extra-ratio",
+        help="Ratio of SWA epochs to base epochs when SWA is enabled",
+    ),
 ) -> None:
     """
     Train classifier models using optimized hyperparameters from HPO results.
@@ -390,6 +509,10 @@ def main(
         # Train with custom epochs and early stopping
         uv run python scripts/train_with_best_hpo.py runs/optimized \\
             --epochs 30 --early-stopping --early-stopping-patience 7
+
+        # Disable SWA comparison runs
+        uv run python scripts/train_with_best_hpo.py runs/optimized \\
+            --no-compare-swa
 
         # Train all db-polar combinations
         uv run python scripts/train_with_best_hpo.py runs/optimized \\
@@ -443,6 +566,7 @@ def main(
         "early_stopping": early_stopping,
         "early_stopping_patience": early_stopping_patience,
         "epochs": epochs,
+        "swa_extra_ratio": swa_extra_ratio,
     }
 
     # Create and execute training jobs
@@ -455,30 +579,82 @@ def main(
     LOGGER.info(f"Created {len(jobs)} training job(s)")
 
     results = []
+    comparisons = []
     for i, job in enumerate(jobs, 1):
         LOGGER.info(f"\n[{i}/{len(jobs)}] Starting training job: {job.spec_type} × {job.task_type}")
-        success, checkpoint_path, error_msg = execute_training_job(job, cwd)
-        results.append({
-            "spec_type": job.spec_type,
-            "task_type": job.task_type,
-            "success": success,
-            "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
-            "error": error_msg,
-        })
+        if compare_swa:
+            base_result, swa_result = execute_training_job_with_swa_comparison(job, cwd)
+            base_success, base_summary, base_error = base_result
+            swa_success, swa_summary, swa_error = swa_result
+            base_run_dir = base_summary.run_dir if base_summary is not None else None
+            swa_run_dir = swa_summary.run_dir if swa_summary is not None else None
+            base_metrics = _load_best_val_accuracies(base_run_dir) if base_run_dir else {}
+            swa_metrics = _load_best_val_accuracies(swa_run_dir) if swa_run_dir else {}
+            improvements = {
+                key: swa_metrics.get(key, 0.0) - base_metrics.get(key, 0.0)
+                for key in set(base_metrics) | set(swa_metrics)
+                if key in base_metrics and key in swa_metrics
+            }
+            results.append({
+                "spec_type": job.spec_type,
+                "task_type": job.task_type,
+                "base": {
+                    "success": base_success,
+                    "run_dir": str(base_run_dir) if base_run_dir else None,
+                    "best_checkpoint": str(base_summary.best_checkpoint) if base_summary else None,
+                    "error": base_error,
+                },
+                "swa": {
+                    "success": swa_success,
+                    "run_dir": str(swa_run_dir) if swa_run_dir else None,
+                    "best_checkpoint": str(swa_summary.best_checkpoint) if swa_summary else None,
+                    "error": swa_error,
+                },
+                "base_metrics": base_metrics,
+                "swa_metrics": swa_metrics,
+                "improvements": improvements,
+            })
+            comparisons.append({
+                "spec_type": job.spec_type,
+                "task_type": job.task_type,
+                "base_metrics": base_metrics,
+                "swa_metrics": swa_metrics,
+                "improvements": improvements,
+            })
+        else:
+            success, summary, error_msg = execute_training_job(job, cwd)
+            results.append({
+                "spec_type": job.spec_type,
+                "task_type": job.task_type,
+                "success": success,
+                "run_dir": str(summary.run_dir) if summary else None,
+                "checkpoint_path": str(summary.best_checkpoint) if summary else None,
+                "error": error_msg,
+            })
 
     # Generate summary
-    print_summary(results)
+    print_summary(results, compare_swa=compare_swa)
+    if compare_swa:
+        print_swa_comparison_summary(comparisons)
 
     # Save summary JSON
     summary_path = output_dir / "training_summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     with summary_path.open("w") as f:
-        json.dump(results, f, indent=2)
+        payload = {"results": results, "comparisons": comparisons} if compare_swa else {"results": results}
+        json.dump(payload, f, indent=2)
 
     LOGGER.info(f"\nTraining summary saved to: {summary_path}")
 
     # Exit with error code if any jobs failed
-    failures = sum(1 for r in results if not r["success"])
+    if compare_swa:
+        failures = sum(
+            1
+            for r in results
+            if not r["base"]["success"] or not r["swa"]["success"]
+        )
+    else:
+        failures = sum(1 for r in results if not r["success"])
     if failures > 0:
         LOGGER.error(f"\n{failures} training job(s) failed")
         raise typer.Exit(1)
