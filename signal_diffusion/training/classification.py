@@ -665,9 +665,14 @@ def train_from_config(
             criteria[name] = nn.HuberLoss(delta=2.0)
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
 
+    def _get_eval_model() -> nn.Module:
+        if in_swa_phase and swa_model is not None:
+            return swa_model
+        return model
+
     def run_validation() -> dict[str, Any]:
         result, _ = _run_epoch(
-            model,
+            _get_eval_model(),
             data_loader=val_loader,
             criteria=criteria,
             task_weights=task_weights,
@@ -817,6 +822,7 @@ def train_from_config(
                 # Manage best checkpoints: keep top-k checkpoints based on validation metric
                 # This allows recovery of any high-performing checkpoint, not just the single best
                 state_dict: dict[str, torch.Tensor] | None = None
+                eval_model = _get_eval_model()
                 if max_best_checkpoints > 0:
                     # Create checkpoint record for this validation result
                     record = CheckpointRecord(
@@ -847,7 +853,7 @@ def train_from_config(
                     # Save checkpoint if it made the top-k list
                     if record in best_records:
                         if not record.path.exists():
-                            state_dict = model.state_dict()
+                            state_dict = eval_model.state_dict()
                             torch.save(state_dict, record.path)
                     else:
                         record = None
@@ -865,7 +871,7 @@ def train_from_config(
                     best_epoch = epoch
                     best_metric_step = step_for_log
                     if state_dict is None:
-                        state_dict = model.state_dict()
+                        state_dict = eval_model.state_dict()
                     torch.save(state_dict, best_checkpoint)
 
                 # Check early stopping: update patience counter based on metric improvement
