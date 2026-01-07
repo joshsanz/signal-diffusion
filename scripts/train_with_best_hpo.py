@@ -224,8 +224,17 @@ def merge_hpo_params_to_config(
     if "batch_size" in hpo_params:
         config["dataset"]["batch_size"] = hpo_params["batch_size"]
 
-    # Set tasks based on task_type
-    config["dataset"]["tasks"] = TASK_TYPE_TO_TASKS[task_type]
+    # Set tasks: use all available tasks for the dataset
+    from signal_diffusion.classification.tasks import available_tasks
+    dataset_name = config["dataset"].get("name")
+    if dataset_name:
+        all_tasks = available_tasks(dataset_name)
+        config["dataset"]["tasks"] = list(all_tasks)
+        LOGGER.info(f"Configured all available tasks for dataset: {all_tasks}")
+    else:
+        # Fallback to TASK_TYPE_TO_TASKS if dataset name not found
+        config["dataset"]["tasks"] = TASK_TYPE_TO_TASKS[task_type]
+        LOGGER.warning(f"Dataset name not found in config, using task_type mapping: {TASK_TYPE_TO_TASKS[task_type]}")
 
     # Apply user overrides
     if "epochs" in user_overrides and user_overrides["epochs"] is not None:
