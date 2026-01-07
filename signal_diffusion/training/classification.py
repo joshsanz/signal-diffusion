@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,21 @@ import typer
 from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
+from signal_diffusion.classification.config import (
+    ClassificationConfig,
+    DatasetConfig,
+    ModelConfig,
+    OptimizerConfig,
+    SchedulerConfig,
+    TrainingConfig,
+    load_classification_config,
+)
+from signal_diffusion.classification.metrics import (
+    MetricsLogger,
+    create_metrics_logger,
+    get_mlflow_tracking_uri,
+    get_mlflow_experiment_name,
+)
 from signal_diffusion.training.schedulers import create_scheduler
 
 LOGGER = get_logger(__name__)
@@ -95,142 +111,6 @@ class CheckpointManager:
         return True
 
 
-class MetricsLogger:
-    """Log training metrics to TensorBoard and/or Weights & Biases."""
-
-    def __init__(
-        self,
-        *,
-        tasks: Iterable[str],
-        training_cfg: TrainingConfig,
-        run_dir: Path,
-    ) -> None:
-        self.tasks = tuple(tasks)
-        self._tensorboard = None
-        self._wandb_run = None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_name = f"{training_cfg.run_name}-{timestamp}" if training_cfg.run_name else None
-
-        if training_cfg.tensorboard:
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError(
-                    "TensorBoard logging requested but 'torch.utils.tensorboard' is unavailable"
-                ) from exc
-            log_dir = training_cfg.log_dir or (run_dir / "tensorboard")
-            if run_name:
-                log_dir = log_dir / run_name
-            log_dir.mkdir(parents=True, exist_ok=True)
-            self._tensorboard = SummaryWriter(log_dir=str(log_dir))
-
-        if training_cfg.wandb_project:
-            try:
-                import wandb  # type: ignore
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError("Weights & Biases logging requested but 'wandb' is not installed") from exc
-            init_kwargs: dict[str, Any] = {
-                "project": training_cfg.wandb_project,
-                "dir": str(run_dir),
-            }
-            if run_name:
-                init_kwargs["name"] = run_name
-
-            if training_cfg.wandb_entity:
-                init_kwargs["entity"] = training_cfg.wandb_entity
-            if training_cfg.wandb_tags:
-                init_kwargs["tags"] = list(training_cfg.wandb_tags)
-            self._wandb_run = wandb.init(**init_kwargs)
-
-    def log(self, phase: str, step: int, metrics: Mapping[str, Any], *, epoch: int | None = None) -> None:
-        scalars: dict[str, float] = {}
-        loss = metrics.get("loss")
-        if loss is not None:
-            scalars[f"{phase}/loss"] = float(loss)
-        for name, value in metrics.get("losses", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/loss/{name}"] = float(value)
-        for name, value in metrics.get("accuracy", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/accuracy/{name}"] = float(value)
-        for name, value in metrics.get("mae", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/mae/{name}"] = float(value)
-        for name, value in metrics.get("mse", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/mse/{name}"] = float(value)
-        if epoch is not None:
-            scalars[f"{phase}/epoch"] = float(epoch)
-
-        grad_norm = metrics.get("grad_norm")
-        if grad_norm is not None:
-            scalars[f"{phase}/grad_norm"] = float(grad_norm)
-
-        if not scalars:
-            return
-
-        if self._tensorboard is not None:
-            for key, value in scalars.items():
-                self._tensorboard.add_scalar(key, value, step)
-
-        if self._wandb_run is not None:
-            self._wandb_run.log(scalars, step=step)
-
-    def close(self) -> None:
-        if self._tensorboard is not None:
-            self._tensorboard.flush()
-            self._tensorboard.close()
-        if self._wandb_run is not None:
-            try:
-                self._wandb_run.finish()
-            except AttributeError:  # pragma: no cover - older wandb versions
-                pass
-
-
-def _create_metrics_logger(
-    training_cfg: TrainingConfig,
-    tasks: Iterable[str],
-    run_dir: Path,
-) -> MetricsLogger | None:
-    if not training_cfg.tensorboard and not training_cfg.wandb_project:
-        return None
-    return MetricsLogger(tasks=tasks, training_cfg=training_cfg, run_dir=run_dir)
-
-
-@dataclass(slots=True)
-class DatasetConfig:
-    """Configuration for dataset loading."""
-
-    name: str
-    tasks: tuple[str, ...]
-    train_split: str = "train"
-    val_split: str = "val"
-    batch_size: int = 32
-    num_workers: int = 4
-    pin_memory: bool = True
-    shuffle: bool = True
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class ModelConfig:
-    """Configuration for classifier model construction."""
-
-    backbone: str
-    input_channels: int
-    embedding_dim: int = 256
-    dropout: float = 0.3
-    activation: str = "gelu"
-    depth: int = 3
-    layer_repeats: int = 2
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
 def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
     """Ensure backbone choice matches configured data type."""
     is_timeseries = data_type == "timeseries"
@@ -247,60 +127,6 @@ def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
             "Consider using 'cnn_1d' or 'cnn_1d_light' for time-domain inputs.",
             backbone,
         )
-
-
-@dataclass(slots=True)
-class OptimizerConfig:
-    """Configuration for optimizer."""
-
-    name: str = "adamw"
-    learning_rate: float = 3e-4
-    weight_decay: float = 1e-4
-    betas: tuple[float, float] = (0.9, 0.999)
-
-
-@dataclass(slots=True)
-class SchedulerConfig:
-    """Configuration for learning rate scheduler."""
-
-    name: str = "constant"
-    warmup_steps: int = 0
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class TrainingConfig:
-    """Optimisation and runtime configuration."""
-
-    epochs: int = 25
-    max_steps: int = -1
-    clip_grad_norm: float | None = 1.0
-    device: str | None = None
-    log_every_batches: int = 10
-    eval_strategy: str = "epoch"
-    eval_steps: int | None = None
-    output_dir: Path | None = None
-    log_dir: Path | None = None
-    tensorboard: bool = False
-    wandb_project: str | None = None
-    wandb_entity: str | None = None
-    wandb_tags: tuple[str, ...] = ()
-    run_name: str | None = None
-    checkpoint_total_limit: int | None = None
-    checkpoint_strategy: str = "epoch"
-    checkpoint_steps: int | None = None
-    task_weights: dict[str, float] = field(default_factory=dict)
-    use_amp: bool = False
-    metrics_summary_path: Path | None = None
-    max_best_checkpoints: int = 1
-    early_stopping: bool = False
-    early_stopping_patience: int = 5
-    compile_model: bool = True
-    compile_mode: str = "default"
-    swa_enabled: bool = False
-    # When enabled, append extra SWA epochs after base training completes.
-    swa_extra_ratio: float = 0.333
-    swa_lr_frac: float = 0.25
 
 
 @dataclass(slots=True)
@@ -688,7 +514,7 @@ def train_from_config(
         return result
 
     eval_manager = _create_evaluation_manager(training_cfg, run_validation)
-    metrics_logger = _create_metrics_logger(training_cfg, tasks, run_dir)
+    metrics_logger = create_metrics_logger(training_cfg, tasks, run_dir)
 
     # Initialize early stopping (disabled if trial is not None)
     early_stopping_enabled = training_cfg.early_stopping and trial is None
@@ -1074,6 +900,15 @@ def train_from_config(
     # If no best checkpoint was found during training, use last checkpoint
     if best_metric == float("-inf") or not best_checkpoint.exists():
         best_checkpoint = last_checkpoint
+
+    # Log checkpoints as MLflow artifacts
+    if metrics_logger is not None:
+        # Log best checkpoint
+        if best_checkpoint.exists():
+            metrics_logger.log_artifact(best_checkpoint, artifact_path="checkpoints")
+        # Log SWA checkpoint if available
+        if swa_checkpoint_path is not None and Path(swa_checkpoint_path).exists():
+            metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
 
     # Close logging backends
     if metrics_logger is not None:

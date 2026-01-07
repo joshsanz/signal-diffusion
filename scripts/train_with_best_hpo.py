@@ -246,6 +246,171 @@ def merge_hpo_params_to_config(
     return config
 
 
+def evaluate_checkpoint(
+    checkpoint_path: Path,
+    run_dir: Path,
+    cwd: Path,
+) -> dict[str, dict[str, float]]:
+    """
+    Load a checkpoint and evaluate it on validation and test sets.
+
+    Args:
+        checkpoint_path: Path to the .pt checkpoint file
+        run_dir: Directory containing config_resolved.json
+        cwd: Current working directory
+
+    Returns:
+        Dictionary with structure:
+        {
+            "val": {"task_name": accuracy, ...},
+            "test": {"task_name": accuracy, ...}
+        }
+    """
+    # Load config from run directory
+    config_path = run_dir / "config_resolved.json"
+    if not config_path.exists():
+        LOGGER.warning(f"Config not found at {config_path}, skipping evaluation")
+        return {"val": {}, "test": {}}
+
+    with config_path.open("r") as f:
+        config_data = json.load(f)
+
+    # Load settings
+    from signal_diffusion.config import load_settings
+    from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig
+
+    settings_path = config_data.get("settings_path")
+    if not settings_path:
+        LOGGER.warning("settings_path not found in config, skipping evaluation")
+        return {"val": {}, "test": {}}
+
+    settings = load_settings(settings_path)
+
+    # Apply data overrides if present
+    if "output_type" in config_data.get("dataset", {}).get("extras", {}):
+        settings.output_type = config_data["dataset"]["extras"]["output_type"]
+
+    # Extract configuration
+    dataset_cfg = config_data["dataset"]
+    model_cfg = config_data["model"]
+
+    dataset_name = dataset_cfg["name"]
+    tasks = dataset_cfg["tasks"]
+    task_specs = build_task_specs(dataset_name, tasks)
+
+    # Build classifier
+    classifier_config = ClassifierConfig(
+        backbone=model_cfg["backbone"],
+        input_channels=model_cfg["input_channels"],
+        tasks=task_specs,
+        embedding_dim=model_cfg.get("embedding_dim", 256),
+        dropout=model_cfg.get("dropout", 0.3),
+        activation=model_cfg.get("activation", "gelu"),
+        depth=model_cfg.get("depth", 3),
+        layer_repeats=model_cfg.get("layer_repeats", 2),
+        extras=model_cfg.get("extras", {}),
+    )
+
+    import torch
+    from torch.utils.data import DataLoader
+
+    # Determine device
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    # Build model and load checkpoint
+    model = build_classifier(classifier_config)
+
+    # Load checkpoint state
+    try:
+        state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval()
+    except Exception as e:
+        LOGGER.error(f"Failed to load checkpoint {checkpoint_path}: {e}")
+        return {"val": {}, "test": {}}
+
+    # Build datasets
+    batch_size = dataset_cfg.get("batch_size", 32)
+    num_workers = dataset_cfg.get("num_workers", 4)
+
+    results = {}
+
+    for split in ["val", "test"]:
+        try:
+            # Build dataset for this split
+            dataset = build_dataset(
+                settings,
+                dataset_name=dataset_name,
+                split=split,
+                tasks=tasks,
+                target_format="dict",
+            )
+
+            # Create dataloader
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+            )
+
+            # Run evaluation
+            task_lookup = {spec.name: spec for spec in task_specs}
+
+            # Import _run_epoch from classification module
+            from signal_diffusion.training.classification import _run_epoch
+            from torch import nn
+
+            # Create criteria for each task
+            criteria = {}
+            for name in tasks:
+                spec = task_lookup[name]
+                if spec.task_type == "classification":
+                    criteria[name] = nn.CrossEntropyLoss()
+                else:
+                    criteria[name] = nn.HuberLoss(delta=2.0)
+
+            # Create task weights (uniform)
+            task_weights = {name: 1.0 for name in tasks}
+
+            # Run evaluation epoch
+            metrics, _ = _run_epoch(
+                model,
+                data_loader=loader,
+                criteria=criteria,
+                task_weights=task_weights,
+                task_specs=task_lookup,
+                device=device,
+                optimizer=None,
+                scaler=None,
+                clip_grad=None,
+                log_every=0,
+                train=False,
+            )
+
+            # Extract accuracy metrics (which includes MAE for regression tasks)
+            split_results = {}
+            for task_name in tasks:
+                accuracy = metrics["accuracy"].get(task_name)
+                if accuracy is not None:
+                    split_results[task_name] = float(accuracy)
+
+            results[split] = split_results
+
+        except Exception as e:
+            LOGGER.warning(f"Failed to evaluate on {split} split: {e}")
+            results[split] = {}
+
+    return results
+
+
 def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[TrainingSummary], Optional[str]]:
     """
     Execute a single training job.
@@ -322,45 +487,6 @@ def execute_training_job_with_swa_comparison(
     return base_result, swa_result
 
 
-def _load_classification_targets(run_dir: Path) -> list[str]:
-    config_path = run_dir / "config_resolved.json"
-    if not config_path.exists():
-        return []
-    with config_path.open("r") as handle:
-        config = json.load(handle)
-    dataset = config.get("dataset", {})
-    dataset_name = dataset.get("name")
-    task_names = dataset.get("tasks", [])
-    if not dataset_name or not task_names:
-        return []
-    task_specs = build_task_specs(dataset_name, task_names)
-    return [spec.name for spec in task_specs if spec.task_type == "classification"]
-
-
-def _load_best_val_accuracies(run_dir: Path) -> dict[str, float]:
-    history_path = run_dir / "history.json"
-    if not history_path.exists():
-        return {}
-    with history_path.open("r") as handle:
-        history = json.load(handle)
-
-    classification_targets = set(_load_classification_targets(run_dir))
-    if not classification_targets:
-        LOGGER.warning(
-            "Could not resolve classification targets for %s; using all tasks in val_accuracy.",
-            run_dir,
-        )
-    best: dict[str, float] = {}
-    for epoch_metrics in history:
-        val_accuracy = epoch_metrics.get("val_accuracy", {})
-        for task_name, accuracy in val_accuracy.items():
-            if classification_targets and task_name not in classification_targets:
-                continue
-            if accuracy is None:
-                continue
-            value = float(accuracy)
-            best[task_name] = max(best.get(task_name, float("-inf")), value)
-    return best
 
 
 def create_training_jobs(
@@ -429,35 +555,56 @@ def print_summary(results: List[dict], compare_swa: bool = False) -> None:
 
 
 def print_swa_comparison_summary(comparisons: List[dict]) -> None:
-    """Print per-target accuracy comparison for SWA vs non-SWA runs."""
-    print("\n" + "="*90)
+    """Print per-target accuracy comparison for SWA vs non-SWA runs on val and test sets."""
+    print("\n" + "="*105)
     print("SWA VS NON-SWA ACCURACY COMPARISON")
-    print("="*90)
-    print(f"{'Config':<30} {'Target':<20} {'Base Acc':<12} {'SWA Acc':<12} {'Delta':<10}")
-    print("-"*90)
+    print("="*105)
+    print(f"{'Config':<25} {'Split':<6} {'Task':<15} {'Base Acc':<12} {'SWA Acc':<12} {'Delta':<12} {'% Change':<10}")
+    print("-"*105)
 
     for comp in comparisons:
         config_name = f"{comp['spec_type']}_{comp['task_type']}"
-        base_metrics = comp.get("base_metrics", {})
-        swa_metrics = comp.get("swa_metrics", {})
-        targets = sorted(set(base_metrics) | set(swa_metrics))
-        if not targets:
-            print(f"{config_name:<30} {'n/a':<20} {'FAILED':<12} {'FAILED':<12} {'N/A':<10}")
-            continue
-        for target in targets:
-            base_value = base_metrics.get(target)
-            swa_value = swa_metrics.get(target)
-            base_display = f"{base_value:.4f}" if base_value is not None else "FAILED"
-            swa_display = f"{swa_value:.4f}" if swa_value is not None else "FAILED"
-            if base_value is not None and swa_value is not None:
-                delta_display = f"{(swa_value - base_value):+.4f}"
-            else:
-                delta_display = "N/A"
-            print(
-                f"{config_name:<30} {target:<20} {base_display:<12} {swa_display:<12} {delta_display:<10}"
-            )
+        base_eval = comp.get("base_eval", {})
+        swa_eval = comp.get("swa_eval", {})
 
-    print("="*90)
+        # Process both val and test splits
+        for split in ["val", "test"]:
+            base_split_metrics = base_eval.get(split, {})
+            swa_split_metrics = swa_eval.get(split, {})
+
+            # Get all tasks from both base and SWA
+            all_tasks = sorted(set(base_split_metrics.keys()) | set(swa_split_metrics.keys()))
+
+            if not all_tasks:
+                print(f"{config_name:<25} {split:<6} {'n/a':<15} {'FAILED':<12} {'FAILED':<12} {'N/A':<12} {'N/A':<10}")
+                continue
+
+            for task_name in all_tasks:
+                base_value = base_split_metrics.get(task_name)
+                swa_value = swa_split_metrics.get(task_name)
+
+                base_display = f"{base_value:.4f}" if base_value is not None else "FAILED"
+                swa_display = f"{swa_value:.4f}" if swa_value is not None else "FAILED"
+
+                if base_value is not None and swa_value is not None:
+                    delta = swa_value - base_value
+                    delta_display = f"{delta:+.4f}"
+                    # Compute percentage change
+                    if base_value != 0:
+                        pct_change = (delta / base_value) * 100
+                        pct_display = f"{pct_change:+.2f}%"
+                    else:
+                        pct_display = "N/A"
+                else:
+                    delta_display = "N/A"
+                    pct_display = "N/A"
+
+                print(
+                    f"{config_name:<25} {split:<6} {task_name:<15} {base_display:<12} "
+                    f"{swa_display:<12} {delta_display:<12} {pct_display:<10}"
+                )
+
+    print("="*105)
 
 
 app = typer.Typer(help="Train classifiers using HPO-optimized hyperparameters")
@@ -588,13 +735,23 @@ def main(
             swa_success, swa_summary, swa_error = swa_result
             base_run_dir = base_summary.run_dir if base_summary is not None else None
             swa_run_dir = swa_summary.run_dir if swa_summary is not None else None
-            base_metrics = _load_best_val_accuracies(base_run_dir) if base_run_dir else {}
-            swa_metrics = _load_best_val_accuracies(swa_run_dir) if swa_run_dir else {}
-            improvements = {
-                key: swa_metrics.get(key, 0.0) - base_metrics.get(key, 0.0)
-                for key in set(base_metrics) | set(swa_metrics)
-                if key in base_metrics and key in swa_metrics
-            }
+
+            # Evaluate both base and SWA models on val and test sets
+            base_eval_results = {}
+            swa_eval_results = {}
+
+            if base_run_dir and base_summary and base_summary.best_checkpoint.exists():
+                LOGGER.info(f"Evaluating base model checkpoint: {base_summary.best_checkpoint}")
+                base_eval_results = evaluate_checkpoint(base_summary.best_checkpoint, base_run_dir, cwd)
+
+            if swa_run_dir and swa_summary and swa_summary.swa_checkpoint and swa_summary.swa_checkpoint.exists():
+                LOGGER.info(f"Evaluating SWA model checkpoint: {swa_summary.swa_checkpoint}")
+                swa_eval_results = evaluate_checkpoint(swa_summary.swa_checkpoint, swa_run_dir, cwd)
+            elif swa_run_dir and swa_summary and swa_summary.best_checkpoint.exists():
+                # Fallback to best checkpoint if SWA checkpoint not available
+                LOGGER.info(f"Evaluating SWA model checkpoint (best): {swa_summary.best_checkpoint}")
+                swa_eval_results = evaluate_checkpoint(swa_summary.best_checkpoint, swa_run_dir, cwd)
+
             results.append({
                 "spec_type": job.spec_type,
                 "task_type": job.task_type,
@@ -608,18 +765,17 @@ def main(
                     "success": swa_success,
                     "run_dir": str(swa_run_dir) if swa_run_dir else None,
                     "best_checkpoint": str(swa_summary.best_checkpoint) if swa_summary else None,
+                    "swa_checkpoint": str(swa_summary.swa_checkpoint) if swa_summary and swa_summary.swa_checkpoint else None,
                     "error": swa_error,
                 },
-                "base_metrics": base_metrics,
-                "swa_metrics": swa_metrics,
-                "improvements": improvements,
+                "base_eval": base_eval_results,
+                "swa_eval": swa_eval_results,
             })
             comparisons.append({
                 "spec_type": job.spec_type,
                 "task_type": job.task_type,
-                "base_metrics": base_metrics,
-                "swa_metrics": swa_metrics,
-                "improvements": improvements,
+                "base_eval": base_eval_results,
+                "swa_eval": swa_eval_results,
             })
         else:
             success, summary, error_msg = execute_training_job(job, cwd)

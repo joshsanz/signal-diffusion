@@ -3,7 +3,7 @@ resources:
   infra: lambda
   # 1x NVIDIA A6000 GPU
   accelerators: A6000:1
-  # autostop: 5m  # Stop after this many idle minutes.
+  autostop: 5m  # Stop after this many idle minutes.
 
 file_mounts:
   /data:
@@ -38,7 +38,5 @@ run: |
   export DATASET=db_iq
   export RUN_ID=$(date +%Y%m%d_%H%M%S)
   source .venv/bin/activate
-  python train.py \
-    --output_dir /data/runs/$MODEL-$DATASET-$RUN_ID \
-    --config config/diffusion/$MODEL-$DATASET.yaml
+  ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
   echo "Run completed."
