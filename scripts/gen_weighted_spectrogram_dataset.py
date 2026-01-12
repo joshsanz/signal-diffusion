@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import bisect
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sized, cast
 
 import pandas as pd
 import torch
@@ -144,8 +144,10 @@ def load_weighted_samples(
     weight_stats: dict[float, WeightStats] = {}
 
     for ds in dataset.datasets:
-        name = ds.dataset_settings.name if hasattr(ds, "dataset_settings") else getattr(ds, "name", "unknown")
-        dataset_stats[name] = DatasetStats(name=name, original_samples=len(ds))
+        dataset_settings = getattr(ds, "dataset_settings", None)
+        name = getattr(dataset_settings, "name", getattr(ds, "name", "unknown"))
+        original_samples = len(cast(Sized, ds)) if hasattr(ds, "__len__") else 0
+        dataset_stats[str(name)] = DatasetStats(name=str(name), original_samples=original_samples)
 
     # Get unique weight values to process each weight bucket separately
     unique_weights = torch.unique(scaled_weights)
@@ -177,17 +179,21 @@ def load_weighted_samples(
             source_dataset = dataset.datasets[dataset_idx]
 
             # Get dataset name
-            dataset_name = (
-                source_dataset.dataset_settings.name
-                if hasattr(source_dataset, "dataset_settings")
-                else f"dataset_{dataset_idx}"
-            )
+            dataset_settings = getattr(source_dataset, "dataset_settings", None)
+            dataset_name = getattr(dataset_settings, "name", f"dataset_{dataset_idx}")
             # Get metadata for this sample
+            if not hasattr(source_dataset, "metadata"):
+                logger.warning("Skipping dataset without metadata for index %s", dataset_idx)
+                continue
             metadata_row = source_dataset.metadata.iloc[sample_offset]
             metadata_dict = metadata_row.to_dict()
 
             relative_source = Path(str(metadata_dict["file_name"]))
-            source_root = Path(source_dataset.root)
+            source_root_value = getattr(source_dataset, "root", None)
+            if source_root_value is None:
+                logger.warning("Skipping dataset without root for index %s", dataset_idx)
+                continue
+            source_root = Path(str(source_root_value))
             source_path = source_root / relative_source
 
             # Create the specified number of copies for this sample

@@ -10,7 +10,7 @@ import json
 import argparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 import coloredlogs
@@ -25,11 +25,11 @@ class TrialMetrics:
 
     trial_num: int
     objective: float
-    gender_acc: float = None
-    health_acc: float = None
-    age_mse: float = None
-    age_mae: float = None
-    hyperparams: Dict[str, Any] = None
+    gender_acc: Optional[float] = None
+    health_acc: Optional[float] = None
+    age_mse: Optional[float] = None
+    age_mae: Optional[float] = None
+    hyperparams: Optional[Dict[str, Any]] = None
 
     def __repr__(self) -> str:
         parts = [f"trial_{self.trial_num}: obj={self.objective:.4f}"]
@@ -79,7 +79,7 @@ def load_hpo_results(results_path: Path) -> Dict[str, Any]:
 def parse_trial_metrics(
     trial_num: int,
     best_user_attrs: Dict[str, Any],
-    params: Dict[str, Any] = None,
+    params: Optional[Dict[str, Any]] = None,
 ) -> TrialMetrics:
     """Extract metrics from trial user attributes.
 
