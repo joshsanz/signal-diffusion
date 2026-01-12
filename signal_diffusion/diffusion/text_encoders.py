@@ -6,6 +6,7 @@ from typing import Sequence
 import torch
 from torch import nn
 
+from signal_diffusion.config import Settings
 from signal_diffusion.log_setup import get_logger
 
 LOGGER = get_logger(__name__)
@@ -69,6 +70,8 @@ class DualCLIPTextEncoder(nn.Module):
         efficiency. The dual CLIP encoders provide sufficient caption conditioning
         for most EEG spectrogram generation tasks.
     """
+
+    output_dim: int
 
     def __init__(
         self,
@@ -215,7 +218,7 @@ def load_sd35_vae(
 
 def create_text_encoder_for_adapter(
     adapter_name: str,
-    settings: dict | None = None,
+    settings: Settings | None = None,
     device: torch.device | str | None = None,
     dtype: torch.dtype = torch.float16,
 ) -> DualCLIPTextEncoder | None:

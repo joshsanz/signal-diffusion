@@ -29,7 +29,7 @@ from signal_diffusion.classification.config import (
 from signal_diffusion.classification.metrics import (
     create_metrics_logger,
 )
-from signal_diffusion.training.schedulers import create_scheduler
+from signal_diffusion.training.schedulers import SchedulerType, create_scheduler
 
 LOGGER = get_logger(__name__)
 
@@ -326,7 +326,7 @@ def train_from_config(
         layer_repeats=config.model.layer_repeats,
         extras=config.model.extras,
     )
-    model = build_classifier(classifier_config)
+    model: nn.Module = build_classifier(classifier_config)
 
     if training_cfg.device:
         device = torch.device(training_cfg.device)
@@ -348,7 +348,7 @@ def train_from_config(
     # Compile model if requested
     if training_cfg.compile_model:
         LOGGER.info(f"Compiling model with torch.compile(mode='{training_cfg.compile_mode}')...")
-        model = torch.compile(model, mode=training_cfg.compile_mode)
+        model = cast(nn.Module, torch.compile(model, mode=training_cfg.compile_mode))
         LOGGER.info("Model compilation successful")
 
     # Initialize extras dict from dataset config for time-series metadata
@@ -426,9 +426,10 @@ def train_from_config(
         num_training_steps = training_cfg.epochs * len(train_loader)
     if training_cfg.max_steps > 0:
         num_training_steps = min(num_training_steps, training_cfg.max_steps)
+    scheduler_type = cast(SchedulerType, config.scheduler.name)
     lr_scheduler = create_scheduler(
         optimizer,
-        scheduler_type=config.scheduler.name,
+        scheduler_type=scheduler_type,
         num_warmup_steps=config.scheduler.warmup_steps,
         num_training_steps=num_training_steps,
         **config.scheduler.kwargs,
@@ -1081,7 +1082,7 @@ def _run_epoch(
     if train:
         if optimizer is None:
             raise ValueError("Optimizer must be provided when train=True")
-        assert optimizer is not None
+        optimizer = cast(torch.optim.Optimizer, optimizer)
         model.train()
     else:
         model.eval()
@@ -1134,6 +1135,7 @@ def _run_epoch(
         batch_size = inputs.shape[0]
 
         if train:
+            optimizer = cast(torch.optim.Optimizer, optimizer)
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(train):

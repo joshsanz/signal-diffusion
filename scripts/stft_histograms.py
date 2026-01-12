@@ -16,10 +16,11 @@ import inspect
 import json
 import logging
 import pkgutil
-from dataclasses import dataclass
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from types import ModuleType
+from typing import Any, Callable, Iterable, Iterator, cast
 
 import librosa
 import mne
@@ -31,11 +32,13 @@ from signal_diffusion.config import load_settings
 from signal_diffusion.data.base import BaseSpectrogramPreprocessor
 from signal_diffusion.data.utils.multichannel_spectrograms import log_rstft
 
+plt: ModuleType | None = None
 try:
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as _plt
+    plt = _plt
 except Exception:  # pragma: no cover - plotting is optional
     plt = None
 
@@ -178,7 +181,7 @@ def fraction_in_range(counts: Counter[float], low: float, high: float) -> float:
 
 
 def rebin_counts(
-    counts: Counter[int], *, bins: int, min_db: float | None, max_db: float | None
+    counts: Counter[float], *, bins: int, min_db: float | None, max_db: float | None
 ) -> Counter[float]:
     """Re-bin integer-rounded counts into fixed-width bins across [min_db, max_db]."""
     if not counts or min_db is None or max_db is None:
@@ -590,13 +593,14 @@ def build_preprocessor(
         if name in signature.parameters:
             kwargs[name] = value
     preprocessor = cls(settings, **kwargs)
+    preprocessor_any = cast(Any, preprocessor)
     logger.info(
         "Prepared %s preprocessor nsamps=%s overlap=%.2f fs=%.2f bin_spacing=%s",
         dataset,
-        preprocessor.nsamps,
-        preprocessor.overlap_fraction,
-        preprocessor.fs,
-        preprocessor.bin_spacing,
+        preprocessor_any.nsamps,
+        preprocessor_any.overlap_fraction,
+        preprocessor_any.fs,
+        preprocessor_any.bin_spacing,
     )
     return preprocessor
 
@@ -621,7 +625,8 @@ def process_dataset(
         logger.warning("Dataset root %s does not exist; skipping %s", preprocessor.dataset_settings.root, dataset)
         return None
 
-    derived_hop = hop_length or preprocessor._derive_hop_length(resolution)  # noqa: SLF001
+    preprocessor_any = cast(Any, preprocessor)
+    derived_hop = hop_length or preprocessor_any._derive_hop_length(resolution)  # noqa: SLF001
     accumulator = HistogramAccumulator(dataset)
     logger.info(
         "Processing %s (resolution=%d, hop_length=%d, win_length=%d, bin_spacing=%s)",
@@ -629,7 +634,7 @@ def process_dataset(
         resolution,
         derived_hop,
         win_length,
-        preprocessor.bin_spacing,
+        preprocessor_any.bin_spacing,
     )
 
     for block in iterator(preprocessor, max_windows_per_recording):
@@ -638,7 +643,7 @@ def process_dataset(
                 channel,
                 hop_length=derived_hop,
                 win_length=win_length,
-                bin_spacing=preprocessor.bin_spacing,
+                bin_spacing=preprocessor_any.bin_spacing,
             )
             accumulator.add_values(values_db)
         accumulator.increment_window()
@@ -671,7 +676,7 @@ def summarize_best_by_metric(results: list[dict[str, object]]) -> list[tuple[str
     best_per_metric: dict[str, dict[str, object]] = {}
     for summary in results:
         dataset = summary.get("dataset")
-        best_clips = summary.get("best_clips") or {}
+        best_clips = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
         for metric, comparator in metrics.items():
             candidate = best_clips.get(metric)
             if not candidate:
@@ -690,7 +695,7 @@ def _format_rounded(value: object, decimals: int = 1) -> str:
     if isinstance(value, str):
         return value
     try:
-        value = round(float(value), decimals)
+        value = round(float(cast(Any, value)), decimals)
         return f"{value}"
     except (TypeError, ValueError):
         return str(value)
@@ -741,7 +746,8 @@ def metric_tables(results: list[dict[str, object]]) -> dict[str, list[dict[str, 
     for metric in metrics:
         rows: list[dict[str, object]] = []
         for summary in results:
-            best = (summary.get("best_clips") or {}).get(metric)
+            best_clips = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
+            best = best_clips.get(metric)
             if not best:
                 continue
             row = {
@@ -784,8 +790,9 @@ def analyze_metric_correlations(results: list[dict[str, object]]) -> dict[str, o
         "entropy": 1.0,
     }
     for summary in results:
-        sweep = summary.get("entropy_sweep") or {}
-        for cand in sweep.get("candidates") or []:
+        sweep = cast(dict[str, object], summary.get("entropy_sweep") or {})
+        candidates = cast(list[dict[str, object]], sweep.get("candidates") or [])
+        for cand in candidates:
             psnr = cand.get("psnr_db")
             js = cand.get("js_divergence")
             wass = cand.get("wasserstein_db")
@@ -834,7 +841,7 @@ def analyze_clip_agreements(results: list[dict[str, object]]) -> dict[str, objec
     metrics = ["entropy", "js_divergence", "psnr_db", "wasserstein_db"]
     per_dataset: list[dict[str, object]] = []
     for summary in results:
-        best = summary.get("best_clips") or {}
+        best = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
         per_dataset.append(
             {
                 "dataset": summary.get("dataset"),
@@ -848,7 +855,7 @@ def analyze_clip_agreements(results: list[dict[str, object]]) -> dict[str, objec
         for b in metrics[i + 1 :]:
             matches = 0
             for summary in results:
-                best = summary.get("best_clips") or {}
+                best = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
                 if _clip_signature(best.get(a)) == _clip_signature(best.get(b)):
                     matches += 1
             pairwise.append({"metrics": [a, b], "matching_datasets": matches, "total_datasets": total})
@@ -859,8 +866,12 @@ def _reshape_candidates_for_contour(
     candidates: list[dict[str, object]], metric: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return lower/upper percentile grids and metric surface for contour plots."""
-    lower_vals = sorted({float(c["lower_percentile"]) for c in candidates if "lower_percentile" in c})
-    upper_vals = sorted({float(c["upper_percentile"]) for c in candidates if "upper_percentile" in c})
+    lower_vals = sorted(
+        {float(cast(Any, c["lower_percentile"])) for c in candidates if "lower_percentile" in c}
+    )
+    upper_vals = sorted(
+        {float(cast(Any, c["upper_percentile"])) for c in candidates if "upper_percentile" in c}
+    )
     if not lower_vals or not upper_vals:
         return np.array([]), np.array([]), np.array([])
     lower_index = {val: idx for idx, val in enumerate(lower_vals)}
@@ -872,7 +883,10 @@ def _reshape_candidates_for_contour(
         value = cand.get(metric)
         if lower is None or upper is None or value is None:
             continue
-        surface[upper_index[float(upper)], lower_index[float(lower)]] = float(value)
+        surface[
+            upper_index[float(cast(Any, upper))],
+            lower_index[float(cast(Any, lower))],
+        ] = float(cast(Any, value))
     return np.array(lower_vals), np.array(upper_vals), surface
 
 
@@ -880,8 +894,8 @@ def plot_metric_landscapes(dataset: str, summary: dict[str, object], output_dir:
     """Create colored contour plots for each metric across percentile sweeps."""
     if not plt:
         return
-    sweep = summary.get("entropy_sweep") or {}
-    candidates = sweep.get("candidates") or []
+    sweep = cast(dict[str, object], summary.get("entropy_sweep") or {})
+    candidates = cast(list[dict[str, object]], sweep.get("candidates") or [])
     if not candidates:
         return
     metric_labels = {
@@ -915,7 +929,12 @@ def plot_metric_landscapes(dataset: str, summary: dict[str, object], output_dir:
         plt.close(fig)
 
 
-def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[str, object], output_dir: Path) -> None:
+def save_histogram(
+    dataset: str,
+    counts: list[tuple[float, int]],
+    summary: dict[str, object],
+    output_dir: Path,
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     hist_json = output_dir / f"stft_hist_{dataset}.json"
     hist_csv = output_dir / f"stft_hist_{dataset}.csv"
@@ -936,7 +955,7 @@ def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[st
 
     if plt and counts:
         metric_quantized: dict[str, dict[str, list[tuple[float, int]]]] = {}
-        best_clips = summary.get("best_clips") or {}
+        best_clips = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
         metric_colors = {
             "js_divergence": "orange",
             "wasserstein_db": "red",
@@ -1052,19 +1071,19 @@ def save_histogram(dataset: str, counts: list[tuple[int, int]], summary: dict[st
 
 
 def print_dataset_summary(summary: dict[str, object], output_dir: Path) -> None:
-    clip = summary.get("recommended_clip", {})
+    clip = cast(dict[str, object], summary.get("recommended_clip") or {})
     lower = clip.get("lower_db")
     upper = clip.get("upper_db")
     coverage = clip.get("coverage", 0.0)
-    quantization = clip.get("quantization") or {}
+    quantization = cast(dict[str, object], clip.get("quantization") or {})
     step = quantization.get("step_db_per_bin") or clip.get("step_db_per_bin")
     linear_min = quantization.get("bin0_linear")
     linear_max = quantization.get("bin255_linear")
-    best_clips = summary.get("best_clips") or {}
-    best_entropy = best_clips.get("entropy") or {}
-    best_js = best_clips.get("js_divergence") or {}
-    best_wasserstein = best_clips.get("wasserstein_db") or {}
-    best_psnr = best_clips.get("psnr_db") or {}
+    best_clips = cast(dict[str, dict[str, object]], summary.get("best_clips") or {})
+    best_entropy = cast(dict[str, object], best_clips.get("entropy") or {})
+    best_js = cast(dict[str, object], best_clips.get("js_divergence") or {})
+    best_wasserstein = cast(dict[str, object], best_clips.get("wasserstein_db") or {})
+    best_psnr = cast(dict[str, object], best_clips.get("psnr_db") or {})
     best_lower_pct = best_entropy.get("lower_percentile")
     best_upper_pct = best_entropy.get("upper_percentile")
     best_lower_db = best_entropy.get("lower_db")

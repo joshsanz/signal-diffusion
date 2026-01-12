@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol, cast
 
 import numpy as np
-from datasets import Features, Image, load_dataset
+from datasets import DatasetDict, Features, Image, IterableDatasetDict, load_dataset
 from torch.utils.data import Dataset
 
 
@@ -21,12 +21,20 @@ class ImageFolderConfig:
     image_mode: str = "RGB"
 
 
-class RandomSubsetDataset(Dataset):
+class _IndexableDataset(Protocol):
+    def __len__(self) -> int:
+        ...
+
+    def __getitem__(self, idx: int) -> Any:
+        ...
+
+
+class RandomSubsetDataset(Dataset[Any]):
     """Wrap a dataset to return a random, non-repeating subset."""
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: _IndexableDataset,
         subset_size: int | None = None,
         *,
         seed: int | None = None,
@@ -49,7 +57,7 @@ class RandomSubsetDataset(Dataset):
             return len(self._indices)
         return len(self.dataset)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> Any:
         if self._indices is not None:
             idx = self._indices[idx]
         example = self.dataset[idx]
@@ -62,16 +70,20 @@ def load_imagefolder_dataset(
     config: ImageFolderConfig,
     *,
     transform: Optional[Callable] = None,
-) -> Dataset:
+) -> Dataset[Any]:
     """Load an imagefolder dataset with HuggingFace datasets."""
 
-    dataset_dict = load_dataset(
-        "imagefolder",
-        data_dir=config.data_dir,
-        features=Features({"image": Image(mode=config.image_mode)}),
-    ).with_format("torch")
+    dataset_dict = cast(
+        DatasetDict | IterableDatasetDict,
+        load_dataset(
+            "imagefolder",
+            data_dir=config.data_dir,
+            features=Features({"image": Image(mode=config.image_mode)}),
+        ).with_format("torch"),
+    )
 
     if transform is not None:
         dataset_dict = dataset_dict.with_transform(transform)
 
-    return dataset_dict[config.split]
+    dataset = dataset_dict[config.split]
+    return cast(Dataset[Any], dataset)
