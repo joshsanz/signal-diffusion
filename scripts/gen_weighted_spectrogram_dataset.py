@@ -182,10 +182,14 @@ def load_weighted_samples(
             dataset_settings = getattr(source_dataset, "dataset_settings", None)
             dataset_name = getattr(dataset_settings, "name", f"dataset_{dataset_idx}")
             # Get metadata for this sample
-            if not hasattr(source_dataset, "metadata"):
+            metadata = getattr(source_dataset, "metadata", None)
+            if metadata is None:
                 logger.warning("Skipping dataset without metadata for index %s", dataset_idx)
                 continue
-            metadata_row = source_dataset.metadata.iloc[sample_offset]
+            if not isinstance(metadata, pd.DataFrame):
+                logger.warning("Skipping dataset with non-tabular metadata for index %s", dataset_idx)
+                continue
+            metadata_row = metadata.iloc[sample_offset]
             metadata_dict = metadata_row.to_dict()
 
             relative_source = Path(str(metadata_dict["file_name"]))

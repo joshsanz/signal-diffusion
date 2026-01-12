@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import argparse
 
 import coloredlogs
@@ -35,7 +35,7 @@ class HPOConfig:
         task_objective: str,
         config_path: str,
         n_trials: int = 50,
-        timeout: int = None,
+        timeout: Optional[int] = None,
         seed: int = 42,
     ):
         """Initialize HPO config.
@@ -70,7 +70,7 @@ class HPOConfig:
 
 def create_hpo_configs(
     n_trials: int = 50,
-    timeout: int = None,
+    timeout: Optional[int] = None,
     seed: int = 42,
 ) -> List[HPOConfig]:
     """Create HPO configurations for all combinations.
@@ -125,7 +125,7 @@ def get_optimize_task(task_objective: str) -> str:
         raise ValueError(f"Unknown task objective: {task_objective}")
 
 
-def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Path]:
+def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
     """Run a single HPO study.
 
     Args:
@@ -400,7 +400,7 @@ def main():
 
         config_name = f"{config.spec_type}_{config.task_objective}"
 
-        if success:
+        if success and results_path is not None:
             try:
                 hpo_results = load_hpo_results(results_path)
                 summary = summarize_trial_metrics(hpo_results)

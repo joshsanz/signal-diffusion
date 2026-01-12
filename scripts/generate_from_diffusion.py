@@ -85,13 +85,14 @@ def main(
         raise ValueError("Class conditioning requested but dataset does not expose class names.")
     if conditioning_mode == "classes":
         assert class_names is not None
+        class_names_list = class_names
 
     condition_indices: list[tuple[Optional[int], str]] = []
     if conditioning_mode == "classes":
-        num_classes = len(class_names or [])
+        num_classes = len(class_names_list)
         num_to_select = min(c, num_classes)
         selected_ids = np.random.choice(range(num_classes), num_to_select, replace=False)
-        condition_indices = [(int(idx), str(class_names[idx])) for idx in selected_ids]
+        condition_indices = [(int(idx), str(class_names_list[idx])) for idx in selected_ids]
         print(f"Selected classes: {[name for _, name in condition_indices]}")
     elif conditioning_mode == "caption":
         raise NotImplementedError("Caption-based sampling is not supported by this script yet.")
