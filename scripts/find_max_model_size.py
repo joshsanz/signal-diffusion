@@ -33,7 +33,6 @@ def generate_localmamba_configs() -> Iterator[dict]:
     3. Reduce dims to smaller multiples of 64
     """
     base_dims = [96, 192, 384, 768]
-    base_mlp = 4.0
 
     # Strategy 2: Try reduced mlp_ratio
     for mlp_ratio in [4.0, 3.0, 2.0]:

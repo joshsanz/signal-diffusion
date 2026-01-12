@@ -9,8 +9,6 @@ Runs HPO across different spectrogram types and task objectives:
 Generates descriptively-named output files and summarizes results.
 """
 
-import os
-import sys
 import subprocess
 import json
 import logging
@@ -170,7 +168,20 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
 
     try:
         # Run HPO
-        result = subprocess.run(cmd, cwd="/home/jsanz/git/signal-diffusion", check=True)
+        result = subprocess.run(
+            cmd,
+            cwd="/home/jsanz/git/signal-diffusion",
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.error("HPO run failed with return code %s", result.returncode)
+            if result.stdout:
+                logger.error("HPO stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.error("HPO stderr:\n%s", result.stderr)
+            return False, None
 
         # Find and rename the generated hpo_study_results.json
         hpo_results_path = Path("/home/jsanz/git/signal-diffusion/hpo_study_results.json")
@@ -183,9 +194,6 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
             logger.error(f"HPO results file not found at {hpo_results_path}")
             return False, None
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"HPO run failed with return code {e.returncode}")
-        return False, None
     except Exception as e:
         logger.error(f"HPO run failed with error: {e}")
         return False, None
