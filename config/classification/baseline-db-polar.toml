@@ -58,7 +58,7 @@ checkpoint_total_limit = 3
 compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 swa_enabled = false
-swa_start_ratio = 0.75
+swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
 
 [training.task_weights]

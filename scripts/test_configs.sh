@@ -120,15 +120,15 @@ CONFIGS=(
     # "dit-timeseries"
 
     # Hourglass variants
-    # "hourglass-db-only"
-    # "hourglass-db-iq"
-    # "hourglass-db-polar"
-    # "hourglass-timeseries"
+    "hourglass-db-only"
+    "hourglass-db-iq"
+    "hourglass-db-polar"
+    "hourglass-timeseries"
 
     # LocalMamba variants
-    # "localmamba-db-only"
-    # "localmamba-db-iq"
-    # "localmamba-db-polar"
+    "localmamba-db-only"
+    "localmamba-db-iq"
+    "localmamba-db-polar"
     "localmamba-timeseries"
 
     # Stable Diffusion 3.5 variants

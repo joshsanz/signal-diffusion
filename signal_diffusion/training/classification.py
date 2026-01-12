@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,21 @@ import typer
 from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
+from signal_diffusion.classification.config import (
+    ClassificationConfig,
+    DatasetConfig,
+    ModelConfig,
+    OptimizerConfig,
+    SchedulerConfig,
+    TrainingConfig,
+    load_classification_config,
+)
+from signal_diffusion.classification.metrics import (
+    MetricsLogger,
+    create_metrics_logger,
+    get_mlflow_tracking_uri,
+    get_mlflow_experiment_name,
+)
 from signal_diffusion.training.schedulers import create_scheduler
 
 LOGGER = get_logger(__name__)
@@ -95,142 +111,6 @@ class CheckpointManager:
         return True
 
 
-class MetricsLogger:
-    """Log training metrics to TensorBoard and/or Weights & Biases."""
-
-    def __init__(
-        self,
-        *,
-        tasks: Iterable[str],
-        training_cfg: TrainingConfig,
-        run_dir: Path,
-    ) -> None:
-        self.tasks = tuple(tasks)
-        self._tensorboard = None
-        self._wandb_run = None
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_name = f"{training_cfg.run_name}-{timestamp}" if training_cfg.run_name else None
-
-        if training_cfg.tensorboard:
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError(
-                    "TensorBoard logging requested but 'torch.utils.tensorboard' is unavailable"
-                ) from exc
-            log_dir = training_cfg.log_dir or (run_dir / "tensorboard")
-            if run_name:
-                log_dir = log_dir / run_name
-            log_dir.mkdir(parents=True, exist_ok=True)
-            self._tensorboard = SummaryWriter(log_dir=str(log_dir))
-
-        if training_cfg.wandb_project:
-            try:
-                import wandb  # type: ignore
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError("Weights & Biases logging requested but 'wandb' is not installed") from exc
-            init_kwargs: dict[str, Any] = {
-                "project": training_cfg.wandb_project,
-                "dir": str(run_dir),
-            }
-            if run_name:
-                init_kwargs["name"] = run_name
-
-            if training_cfg.wandb_entity:
-                init_kwargs["entity"] = training_cfg.wandb_entity
-            if training_cfg.wandb_tags:
-                init_kwargs["tags"] = list(training_cfg.wandb_tags)
-            self._wandb_run = wandb.init(**init_kwargs)
-
-    def log(self, phase: str, step: int, metrics: Mapping[str, Any], *, epoch: int | None = None) -> None:
-        scalars: dict[str, float] = {}
-        loss = metrics.get("loss")
-        if loss is not None:
-            scalars[f"{phase}/loss"] = float(loss)
-        for name, value in metrics.get("losses", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/loss/{name}"] = float(value)
-        for name, value in metrics.get("accuracy", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/accuracy/{name}"] = float(value)
-        for name, value in metrics.get("mae", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/mae/{name}"] = float(value)
-        for name, value in metrics.get("mse", {}).items():
-            if value is None:
-                continue
-            scalars[f"{phase}/mse/{name}"] = float(value)
-        if epoch is not None:
-            scalars[f"{phase}/epoch"] = float(epoch)
-
-        grad_norm = metrics.get("grad_norm")
-        if grad_norm is not None:
-            scalars[f"{phase}/grad_norm"] = float(grad_norm)
-
-        if not scalars:
-            return
-
-        if self._tensorboard is not None:
-            for key, value in scalars.items():
-                self._tensorboard.add_scalar(key, value, step)
-
-        if self._wandb_run is not None:
-            self._wandb_run.log(scalars, step=step)
-
-    def close(self) -> None:
-        if self._tensorboard is not None:
-            self._tensorboard.flush()
-            self._tensorboard.close()
-        if self._wandb_run is not None:
-            try:
-                self._wandb_run.finish()
-            except AttributeError:  # pragma: no cover - older wandb versions
-                pass
-
-
-def _create_metrics_logger(
-    training_cfg: TrainingConfig,
-    tasks: Iterable[str],
-    run_dir: Path,
-) -> MetricsLogger | None:
-    if not training_cfg.tensorboard and not training_cfg.wandb_project:
-        return None
-    return MetricsLogger(tasks=tasks, training_cfg=training_cfg, run_dir=run_dir)
-
-
-@dataclass(slots=True)
-class DatasetConfig:
-    """Configuration for dataset loading."""
-
-    name: str
-    tasks: tuple[str, ...]
-    train_split: str = "train"
-    val_split: str = "val"
-    batch_size: int = 32
-    num_workers: int = 4
-    pin_memory: bool = True
-    shuffle: bool = True
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class ModelConfig:
-    """Configuration for classifier model construction."""
-
-    backbone: str
-    input_channels: int
-    embedding_dim: int = 256
-    dropout: float = 0.3
-    activation: str = "gelu"
-    depth: int = 3
-    layer_repeats: int = 2
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
 def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
     """Ensure backbone choice matches configured data type."""
     is_timeseries = data_type == "timeseries"
@@ -247,59 +127,6 @@ def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
             "Consider using 'cnn_1d' or 'cnn_1d_light' for time-domain inputs.",
             backbone,
         )
-
-
-@dataclass(slots=True)
-class OptimizerConfig:
-    """Configuration for optimizer."""
-
-    name: str = "adamw"
-    learning_rate: float = 3e-4
-    weight_decay: float = 1e-4
-    betas: tuple[float, float] = (0.9, 0.999)
-
-
-@dataclass(slots=True)
-class SchedulerConfig:
-    """Configuration for learning rate scheduler."""
-
-    name: str = "constant"
-    warmup_steps: int = 0
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class TrainingConfig:
-    """Optimisation and runtime configuration."""
-
-    epochs: int = 25
-    max_steps: int = -1
-    clip_grad_norm: float | None = 1.0
-    device: str | None = None
-    log_every_batches: int = 10
-    eval_strategy: str = "epoch"
-    eval_steps: int | None = None
-    output_dir: Path | None = None
-    log_dir: Path | None = None
-    tensorboard: bool = False
-    wandb_project: str | None = None
-    wandb_entity: str | None = None
-    wandb_tags: tuple[str, ...] = ()
-    run_name: str | None = None
-    checkpoint_total_limit: int | None = None
-    checkpoint_strategy: str = "epoch"
-    checkpoint_steps: int | None = None
-    task_weights: dict[str, float] = field(default_factory=dict)
-    use_amp: bool = False
-    metrics_summary_path: Path | None = None
-    max_best_checkpoints: int = 1
-    early_stopping: bool = False
-    early_stopping_patience: int = 5
-    compile_model: bool = True
-    compile_mode: str = "default"
-    swa_enabled: bool = False
-    swa_start_ratio: float = 0.75
-    swa_lr_frac: float = 0.25
 
 
 @dataclass(slots=True)
@@ -440,7 +267,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         compile_model=bool(training_section.get("compile_model", True)),
         compile_mode=str(training_section.get("compile_mode", "default")).lower(),
         swa_enabled=bool(training_section.get("swa_enabled", False)),
-        swa_start_ratio=float(training_section.get("swa_start_ratio", 0.75)),
+        swa_extra_ratio=float(training_section.get("swa_extra_ratio", 0.333)),
         swa_lr_frac=float(training_section.get("swa_lr_frac", 0.25)),
     )
 
@@ -596,7 +423,13 @@ def train_from_config(
     optimizer = _build_optimizer(model, config.optimizer)
 
     # Create learning rate scheduler (always configured, defaults to constant with 0 warmup)
-    num_training_steps = training_cfg.epochs * len(train_loader)
+    if training_cfg.swa_enabled:
+        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+        total_epochs = training_cfg.epochs + swa_epoch_count
+        num_training_steps = training_cfg.epochs * len(train_loader)
+    else:
+        total_epochs = training_cfg.epochs
+        num_training_steps = training_cfg.epochs * len(train_loader)
     if training_cfg.max_steps > 0:
         num_training_steps = min(num_training_steps, training_cfg.max_steps)
     lr_scheduler = create_scheduler(
@@ -611,32 +444,41 @@ def train_from_config(
     swa_model = None
     swa_scheduler = None
     swa_start_epoch = None
+    swa_epoch_count = 0
 
     if training_cfg.swa_enabled:
-        if training_cfg.swa_start_ratio <= 0.0 or training_cfg.swa_start_ratio >= 1.0:
-            raise ValueError(f"swa_start_ratio must be in (0, 1), got {training_cfg.swa_start_ratio}")
+        if training_cfg.swa_extra_ratio <= 0.0:
+            raise ValueError(f"swa_extra_ratio must be > 0, got {training_cfg.swa_extra_ratio}")
 
         from torch.optim.swa_utils import AveragedModel, SWALR
 
-        # Calculate SWA start epoch (last 25% of training by default)
-        swa_start_epoch = max(1, int(training_cfg.epochs * training_cfg.swa_start_ratio) + 1)
+        # Append SWA epochs after base training completes.
+        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+        swa_start_epoch = training_cfg.epochs + 1
 
         # Create averaged model wrapper
         swa_model = AveragedModel(model)
 
         # Create SWA learning rate scheduler
         swa_lr = config.optimizer.learning_rate * training_cfg.swa_lr_frac
-        anneal_epochs = max(1, int((training_cfg.epochs - swa_start_epoch) * 0.2))  # 20% of SWA period
+        # We step per batch, so anneal_epochs represents step count for ~90% of one epoch.
+        anneal_epochs = max(1, int(0.9 * len(train_loader)))
         swa_scheduler = SWALR(
             optimizer,
             swa_lr=swa_lr,
             anneal_epochs=anneal_epochs,
-            anneal_strategy='cos',  # Cosine annealing to swa_lr
+            anneal_strategy='linear',
         )
 
         LOGGER.info(
-            f"SWA enabled: will start at epoch {swa_start_epoch}/{training_cfg.epochs} "
-            f"with LR {swa_lr:.6f} ({training_cfg.swa_lr_frac}x base LR)"
+            "SWA enabled: %s base epochs + %s SWA epochs = %s total. "
+            "SWA LR = %.6f (%sx base LR) with linear anneal over %s steps.",
+            training_cfg.epochs,
+            swa_epoch_count,
+            total_epochs,
+            swa_lr,
+            training_cfg.swa_lr_frac,
+            anneal_epochs,
         )
 
     scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
@@ -649,9 +491,14 @@ def train_from_config(
             criteria[name] = nn.HuberLoss(delta=2.0)
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
 
+    def _get_eval_model() -> nn.Module:
+        if in_swa_phase and swa_model is not None:
+            return swa_model
+        return model
+
     def run_validation() -> dict[str, Any]:
         result, _ = _run_epoch(
-            model,
+            _get_eval_model(),
             data_loader=val_loader,
             criteria=criteria,
             task_weights=task_weights,
@@ -667,7 +514,7 @@ def train_from_config(
         return result
 
     eval_manager = _create_evaluation_manager(training_cfg, run_validation)
-    metrics_logger = _create_metrics_logger(training_cfg, tasks, run_dir)
+    metrics_logger = create_metrics_logger(training_cfg, tasks, run_dir)
 
     # Initialize early stopping (disabled if trial is not None)
     early_stopping_enabled = training_cfg.early_stopping and trial is None
@@ -715,25 +562,25 @@ def train_from_config(
     global_step = 0
 
     progress_bar = tqdm(
-        total=training_cfg.epochs,
+        total=total_epochs,
         desc="Training",
         dynamic_ncols=True,
     )
 
     try:
-        for epoch in range(1, training_cfg.epochs + 1):
+        for epoch in range(1, total_epochs + 1):
             if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
                 break
 
             # Check if we're entering SWA phase
             if training_cfg.swa_enabled and swa_start_epoch is not None and epoch == swa_start_epoch:
-                LOGGER.info(f"Entering SWA phase at epoch {epoch}/{training_cfg.epochs}")
+                LOGGER.info("Entering SWA phase at epoch %s/%s", epoch, total_epochs)
                 in_swa_phase = True
                 # Disable early stopping during SWA
                 if early_stopping_enabled:
                     LOGGER.info("Early stopping disabled during SWA phase")
 
-            progress_bar.set_description(f"Epoch {epoch}/{training_cfg.epochs}")
+            progress_bar.set_description(f"Epoch {epoch}/{total_epochs}")
 
             # Train one epoch. If using Optuna HPO, the trial may be pruned during validation
             # (when _run_epoch calls _report_and_check_pruning). Ensure proper cleanup by
@@ -751,7 +598,7 @@ def train_from_config(
                     device=device,
                     optimizer=optimizer,
                     lr_scheduler=active_lr_scheduler,
-                    scheduler_step_per_batch=not in_swa_phase,  # Disable per-batch stepping during SWA
+                    scheduler_step_per_batch=True,
                     scaler=scaler,
                     clip_grad=training_cfg.clip_grad_norm,
                     log_every=training_cfg.log_every_batches,
@@ -801,6 +648,7 @@ def train_from_config(
                 # Manage best checkpoints: keep top-k checkpoints based on validation metric
                 # This allows recovery of any high-performing checkpoint, not just the single best
                 state_dict: dict[str, torch.Tensor] | None = None
+                eval_model = _get_eval_model()
                 if max_best_checkpoints > 0:
                     # Create checkpoint record for this validation result
                     record = CheckpointRecord(
@@ -831,7 +679,7 @@ def train_from_config(
                     # Save checkpoint if it made the top-k list
                     if record in best_records:
                         if not record.path.exists():
-                            state_dict = model.state_dict()
+                            state_dict = eval_model.state_dict()
                             torch.save(state_dict, record.path)
                     else:
                         record = None
@@ -849,7 +697,7 @@ def train_from_config(
                     best_epoch = epoch
                     best_metric_step = step_for_log
                     if state_dict is None:
-                        state_dict = model.state_dict()
+                        state_dict = eval_model.state_dict()
                     torch.save(state_dict, best_checkpoint)
 
                 # Check early stopping: update patience counter based on metric improvement
@@ -1002,10 +850,6 @@ def train_from_config(
 
             # Update SWA model and scheduler (if in SWA phase)
             if in_swa_phase:
-                # Step SWA scheduler per epoch (not per batch like regular schedulers)
-                if swa_scheduler is not None:
-                    swa_scheduler.step()
-
                 # Update SWA averaged model weights
                 if swa_model is not None:
                     swa_model.update_parameters(model)
@@ -1056,6 +900,15 @@ def train_from_config(
     # If no best checkpoint was found during training, use last checkpoint
     if best_metric == float("-inf") or not best_checkpoint.exists():
         best_checkpoint = last_checkpoint
+
+    # Log checkpoints as MLflow artifacts
+    if metrics_logger is not None:
+        # Log best checkpoint
+        if best_checkpoint.exists():
+            metrics_logger.log_artifact(best_checkpoint, artifact_path="checkpoints")
+        # Log SWA checkpoint if available
+        if swa_checkpoint_path is not None and Path(swa_checkpoint_path).exists():
+            metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
 
     # Close logging backends
     if metrics_logger is not None:
@@ -1316,8 +1169,7 @@ def _run_epoch(
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
                 optimizer.step()
 
-            # Update learning rate according to scheduler
-            # Note: SWA scheduler steps per epoch, not per batch
+            # Update learning rate according to scheduler (per-batch for both base and SWA).
             if lr_scheduler is not None and scheduler_step_per_batch:
                 lr_scheduler.step()
 
