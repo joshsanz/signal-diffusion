@@ -7,7 +7,7 @@ import math as pymath
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import coloredlogs
 import mne

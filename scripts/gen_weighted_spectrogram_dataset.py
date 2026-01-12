@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import bisect
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sized, cast
+from typing import Any, Iterable, Sized, cast
 
 import pandas as pd
 import torch

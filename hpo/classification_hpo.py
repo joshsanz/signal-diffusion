@@ -3,7 +3,6 @@ Hyperparameter tuning for classification training using Optuna.
 Uses TPESampler and HyperbandPruner for efficient hyperparameter optimization.
 """
 
-import os
 import sys
 import gc
 import json
@@ -12,7 +11,6 @@ import logging
 import coloredlogs
 from pathlib import Path
 from typing import Dict, Any
-from datetime import datetime
 
 import torch
 import optuna
@@ -510,7 +508,7 @@ def main():
             sys.exit(1)
         logger.info(f"Optimizing for task: {args.optimize_task}")
     else:
-        logger.info(f"Optimizing for combined objective (mean of all tasks)")
+        logger.info("Optimizing for combined objective (mean of all tasks)")
 
     # Override output directory if specified
     if args.output_dir:

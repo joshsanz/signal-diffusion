@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 import torch
-from datasets import load_dataset as hf_load_dataset, Features, Image, Value, ClassLabel
+from datasets import load_dataset as hf_load_dataset
 from torchvision.transforms import v2 as transforms
 
 from signal_diffusion.config import Settings
