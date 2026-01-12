@@ -721,15 +721,41 @@ class Hourglass2DModel(nn.Module):
 
         self.down_levels, self.up_levels = nn.ModuleList(), nn.ModuleList()
         for i, spec in enumerate(levels):
-            if isinstance(spec.self_attn, GlobalAttentionSpec):
-                layer_factory = lambda _: GlobalTransformerLayer(spec.width, spec.d_ff, spec.self_attn.d_head, mapping.width, dropout=spec.dropout)
-            elif isinstance(spec.self_attn, NeighborhoodAttentionSpec):
-                layer_factory = lambda _: NeighborhoodTransformerLayer(spec.width, spec.d_ff, spec.self_attn.d_head, mapping.width, spec.self_attn.kernel_size, dropout=spec.dropout)
-            elif isinstance(spec.self_attn, ShiftedWindowAttentionSpec):
-                layer_factory = lambda i: ShiftedWindowTransformerLayer(spec.width, spec.d_ff, spec.self_attn.d_head, mapping.width, spec.self_attn.window_size, i, dropout=spec.dropout)
-            elif isinstance(spec.self_attn, NoAttentionSpec):
-                layer_factory = lambda _: NoAttentionTransformerLayer(spec.width, spec.d_ff, mapping.width, dropout=spec.dropout)
-            else:
+            def layer_factory(index: int) -> nn.Module:
+                if isinstance(spec.self_attn, GlobalAttentionSpec):
+                    return GlobalTransformerLayer(
+                        spec.width,
+                        spec.d_ff,
+                        spec.self_attn.d_head,
+                        mapping.width,
+                        dropout=spec.dropout,
+                    )
+                if isinstance(spec.self_attn, NeighborhoodAttentionSpec):
+                    return NeighborhoodTransformerLayer(
+                        spec.width,
+                        spec.d_ff,
+                        spec.self_attn.d_head,
+                        mapping.width,
+                        spec.self_attn.kernel_size,
+                        dropout=spec.dropout,
+                    )
+                if isinstance(spec.self_attn, ShiftedWindowAttentionSpec):
+                    return ShiftedWindowTransformerLayer(
+                        spec.width,
+                        spec.d_ff,
+                        spec.self_attn.d_head,
+                        mapping.width,
+                        spec.self_attn.window_size,
+                        index,
+                        dropout=spec.dropout,
+                    )
+                if isinstance(spec.self_attn, NoAttentionSpec):
+                    return NoAttentionTransformerLayer(
+                        spec.width,
+                        spec.d_ff,
+                        mapping.width,
+                        dropout=spec.dropout,
+                    )
                 raise ValueError(f"unsupported self attention spec {spec.self_attn}")
 
             if i < len(levels) - 1:

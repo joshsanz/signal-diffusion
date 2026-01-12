@@ -20,7 +20,6 @@ from signal_diffusion.diffusion.models.base import DiffusionModules, registry
 from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
-    get_sigmas_from_timesteps,
     get_snr,
     sample_timestep_logitnorm,
     verify_scheduler,
@@ -319,7 +318,6 @@ class StableDiffusion35Adapter:
             timesteps=scheduler.timesteps,
             device=device,
         )
-        sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
         z_t = scheduler.scale_noise(latents, timesteps, noise)
         snr = get_snr(scheduler, timesteps, device=device)
 

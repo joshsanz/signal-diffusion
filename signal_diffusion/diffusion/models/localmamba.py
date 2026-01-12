@@ -298,7 +298,6 @@ class LocalMambaAdapter:
         )
 
         # Compute stochastic depth rates (linearly increasing)
-        num_levels = len(extras.depths)
         total_blocks = sum(extras.depths)
         dpr = [extras.drop_path_rate * i / (total_blocks - 1) if total_blocks > 1 else 0.0
                for i in range(total_blocks)]
