@@ -1,5 +1,5 @@
 """Tests for training-time PSNR computation."""
-import pytest
+import math
 import torch
 
 from signal_diffusion.diffusion.train_utils import compute_training_psnr
@@ -179,6 +179,3 @@ def test_training_psnr_different_max_values():
     # PSNR should be higher with larger max_value
     assert psnr2 > psnr1
 
-
-# Import math for isfinite check
-import math

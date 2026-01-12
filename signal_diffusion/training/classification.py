@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import gc
 import json
-import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -21,19 +20,14 @@ from signal_diffusion.classification import build_classifier, build_dataset, bui
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
 from signal_diffusion.classification.config import (
-    ClassificationConfig,
     DatasetConfig,
     ModelConfig,
     OptimizerConfig,
     SchedulerConfig,
     TrainingConfig,
-    load_classification_config,
 )
 from signal_diffusion.classification.metrics import (
-    MetricsLogger,
     create_metrics_logger,
-    get_mlflow_tracking_uri,
-    get_mlflow_experiment_name,
 )
 from signal_diffusion.training.schedulers import create_scheduler
 
@@ -496,7 +490,7 @@ def train_from_config(
             return swa_model
         return model
 
-    def run_validation() -> dict[str, Any]:
+    def run_validation(val_loader=val_loader) -> dict[str, Any]:
         result, _ = _run_epoch(
             _get_eval_model(),
             data_loader=val_loader,
@@ -1574,6 +1568,12 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
             best_mae_entry = per_task_best_mae.get(task_name)
             if best_mae_entry is None or mae < best_mae_entry["mae"]:
                 per_task_best_mae[task_name] = {"mae": float(mae), "epoch": epoch_metrics.epoch}
+        for task_name, mse in epoch_metrics.val_mse.items():
+            if mse is None:
+                continue
+            best_mse_entry = per_task_best_mse.get(task_name)
+            if best_mse_entry is None or mse < best_mse_entry["mse"]:
+                per_task_best_mse[task_name] = {"mse": float(mse), "epoch": epoch_metrics.epoch}
 
     payload: dict[str, Any] = {
         "run_dir": str(summary.run_dir),
@@ -1596,6 +1596,7 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
             "accuracy": per_task_best_accuracy,
             "loss": per_task_best_loss,
             "mae": per_task_best_mae,
+            "mse": per_task_best_mse,
         },
     }
 
