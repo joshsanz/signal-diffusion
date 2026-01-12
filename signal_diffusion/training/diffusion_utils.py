@@ -246,8 +246,12 @@ def run_evaluation(
                         health_code = random.choice(["H", "PD"])
 
                         # Build caption using the weighted dataset format
-                        metadata = {"age": age_val, "gender": gender_code, "health": health_code,
-                                    "modality": cfg.settings.data_type}
+                        metadata = {
+                            "age": int(age_val),
+                            "gender": str(gender_code),
+                            "health": str(health_code),
+                            "modality": str(cfg.settings.data_type),
+                        }
                         caption = _build_caption(**metadata)
                         captions.append(caption)
 
@@ -466,7 +470,8 @@ def build_image_caption_dataloader(
         raise ValueError("Expected a dataset with a 'train' split for diffusion training.")
 
     column_names = dataset["train"].column_names
-    dataset_columns = dataset_mapping.get(getattr(args, "dataset_name", None))
+    dataset_name = getattr(args, "dataset_name", None)
+    dataset_columns = dataset_mapping.get(dataset_name) if isinstance(dataset_name, str) else None
 
     image_column = getattr(args, "image_column", None)
     if image_column is None:

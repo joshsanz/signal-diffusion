@@ -1232,6 +1232,7 @@ def _run_epoch(
     if train:
         if optimizer is None:
             raise ValueError("Optimizer must be provided when train=True")
+        assert optimizer is not None
         model.train()
     else:
         model.eval()
@@ -1333,7 +1334,7 @@ def _run_epoch(
             if triggered:
                 # Validation was triggered - immediately check for Optuna pruning
                 # This allows early stopping of poor-performing trials during training
-                if eval_manager.latest_result is not None:
+                if eval_manager is not None and eval_manager.latest_result is not None:
                     # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
                     val_accuracy = eval_manager.latest_result.get("accuracy", {})
                     val_mse = eval_manager.latest_result.get("mse", {})
