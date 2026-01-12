@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 import tomllib
 import torch
@@ -608,6 +608,8 @@ def train_from_config(
                     max_steps=training_cfg.max_steps,
                     trial=trial,
                 )
+                if global_step is None:
+                    raise RuntimeError("Expected global_step during training.")
             except Exception as e:
                 # Clean up DataLoader resources (especially important for HPO trials)
                 # to prevent "too many open files" errors in subsequent trials
@@ -799,8 +801,8 @@ def train_from_config(
                     # Also show MSE if available
                     train_mse = train_result.get("mse", {}).get(task_name)
                     train_mse_display = f"{train_mse:.4f}" if train_mse is not None else "n/a"
-                    val_mse = latest_val.get("mse", {}).get(task_name) if latest_val else None
-                    val_mse_display = f"{val_mse:.4f}" if val_mse is not None else "n/a"
+                    val_mse_value = latest_val.get("mse", {}).get(task_name) if latest_val else None
+                    val_mse_display = f"{val_mse_value:.4f}" if val_mse_value is not None else "n/a"
                     print(
                         f"         train_mse={train_mse_display} val_mse={val_mse_display}"
                     )
@@ -852,7 +854,7 @@ def train_from_config(
             if in_swa_phase:
                 # Update SWA averaged model weights
                 if swa_model is not None:
-                    swa_model.update_parameters(model)
+                    swa_model.update_parameters(cast(nn.Module, model))
                     LOGGER.debug(f"Updated SWA model weights at epoch {epoch}")
 
     except KeyboardInterrupt:

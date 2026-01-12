@@ -76,7 +76,7 @@ def build_optimizer(parameters: Iterable[torch.nn.Parameter], cfg: Any) -> torch
         )
     elif optimizer_name == "adamw_8bit":
         try:
-            import bitsandbytes as bnb
+            import bitsandbytes as bnb  # type: ignore[unresolved-import]
         except ImportError as exc:
             raise ImportError(
                 "bitsandbytes is required for adamw_8bit optimizer. "
@@ -246,13 +246,16 @@ def run_evaluation(
                         health_code = random.choice(["H", "PD"])
 
                         # Build caption using the weighted dataset format
-                        metadata = {
-                            "age": int(age_val),
-                            "gender": str(gender_code),
-                            "health": str(health_code),
-                            "modality": str(cfg.settings.data_type),
-                        }
-                        caption = _build_caption(**metadata)
+                        age_val_i = int(age_val)
+                        gender_code_s = str(gender_code)
+                        health_code_s = str(health_code)
+                        modality_s = str(cfg.settings.data_type)
+                        caption = _build_caption(
+                            age=age_val_i,
+                            gender=gender_code_s,
+                            health=health_code_s,
+                            modality=modality_s,
+                        )
                         captions.append(caption)
 
                     conditioning_input = captions
