@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Iterable, Mapping, Any
+from typing import Iterable, Mapping
 
 import torch
 from accelerate import Accelerator
@@ -14,7 +14,6 @@ from transformers import AutoTokenizer
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
 from signal_diffusion.diffusion.models.base import (
-    DiffusionAdapter,
     DiffusionModules,
     create_noise_tensor,
     finalize_generated_sample,

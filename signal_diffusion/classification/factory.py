@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Iterable, Mapping, MutableMapping, Sequence
+from typing import Iterable, MutableMapping, Sequence
 
 import torch
 from torch import nn

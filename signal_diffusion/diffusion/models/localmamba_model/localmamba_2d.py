@@ -16,15 +16,11 @@ Ported from LocalVMamba and adapted for diffusion modeling.
 from dataclasses import dataclass
 from functools import reduce
 import math
-from typing import Union
 
 from einops import rearrange
 import torch
 from torch import nn
 from torch.nn import functional as F
-
-from .vmamba_blocks import VSSBlock, PatchMerging2D
-from .flags import LocalMambaFlags
 
 
 # ============================================================================

@@ -13,7 +13,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
-from signal_diffusion.diffusion.models.base import DiffusionAdapter, DiffusionModules, registry
+from signal_diffusion.diffusion.models.base import DiffusionModules, registry
 from signal_diffusion.log_setup import get_logger
 
 

@@ -103,7 +103,7 @@ class MetricsLogger:
         if mlflow_tracking_uri:
             try:
                 import mlflow
-            except ImportError as exc:  # pragma: no cover - optional dependency
+            except ImportError:  # pragma: no cover - optional dependency
                 LOGGER.warning("MLflow tracking URI configured but 'mlflow' is not installed")
             else:
                 mlflow.set_tracking_uri(mlflow_tracking_uri)

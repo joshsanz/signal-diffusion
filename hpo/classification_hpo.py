@@ -3,7 +3,6 @@ Hyperparameter tuning for classification training using Optuna.
 Uses TPESampler and HyperbandPruner for efficient hyperparameter optimization.
 """
 
-import os
 import sys
 import gc
 import json
@@ -12,7 +11,6 @@ import logging
 import coloredlogs
 from pathlib import Path
 from typing import Dict, Any
-from datetime import datetime
 
 import torch
 import optuna
@@ -47,6 +45,26 @@ SEARCH_SPACE = {
     "embedding_dim": [192, 256, 384],
     "batch_size": [192],
 }
+
+
+def _get_float_range(name: str) -> tuple[float, float]:
+    values = SEARCH_SPACE.get(name)
+    if not isinstance(values, (list, tuple)) or len(values) != 2:
+        raise ValueError(f"Expected '{name}' to be a 2-item range, got: {values!r}")
+    low, high = values
+    if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+        raise ValueError(f"Expected '{name}' range values to be numeric, got: {values!r}")
+    return float(low), float(high)
+
+
+def _get_int_range(name: str) -> tuple[int, int]:
+    values = SEARCH_SPACE.get(name)
+    if not isinstance(values, (list, tuple)) or len(values) != 2:
+        raise ValueError(f"Expected '{name}' to be a 2-item range, got: {values!r}")
+    low, high = values
+    if not isinstance(low, int) or not isinstance(high, int):
+        raise ValueError(f"Expected '{name}' range values to be int, got: {values!r}")
+    return low, high
 
 
 def _parse_prune_max(value: str) -> str | int:
@@ -309,34 +327,39 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
             Objective score (higher is better, range ~[0, 1])
         """
         # Sample hyperparameters from search space with log scaling for rates
+        lr_min, lr_max = _get_float_range("learning_rate")
         learning_rate = trial.suggest_float(
             "learning_rate",
-            SEARCH_SPACE["learning_rate"][0],
-            SEARCH_SPACE["learning_rate"][1],
+            lr_min,
+            lr_max,
             log=True,
         )
+        wd_min, wd_max = _get_float_range("weight_decay")
         weight_decay = trial.suggest_float(
             "weight_decay",
-            SEARCH_SPACE["weight_decay"][0],
-            SEARCH_SPACE["weight_decay"][1],
+            wd_min,
+            wd_max,
             log=True,
         )
         scheduler = trial.suggest_categorical("scheduler", SEARCH_SPACE["scheduler"])
+        dropout_min, dropout_max = _get_float_range("dropout")
         dropout = trial.suggest_float(
             "dropout",
-            SEARCH_SPACE["dropout"][0],
-            SEARCH_SPACE["dropout"][1],
+            dropout_min,
+            dropout_max,
             log=False,
         )
+        depth_min, depth_max = _get_int_range("depth")
         depth = trial.suggest_int(
             "depth",
-            SEARCH_SPACE["depth"][0],
-            SEARCH_SPACE["depth"][1],
+            depth_min,
+            depth_max,
         )
+        repeats_min, repeats_max = _get_int_range("layer_repeats")
         layer_repeats = trial.suggest_int(
             "layer_repeats",
-            SEARCH_SPACE["layer_repeats"][0],
-            SEARCH_SPACE["layer_repeats"][1],
+            repeats_min,
+            repeats_max,
         )
         embedding_dim = trial.suggest_categorical(
             "embedding_dim",
@@ -485,7 +508,7 @@ def main():
             sys.exit(1)
         logger.info(f"Optimizing for task: {args.optimize_task}")
     else:
-        logger.info(f"Optimizing for combined objective (mean of all tasks)")
+        logger.info("Optimizing for combined objective (mean of all tasks)")
 
     # Override output directory if specified
     if args.output_dir:

@@ -1,7 +1,6 @@
 """Tests for reconstruction quality metrics."""
 import math
 
-import pytest
 import torch
 
 from signal_diffusion.metrics import compute_batch_psnr, compute_psnr

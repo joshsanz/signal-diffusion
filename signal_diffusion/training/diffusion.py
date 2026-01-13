@@ -214,10 +214,14 @@ def train(
                   else run_dir / "tensorboard")
     LOGGER.info(f"Tracking run name {run_name}")
     LOGGER.info(f"Tracking log dir {log_dir}")
-    project_config = ProjectConfiguration(project_dir=str(run_dir),
-                                          logging_dir=log_dir,
-                                          automatic_checkpoint_naming=False,
-                                          total_limit=cfg.training.checkpoint_total_limit)
+    project_config_kwargs: dict[str, Any] = {
+        "project_dir": str(run_dir),
+        "logging_dir": log_dir,
+        "automatic_checkpoint_naming": False,
+    }
+    if cfg.training.checkpoint_total_limit is not None:
+        project_config_kwargs["total_limit"] = int(cfg.training.checkpoint_total_limit)
+    project_config = ProjectConfiguration(**project_config_kwargs)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         mixed_precision=cfg.training.mixed_precision,
@@ -342,7 +346,7 @@ def train(
             update_after_step=int(cfg.training.ema_update_after_step),
             use_ema_warmup=bool(cfg.training.ema_use_ema_warmup),
             model_cls=type(modules.denoiser),
-            model_config=getattr(modules.denoiser, "config", None),
+            model_config=getattr(modules.denoiser, "config", None) or {},
         )
         modules.ema = ema_model
         if accelerator.is_main_process:
@@ -545,7 +549,7 @@ def train(
         if not resume_from_checkpoint.is_dir():
             raise ValueError(f"Checkpoint path {resume_from_checkpoint} is not a directory.")
 
-        accelerator.load_state(resume_from_checkpoint)
+        accelerator.load_state(str(resume_from_checkpoint))
         if modules.ema is not None:
             modules.ema.to(accelerator.device)
         LOGGER.info(f"Resumed from checkpoint: {resume_from_checkpoint}")

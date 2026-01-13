@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import gc
 import json
-import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 import tomllib
 import torch
@@ -21,21 +20,16 @@ from signal_diffusion.classification import build_classifier, build_dataset, bui
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
 from signal_diffusion.classification.config import (
-    ClassificationConfig,
     DatasetConfig,
     ModelConfig,
     OptimizerConfig,
     SchedulerConfig,
     TrainingConfig,
-    load_classification_config,
 )
 from signal_diffusion.classification.metrics import (
-    MetricsLogger,
     create_metrics_logger,
-    get_mlflow_tracking_uri,
-    get_mlflow_experiment_name,
 )
-from signal_diffusion.training.schedulers import create_scheduler
+from signal_diffusion.training.schedulers import SchedulerType, create_scheduler
 
 LOGGER = get_logger(__name__)
 
@@ -332,7 +326,7 @@ def train_from_config(
         layer_repeats=config.model.layer_repeats,
         extras=config.model.extras,
     )
-    model = build_classifier(classifier_config)
+    model: nn.Module = build_classifier(classifier_config)
 
     if training_cfg.device:
         device = torch.device(training_cfg.device)
@@ -354,7 +348,7 @@ def train_from_config(
     # Compile model if requested
     if training_cfg.compile_model:
         LOGGER.info(f"Compiling model with torch.compile(mode='{training_cfg.compile_mode}')...")
-        model = torch.compile(model, mode=training_cfg.compile_mode)
+        model = cast(nn.Module, torch.compile(model, mode=training_cfg.compile_mode))
         LOGGER.info("Model compilation successful")
 
     # Initialize extras dict from dataset config for time-series metadata
@@ -432,9 +426,10 @@ def train_from_config(
         num_training_steps = training_cfg.epochs * len(train_loader)
     if training_cfg.max_steps > 0:
         num_training_steps = min(num_training_steps, training_cfg.max_steps)
+    scheduler_type = cast(SchedulerType, config.scheduler.name)
     lr_scheduler = create_scheduler(
         optimizer,
-        scheduler_type=config.scheduler.name,
+        scheduler_type=scheduler_type,
         num_warmup_steps=config.scheduler.warmup_steps,
         num_training_steps=num_training_steps,
         **config.scheduler.kwargs,
@@ -496,7 +491,7 @@ def train_from_config(
             return swa_model
         return model
 
-    def run_validation() -> dict[str, Any]:
+    def run_validation(val_loader=val_loader) -> dict[str, Any]:
         result, _ = _run_epoch(
             _get_eval_model(),
             data_loader=val_loader,
@@ -608,6 +603,8 @@ def train_from_config(
                     max_steps=training_cfg.max_steps,
                     trial=trial,
                 )
+                if global_step is None:
+                    raise RuntimeError("Expected global_step during training.")
             except Exception as e:
                 # Clean up DataLoader resources (especially important for HPO trials)
                 # to prevent "too many open files" errors in subsequent trials
@@ -803,8 +800,8 @@ def train_from_config(
                     # Also show MSE if available
                     train_mse = train_result.get("mse", {}).get(task_name)
                     train_mse_display = f"{train_mse:.4f}" if train_mse is not None else "n/a"
-                    val_mse = latest_val.get("mse", {}).get(task_name) if latest_val else None
-                    val_mse_display = f"{val_mse:.4f}" if val_mse is not None else "n/a"
+                    val_mse_value = latest_val.get("mse", {}).get(task_name) if latest_val else None
+                    val_mse_display = f"{val_mse_value:.4f}" if val_mse_value is not None else "n/a"
                     print(
                         f"         train_mse={train_mse_display} val_mse={val_mse_display}"
                     )
@@ -861,7 +858,7 @@ def train_from_config(
             if in_swa_phase:
                 # Update SWA averaged model weights
                 if swa_model is not None:
-                    swa_model.update_parameters(model)
+                    swa_model.update_parameters(cast(nn.Module, model))
                     LOGGER.debug(f"Updated SWA model weights at epoch {epoch}")
 
     except KeyboardInterrupt:
@@ -1104,6 +1101,7 @@ def _run_epoch(
     if train:
         if optimizer is None:
             raise ValueError("Optimizer must be provided when train=True")
+        optimizer = cast(torch.optim.Optimizer, optimizer)
         model.train()
     else:
         model.eval()
@@ -1156,6 +1154,7 @@ def _run_epoch(
         batch_size = inputs.shape[0]
 
         if train:
+            optimizer = cast(torch.optim.Optimizer, optimizer)
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(train):
@@ -1204,7 +1203,7 @@ def _run_epoch(
             if triggered:
                 # Validation was triggered - immediately check for Optuna pruning
                 # This allows early stopping of poor-performing trials during training
-                if eval_manager.latest_result is not None:
+                if eval_manager is not None and eval_manager.latest_result is not None:
                     # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
                     val_accuracy = eval_manager.latest_result.get("accuracy", {})
                     val_mse = eval_manager.latest_result.get("mse", {})
@@ -1590,6 +1589,12 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
             best_mae_entry = per_task_best_mae.get(task_name)
             if best_mae_entry is None or mae < best_mae_entry["mae"]:
                 per_task_best_mae[task_name] = {"mae": float(mae), "epoch": epoch_metrics.epoch}
+        for task_name, mse in epoch_metrics.val_mse.items():
+            if mse is None:
+                continue
+            best_mse_entry = per_task_best_mse.get(task_name)
+            if best_mse_entry is None or mse < best_mse_entry["mse"]:
+                per_task_best_mse[task_name] = {"mse": float(mse), "epoch": epoch_metrics.epoch}
 
     payload: dict[str, Any] = {
         "run_dir": str(summary.run_dir),
@@ -1612,6 +1617,7 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
             "accuracy": per_task_best_accuracy,
             "loss": per_task_best_loss,
             "mae": per_task_best_mae,
+            "mse": per_task_best_mse,
         },
     }
 

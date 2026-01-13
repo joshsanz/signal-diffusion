@@ -179,7 +179,11 @@ def load_weighted_timeseries(
     samples: list[dict[str, Any]] = []
 
     for dataset_name, group in split_metadata.groupby("dataset"):
-        dataset_stats[dataset_name] = DatasetStats(name=dataset_name, original_samples=len(group))
+        dataset_name_str = str(dataset_name)
+        dataset_stats[dataset_name_str] = DatasetStats(
+            name=dataset_name_str,
+            original_samples=len(group),
+        )
 
     unique_weights = np.unique(scaled_weights)
     progress = tqdm(total=len(scaled_weights), desc="Loading samples", unit="sample")
@@ -196,7 +200,7 @@ def load_weighted_timeseries(
 
         for idx, copies in zip(idxs, copy_schedule):
             row = split_metadata.iloc[int(idx)]
-            dataset_name = row["dataset"]
+            dataset_name = str(row["dataset"])
             root = dataset_roots[dataset_name]
             data_path = root / row["file_name"]
             if not data_path.exists():

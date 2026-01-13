@@ -16,7 +16,7 @@ from functools import partial
 from einops import rearrange
 
 from .ss2d import SS2D, BiAttn
-from .local_scan import LocalScanTriton, LocalReverseTriton, local_scan, local_scan_bchw, local_reverse
+from .local_scan import local_scan, local_scan_bchw, local_reverse
 
 
 class MultiScanVSSM(nn.Module):
@@ -52,7 +52,7 @@ class MultiScanVSSM(nn.Module):
         # return: [B, D, L]
 
         # remove the padded tokens
-        xs = [xs[:, i, :, :l] for i, l in enumerate(self.scan_lengths)]
+        xs = [xs[:, i, :, :length] for i, length in enumerate(self.scan_lengths)]
         xs = self.multi_reverse(xs)
         xs = [self.attn(x.transpose(-2, -1)) for x in xs]
         x = self.forward(xs)

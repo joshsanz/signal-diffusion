@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import tomllib
+from typing import Any, cast
 
 import torch
-import tomllib
 from datasets import load_dataset
 from diffusers import AutoencoderKL
 from torchvision import transforms
@@ -105,15 +106,16 @@ def main() -> None:
 
     pixel_values = preprocess_image(image).to(device=device, dtype=dtype)
 
+    vae_config = cast(Any, vae.config)
     with torch.no_grad():
         latent_dist = vae.encode(pixel_values).latent_dist
-        latents = latent_dist.sample() * vae.config.scaling_factor
+        latents = latent_dist.sample() * vae_config.scaling_factor
 
     print(f"Latent shape: {tuple(latents.shape)}")
     print(f"Latent mean: {latents.mean().item():.4f}, std: {latents.std().item():.4f}")
 
     with torch.no_grad():
-        decoded = vae.decode(latents / vae.config.scaling_factor).sample
+        decoded = vae.decode(latents / vae_config.scaling_factor).sample
 
     orig_path = args.output_dir / f"sample_{args.index}_original.png"
     recon_path = args.output_dir / f"sample_{args.index}_reconstruction.png"
@@ -135,7 +137,7 @@ def main() -> None:
         pixels = preprocess_image(sample_img).to(device=device, dtype=dtype)
         with torch.no_grad():
             latent_dist = vae.encode(pixels).latent_dist
-            sample_latents = latent_dist.sample() * vae.config.scaling_factor
+            sample_latents = latent_dist.sample() * vae_config.scaling_factor
         # Accumulate in float64 to reduce rounding error across the batch of samples.
         sample_latents64 = sample_latents.double()
         total_sum += sample_latents64.sum().item()

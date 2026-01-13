@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sized
 from pathlib import Path
 from typing import Optional
 
@@ -21,13 +22,18 @@ app = typer.Typer()
 
 def get_class_labels(dataset: torch.utils.data.Dataset) -> Optional[list[str]]:
     """Extract class labels from datasets produced by torchvision or Hugging Face."""
-    if hasattr(dataset, "classes"):
-        return list(dataset.classes)
-    if hasattr(dataset, "features"):
-        features = dataset.features
+    classes = getattr(dataset, "classes", None)
+    if isinstance(classes, Iterable):
+        return [str(value) for value in classes]
+    features = getattr(dataset, "features", None)
+    if isinstance(features, Mapping):
         label_feature = features.get("label")
+    elif hasattr(features, "get"):
+        label_feature = features.get("label")
+    else:
+        label_feature = None
         if label_feature is not None and hasattr(label_feature, "names"):
-            return list(label_feature.names)
+            return [str(value) for value in label_feature.names]
     return None
 
 
@@ -77,13 +83,16 @@ def main(
     class_names = get_class_labels(dataset) if conditioning_mode == "classes" else None
     if conditioning_mode == "classes" and not class_names:
         raise ValueError("Class conditioning requested but dataset does not expose class names.")
+    if conditioning_mode == "classes":
+        assert class_names is not None
+        class_names_list = class_names
 
     condition_indices: list[tuple[Optional[int], str]] = []
     if conditioning_mode == "classes":
-        num_classes = len(class_names or [])
+        num_classes = len(class_names_list)
         num_to_select = min(c, num_classes)
         selected_ids = np.random.choice(range(num_classes), num_to_select, replace=False)
-        condition_indices = [(int(idx), str(class_names[idx])) for idx in selected_ids]
+        condition_indices = [(int(idx), str(class_names_list[idx])) for idx in selected_ids]
         print(f"Selected classes: {[name for _, name in condition_indices]}")
     elif conditioning_mode == "caption":
         raise NotImplementedError("Caption-based sampling is not supported by this script yet.")
@@ -115,6 +124,8 @@ def main(
         conditions.append((None, "generated"))
 
     image_height = int(d_config.resolution)
+    if not isinstance(dataset, Sized):
+        raise TypeError("Dataset must be sized to sample reference images.")
     indices = np.arange(len(dataset))
     rng = np.random.default_rng(seed)
     rng.shuffle(indices)

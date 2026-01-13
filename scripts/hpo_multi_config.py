@@ -9,14 +9,12 @@ Runs HPO across different spectrogram types and task objectives:
 Generates descriptively-named output files and summarizes results.
 """
 
-import os
-import sys
 import subprocess
 import json
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import argparse
 
 import coloredlogs
@@ -35,7 +33,7 @@ class HPOConfig:
         task_objective: str,
         config_path: str,
         n_trials: int = 50,
-        timeout: int = None,
+        timeout: Optional[int] = None,
         seed: int = 42,
     ):
         """Initialize HPO config.
@@ -70,7 +68,7 @@ class HPOConfig:
 
 def create_hpo_configs(
     n_trials: int = 50,
-    timeout: int = None,
+    timeout: Optional[int] = None,
     seed: int = 42,
 ) -> List[HPOConfig]:
     """Create HPO configurations for all combinations.
@@ -125,7 +123,7 @@ def get_optimize_task(task_objective: str) -> str:
         raise ValueError(f"Unknown task objective: {task_objective}")
 
 
-def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Path]:
+def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
     """Run a single HPO study.
 
     Args:
@@ -170,7 +168,20 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Path]:
 
     try:
         # Run HPO
-        result = subprocess.run(cmd, cwd="/home/jsanz/git/signal-diffusion", check=True)
+        result = subprocess.run(
+            cmd,
+            cwd="/home/jsanz/git/signal-diffusion",
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.error("HPO run failed with return code %s", result.returncode)
+            if result.stdout:
+                logger.error("HPO stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.error("HPO stderr:\n%s", result.stderr)
+            return False, None
 
         # Find and rename the generated hpo_study_results.json
         hpo_results_path = Path("/home/jsanz/git/signal-diffusion/hpo_study_results.json")
@@ -183,9 +194,6 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Path]:
             logger.error(f"HPO results file not found at {hpo_results_path}")
             return False, None
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"HPO run failed with return code {e.returncode}")
-        return False, None
     except Exception as e:
         logger.error(f"HPO run failed with error: {e}")
         return False, None
@@ -400,7 +408,7 @@ def main():
 
         config_name = f"{config.spec_type}_{config.task_objective}"
 
-        if success:
+        if success and results_path is not None:
             try:
                 hpo_results = load_hpo_results(results_path)
                 summary = summarize_trial_metrics(hpo_results)

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, cast
 
 import numpy as np
 import torch
 import torchvision.transforms.v2 as v2
 from diffusers import AutoencoderKL
-from PIL import Image as PilImage
+from PIL import Image
 import tqdm.auto as tqdm
 
 from .data import ImageFolderConfig, load_imagefolder_dataset
@@ -50,11 +50,12 @@ def generate_vae_dataset(config: VAEGenerationConfig) -> int:
     )
 
     vae = _load_vae(config.model, device)
+    vae_any = cast(Any, vae)
     count = 0
     for batch in tqdm.tqdm(dataloader):
         images = batch.to(device)
         with torch.no_grad():
-            recon = vae(images)
+            recon = vae_any(images)
         recon = recon.sample.permute(0, 2, 3, 1).cpu().float().numpy().clip(-1, 1)
         for image in recon:
             pil_image = _to_pil(image)
@@ -96,9 +97,9 @@ def _load_vae(model_path: str, device: torch.device) -> AutoencoderKL:
     return vae.to(device).eval()
 
 
-def _to_pil(image: np.ndarray) -> PilImage:
+def _to_pil(image: np.ndarray) -> Image.Image:
     image = ((image * 0.5 + 0.5) * 255).astype(np.uint8)
-    return PilImage.fromarray(image)
+    return Image.fromarray(image)
 
 
 def _write_metadata(output_dir: Path, count: int) -> None:
