@@ -697,7 +697,11 @@ def train_from_config(
                     best_epoch = epoch
                     best_metric_step = step_for_log
                     if state_dict is None:
-                        state_dict = eval_model.state_dict()
+                        # Extract state_dict, handling compiled models
+                        if hasattr(eval_model, '_orig_mod'):
+                            state_dict = eval_model._orig_mod.state_dict()
+                        else:
+                            state_dict = eval_model.state_dict()
                     torch.save(state_dict, best_checkpoint)
 
                 # Check early stopping: update patience counter based on metric improvement
@@ -841,7 +845,12 @@ def train_from_config(
                 should_save_checkpoint = checkpoint_manager.on_step(global_step)
 
             if should_save_checkpoint:
-                torch.save(model.state_dict(), checkpoints_dir / f"epoch-{epoch:03d}.pt")
+                # Extract state_dict, handling compiled models
+                if hasattr(model, '_orig_mod'):
+                    epoch_state_dict = model._orig_mod.state_dict()
+                else:
+                    epoch_state_dict = model.state_dict()
+                torch.save(epoch_state_dict, checkpoints_dir / f"epoch-{epoch:03d}.pt")
                 if training_cfg.checkpoint_total_limit is not None and training_cfg.checkpoint_total_limit > 0:
                     periodic_checkpoints = sorted(checkpoints_dir.glob("epoch-*.pt"))
                     while len(periodic_checkpoints) > training_cfg.checkpoint_total_limit:
@@ -886,12 +895,22 @@ def train_from_config(
     swa_checkpoint_path = None
     if training_cfg.swa_enabled and swa_model is not None:
         swa_checkpoint_path = checkpoints_dir / "swa.pt"
-        torch.save(swa_model.state_dict(), swa_checkpoint_path)
+        # Extract state_dict, handling compiled models
+        if hasattr(swa_model, '_orig_mod'):
+            swa_state_dict = swa_model._orig_mod.state_dict()
+        else:
+            swa_state_dict = swa_model.state_dict()
+        torch.save(swa_state_dict, swa_checkpoint_path)
         LOGGER.info(f"SWA model checkpoint saved to {swa_checkpoint_path}")
 
     # Save final checkpoint for recovery if needed
     last_checkpoint = checkpoints_dir / "last.pt"
-    torch.save(model.state_dict(), last_checkpoint)
+    # Extract state_dict, handling compiled models
+    if hasattr(model, '_orig_mod'):
+        last_state_dict = model._orig_mod.state_dict()
+    else:
+        last_state_dict = model.state_dict()
+    torch.save(last_state_dict, last_checkpoint)
 
     # Save epoch-level metrics history
     history_path = run_dir / "history.json"
