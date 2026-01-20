@@ -13,6 +13,7 @@ import argparse
 import gc
 import importlib
 import sys
+import time
 import tomllib
 import traceback
 from pathlib import Path
@@ -164,6 +165,8 @@ def find_max_batch_size(
     train_fn = resolve_train_callable(module)
 
     def run_trial(batch_size: int) -> bool:
+        attempt_start = time.monotonic()
+        print("=" * 80)
         resolved_eval_batch = eval_batch_size or batch_size
         print(f"\nTesting batch_size={batch_size}, eval_batch_size={resolved_eval_batch}")
         success = test_batch_size(
@@ -174,7 +177,10 @@ def find_max_batch_size(
             max_steps,
             temp_dir,
         )
+        elapsed = time.monotonic() - attempt_start
         print("✓ SUCCESS" if success else "✗ FAILED")
+        print(f"Elapsed: {elapsed:.1f}s")
+        print("=" * 80)
         return success
 
     start_size = clamp_start_batch_size(batch_sizes)

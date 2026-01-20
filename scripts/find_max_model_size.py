@@ -16,6 +16,7 @@ import argparse
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Iterator
@@ -260,13 +261,21 @@ def main():
         )
 
         for i, params in enumerate(generate_localmamba_configs(), 1):
-            print(f"\n[{i}] Testing: {params}")
+            attempt_start = time.monotonic()
+            print("=" * 80)
+            print(f"[{i}] Testing: {params}")
             if localmamba_tester.test_config(params, args.batch_size, args.eval_batch_size, timeout=timeout):
+                elapsed = time.monotonic() - attempt_start
                 print("✓ SUCCESS - Found largest working config!")
+                print(f"Elapsed: {elapsed:.1f}s")
+                print("=" * 80)
                 localmamba_result = params
                 break
             else:
+                elapsed = time.monotonic() - attempt_start
                 print("✗ FAILED")
+                print(f"Elapsed: {elapsed:.1f}s")
+                print("=" * 80)
 
     # Test Hourglass
     hourglass_result = None
@@ -279,13 +288,21 @@ def main():
         )
 
         for i, params in enumerate(generate_hourglass_configs(), 1):
-            print(f"\n[{i}] Testing: {params}")
+            attempt_start = time.monotonic()
+            print("=" * 80)
+            print(f"[{i}] Testing: {params}")
             if hourglass_tester.test_config(params, args.batch_size, args.eval_batch_size, timeout=timeout):
+                elapsed = time.monotonic() - attempt_start
                 print("✓ SUCCESS - Found largest working config!")
+                print(f"Elapsed: {elapsed:.1f}s")
+                print("=" * 80)
                 hourglass_result = params
                 break
             else:
+                elapsed = time.monotonic() - attempt_start
                 print("✗ FAILED")
+                print(f"Elapsed: {elapsed:.1f}s")
+                print("=" * 80)
 
     # Print results
     print("\n" + "=" * 80)
