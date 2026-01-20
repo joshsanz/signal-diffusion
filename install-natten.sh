@@ -10,10 +10,11 @@ fi
 # Clone source
 git clone --recursive https://github.com/SHI-Labs/NATTEN
 cd NATTEN
-git checkout "v0.21.0" .
+git checkout "v0.21.1" .
 
 # Change to uv's pip implementation to keep everything local
 sed -i 's/pip /uv pip /' Makefile
+sed -i 's/pip$/uv pip/' Makefile
 sed -i 's/pip3/uv pip/' Makefile
 sed -i 's/-y //' Makefile
 
