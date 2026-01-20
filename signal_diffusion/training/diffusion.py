@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 from dataclasses import asdict
 from datetime import datetime
@@ -205,6 +206,11 @@ def train(
         log_with.append(LoggerType.TENSORBOARD)
     if getattr(cfg.logging, "wandb_project", None):
         log_with.append("wandb")
+
+    # Add MLflow if tracking URI is configured (via MLFLOW_TRACKING_URI env var)
+    mlflow_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if mlflow_uri:
+        log_with.append("mlflow")
 
     # Initialize accelerator and logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -296,10 +296,40 @@ def run_evaluation(
         grid_images = generated[:eval_examples].detach().cpu()
         grid_path = run_dir / f"{global_step:06d}.jpg"
         save_image_grid(grid_images, grid_path, cols=4)
-        accelerator.log({"eval/generated_samples": grid_images}, step=global_step)
+
+        # Log to wandb using log_images for proper image display
+        wandb_tracker = accelerator.get_tracker("wandb")
+        if wandb_tracker:
+            images_list = [img for img in grid_images]
+            wandb_tracker.log_images({"eval/generated_samples": images_list}, step=global_step)
+
+        # Log to tensorboard using log_images
         tb_tracker = accelerator.get_tracker("tensorboard")
         if tb_tracker:
             tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step)  # type: ignore[arg-type]
+
+        # Log to MLflow using mlflow.log_image API
+        mlflow_tracker = accelerator.get_tracker("mlflow")
+        if mlflow_tracker:
+            import mlflow
+            # Convert tensor to numpy format for MLflow
+            # grid_images is (N, C, H, W) with values in [-1, 1]
+            images_np = grid_images.numpy()
+            # Normalize to [0, 1] range for MLflow
+            images_np = (images_np + 1.0) / 2.0
+            # Clip to ensure valid range
+            images_np = images_np.clip(0.0, 1.0)
+
+            # Log each image individually
+            for idx, img_np in enumerate(images_np):
+                # MLflow expects (H, W, C) for RGB or (H, W) for grayscale
+                # Our images are (C, H, W), so transpose
+                if img_np.shape[0] == 3:  # RGB
+                    img_np = img_np.transpose(1, 2, 0)
+                elif img_np.shape[0] == 1:  # Grayscale
+                    img_np = img_np[0]  # Remove channel dimension
+
+                mlflow.log_image(img_np, key=f"eval/generated_samples/image_{idx}", step=global_step)
 
     if eval_mmd_samples > 0:
         gen_for_kid = generated[:eval_mmd_samples]
