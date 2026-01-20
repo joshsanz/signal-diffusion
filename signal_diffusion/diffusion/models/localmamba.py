@@ -474,6 +474,12 @@ class LocalMambaAdapter:
             else:
                 vae = AutoencoderKL.from_pretrained(self._extras.vae, subfolder="vae")
 
+            # Optional: tile VAE decode to reduce peak memory during eval.
+            if cfg.model.vae_tiling and hasattr(vae, "enable_tiling"):
+                vae.enable_tiling()
+                if accelerator.is_main_process:
+                    self._logger.info("Enabled VAE tiling for latent-space decode")
+
             vae.requires_grad_(False)
             vae.to(accelerator.device, dtype=weight_dtype)
 

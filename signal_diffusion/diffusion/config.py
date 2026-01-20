@@ -60,6 +60,7 @@ class ModelConfig:
     revision: str | None = None
     sample_size: int | None = None
     conditioning: str | None = None
+    vae_tiling: bool = False
     extras: MutableMapping[str, Any] = field(default_factory=dict)
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 
@@ -347,7 +348,7 @@ def _load_model(section: Mapping[str, Any]) -> ModelConfig:
     else:
         extras.pop("conditioning", None)
     for key, value in section.items():
-        if key in {"name", "pretrained", "revision", "sample_size", "conditioning", "lora", "extras"}:
+        if key in {"name", "pretrained", "revision", "sample_size", "conditioning", "lora", "extras", "vae_tiling"}:
             continue
         extras[key] = value
     return ModelConfig(
@@ -356,6 +357,7 @@ def _load_model(section: Mapping[str, Any]) -> ModelConfig:
         revision=section.get("revision"),
         sample_size=section.get("sample_size"),
         conditioning=conditioning,
+        vae_tiling=bool(section.get("vae_tiling", False)),
         extras=extras,
         lora=_load_lora(section.get("lora")),
     )
