@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
 Find the largest LocalMamba and Hourglass model configurations that can
-successfully train for at least 10 steps with batch_size=1 and eval_batch_size=1.
+successfully train for at least 10 steps with specified batch sizes.
 
 This script systematically tests model configurations from largest to smallest
 and reports the first (largest) working configuration for each model type.
+By default, it uses batch_size=1 and eval_batch_size=1, but these can be
+customized via command line arguments to find max model sizes for different
+batch configurations.
 """
 
 from __future__ import annotations
@@ -96,11 +99,13 @@ class ConfigTester:
         self.temp_dir = Path(f"runs/model-size-tests/{model_type}")
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-    def test_config(self, params: dict, timeout: int | None = 300) -> bool:
+    def test_config(self, params: dict, batch_size: int = 1, eval_batch_size: int = 1, timeout: int | None = 300) -> bool:
         """Test if a config can train for 10 steps.
 
         Args:
             params: Model parameters to test (depths, dims/widths, mlp_ratio)
+            batch_size: Batch size to use for training (default: 1)
+            eval_batch_size: Eval batch size to use for training (default: 1)
             timeout: Timeout in seconds, or None to disable timeout
 
         Returns:
@@ -111,8 +116,8 @@ class ConfigTester:
             config = tomllib.load(f)
 
         # 2. Apply modifications
-        config["dataset"]["batch_size"] = 1
-        config["dataset"]["eval_batch_size"] = 1
+        config["dataset"]["batch_size"] = batch_size
+        config["dataset"]["eval_batch_size"] = eval_batch_size
         config["training"]["max_train_steps"] = 10
         config["training"]["epochs"] = 1
         config["training"]["checkpoint_interval"] = 1000
@@ -210,7 +215,7 @@ class ConfigTester:
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(
-        description="Find largest model configs that can train with batch_size=1"
+        description="Find largest model configs that can train with specified batch sizes"
     )
     parser.add_argument(
         "--model",
@@ -235,7 +240,7 @@ def main():
 
     print("=" * 80)
     print("MODEL SIZE FINDER")
-    print("Finding largest models that train with batch_size=1")
+    print(f"Finding largest models that train with batch_size={args.batch_size}, eval_batch_size={args.eval_batch_size}")
     print("Config: db-iq, latent_space=false, adamw_8bit optimizer")
     if timeout:
         print(f"Timeout: {timeout}s per test")
@@ -255,7 +260,7 @@ def main():
 
         for i, params in enumerate(generate_localmamba_configs(), 1):
             print(f"\n[{i}] Testing: {params}")
-            if localmamba_tester.test_config(params, timeout=timeout):
+            if localmamba_tester.test_config(params, args.batch_size, args.eval_batch_size, timeout=timeout):
                 print("✓ SUCCESS - Found largest working config!")
                 localmamba_result = params
                 break
@@ -274,7 +279,7 @@ def main():
 
         for i, params in enumerate(generate_hourglass_configs(), 1):
             print(f"\n[{i}] Testing: {params}")
-            if hourglass_tester.test_config(params, timeout=timeout):
+            if hourglass_tester.test_config(params, args.batch_size, args.eval_batch_size, timeout=timeout):
                 print("✓ SUCCESS - Found largest working config!")
                 hourglass_result = params
                 break
