@@ -63,9 +63,9 @@ Each dataset receives a `root` (raw inputs) and `output` (preprocessed spectrogr
 ## Dataset Processing Pipeline
 
 1. **Configure paths** – copy `config/default.toml` and update raw/output roots as needed (`SIGNAL_DIFFUSION_CONFIG` governs which file is loaded).
-2. **Preprocess spectrograms** – run `uv run python scripts/preprocess_data.py --overwrite` (optionally specify datasets) to materialise spectrograms and per-split metadata beneath each dataset’s configured output directory.
+2. **Preprocess spectrograms** – run `uv run python scripts/preprocess_spectrograms.py --overwrite` (optionally specify datasets) to materialise spectrograms and per-split metadata beneath each dataset's configured output directory.
 3. **Inspect metadata** – verify `{split}-metadata.csv` files under each dataset output (train/val/test folders plus aggregate `metadata.csv`). Each row carries canonical label codes (`gender` as `F`/`M`, `health` as `H`/`PD`, integer `age`) to simplify downstream joins.
-4. **Generate balanced meta dataset** – execute `uv run python scripts/gen_weighted_dataset.py --preprocess --overwrite` (adjust flags as needed) to duplicate samples according to `MetaSampler` weights; the script materialises per-split directories (e.g. `train/`, `test/`), produces split-specific metadata files plus an aggregate `metadata.csv` containing `gender`, `health`, `age`, and an auto-generated caption, saves weight diagnostics, and writes a README with embedded Hugging Face dataset YAML detailing the preprocessing configuration and component counts.
+4. **Generate balanced meta dataset** – execute `uv run python scripts/gen_weighted_spectrogram_dataset.py --preprocess --overwrite --datasets math parkinsons seed longitudinal --tasks gender health age --output-dir data/weighted-dataset` to duplicate samples according to `MetaSampler` weights; the script materialises per-split directories (e.g. `train/`, `test/`), produces split-specific metadata files plus an aggregate `metadata.csv` containing `gender`, `health`, `age`, and an auto-generated caption, saves weight diagnostics, and writes a README with embedded Hugging Face dataset YAML detailing the preprocessing configuration and component counts.
 5. **Point training scripts** – reference the new weighted dataset path in classifier or diffusion configs (update TOML output roots or CLI dataset arguments) before launching experiments.
 
 ## Diffusion Training
@@ -193,6 +193,21 @@ When `swa_enabled = true`, training appends extra SWA epochs after the base sche
 
 Example: `epochs = 30` with defaults yields 30 base epochs + 10 SWA epochs = 40 total.
 
+## Multi-Task Classification Example
+
+To train a multi-task classifier on your weighted dataset:
+
+```bash
+uv run python -m signal_diffusion.training.classification config/classification/test_gender_health_age.toml --output-dir runs/classification/weighted-dataset
+```
+
+This config trains a model to predict:
+- **Gender**: Binary classification (male/female)
+- **Health**: Binary classification (healthy/Parkinson's)
+- **Age**: Regression (continuous age prediction)
+
+The configuration includes task weighting to balance the different loss scales between classification and regression tasks.
+
 ## Metrics & Evaluation
 
 Install the metrics extras to access evaluation tooling:
@@ -204,10 +219,40 @@ uv run python metrics/calculate-metrics.py --help
 
 ## Utility Scripts
 
-- `scripts/preprocess_data.py` – builds spectrograms and metadata from configured datasets.
-- `scripts/gen_weighted_dataset.py` – produces balanced meta datasets with diagnostic outputs.
+- `scripts/preprocess_spectrograms.py` – builds spectrograms and metadata from configured datasets.
+- `scripts/gen_weighted_spectrogram_dataset.py` – produces balanced meta datasets with diagnostic outputs.
+- `scripts/train_with_best_hpo.py` – trains classifier models using best hyperparameters from HPO studies.
+- `scripts/find_max_model_size.py` – determines maximum model size that fits in available GPU memory.
+- `scripts/prep-configs-for-sky.sh` – prepares configuration files for use with SkyPilot on, e.g., Lambda Cloud.
+- `scripts/test_configs.sh` – makes sure all model & conditioning combos run without errors.
 - `scripts/run_classification_training.sh` – helper for classification smoke tests across datasets.
 - `scripts/run_diffusion_training.sh` – convenience wrapper for diffusion training launches.
+
+## Additional Features
+
+### HPO Integration
+The codebase includes extensive Hyperparameter Optimization (HPO) support with Optuna:
+- `hpo/classification_hpo.py` - HPO framework for classification models
+- `hpo_results/` - Stores HPO study results and summaries
+- `scripts/train_with_best_hpo.py` - Trains models using best hyperparameters from HPO studies
+
+### SWA Support
+Stochastic Weight Averaging is available for improved classifier model performance:
+- Configurable SWA epochs and learning rate schedules
+- Automatic weight averaging and checkpoint saving
+- Integrated with existing training loops
+
+### Time-Series Support
+The codebase supports both spectrogram and time-series data formats:
+- Configurable `data_type` parameter in settings
+- Separate preprocessing scripts for each format
+- Compatible with all model architectures
+
+### Multiple Output Types
+Support for different output formats:
+- **db-only**: spectrogram magnitude in decibels
+- **db-iq**: dB magnitude plus linear in-phase/quadrature components
+- **db-polar**: dB magnitude plus polar representation with linear magnitude and phase
 
 ## Data Peculiarities
 
