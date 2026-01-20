@@ -1,9 +1,11 @@
 resources:
   # Optional; if left out, automatically pick the cheapest cloud.
-  infra: lambda
-  # 1x NVIDIA A6000 GPU
-  accelerators: A6000:1
-  autostop: 5m  # Stop after this many idle minutes.
+  infra: lambda/us-west-2
+  # 1x NVIDIA A100 GPU
+  accelerators: A100:1
+  autostop:
+    idle_minutes: 5
+    down: true
 
 file_mounts:
   /data:
@@ -22,8 +24,9 @@ workdir: .
 setup: |
   echo "Running setup."
   curl -LsSf https://astral.sh/uv/install.sh | sh
-  uv venv --seed --python=3.12
-  uv sync
+  uv venv --python=3.12
+  uv pip install "torch>=2.8,<2.9"
+  uv sync --extra gpu
   # Once NATTEN is built, store it to /data for future use.
   ./install-natten.sh
   cp -r NATTEN /data/NATTEN
