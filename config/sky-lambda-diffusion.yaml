@@ -38,5 +38,6 @@ run: |
   export DATASET=db_iq
   export RUN_ID=$(date +%Y%m%d_%H%M%S)
   source .venv/bin/activate
+  ./scripts/prep-configs-for-sky.sh
   ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
   echo "Run completed."
