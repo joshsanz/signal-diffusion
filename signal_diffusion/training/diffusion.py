@@ -312,7 +312,10 @@ def train(
         )
         if cfg.logging.wandb_project:
             hps = flatten_and_sanitize_hparams(asdict(cfg))
-            wandb_tracker = accelerator.get_tracker("wandb")
+            try:
+                wandb_tracker = accelerator.get_tracker("wandb")
+            except ValueError:
+                wandb_tracker = None
             if wandb_tracker is not None:
                 wandb_run = getattr(wandb_tracker, "run", None)
                 if wandb_run is not None:

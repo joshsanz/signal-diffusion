@@ -298,18 +298,27 @@ def run_evaluation(
         save_image_grid(grid_images, grid_path, cols=4)
 
         # Log to wandb using log_images for proper image display
-        wandb_tracker = accelerator.get_tracker("wandb")
+        try:
+            wandb_tracker = accelerator.get_tracker("wandb")
+        except ValueError:
+            wandb_tracker = None
         if wandb_tracker:
             images_list = [img for img in grid_images]
             wandb_tracker.log_images({"eval/generated_samples": images_list}, step=global_step)
 
         # Log to tensorboard using log_images
-        tb_tracker = accelerator.get_tracker("tensorboard")
+        try:
+            tb_tracker = accelerator.get_tracker("tensorboard")
+        except ValueError:
+            tb_tracker = None
         if tb_tracker:
             tb_tracker.log_images({"eval/generated_samples": grid_images}, step=global_step)  # type: ignore[arg-type]
 
         # Log to MLflow using mlflow.log_image API
-        mlflow_tracker = accelerator.get_tracker("mlflow")
+        try:
+            mlflow_tracker = accelerator.get_tracker("mlflow")
+        except ValueError:
+            mlflow_tracker = None
         if mlflow_tracker:
             import mlflow
             # Convert tensor to numpy format for MLflow
