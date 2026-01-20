@@ -10,7 +10,6 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-import time
 from typing import Any, Iterable, Mapping
 
 import torch
@@ -871,28 +870,7 @@ class LocalMambaAdapter:
             unconditional_labels = None
             unconditional_mapping_cond = None
 
-        def _log_cuda_stats(label: str) -> None:
-            if not torch.cuda.is_available():
-                return
-            torch.cuda.synchronize()
-            alloc = torch.cuda.memory_allocated() / (1024 ** 2)
-            reserved = torch.cuda.memory_reserved() / (1024 ** 2)
-            max_alloc = torch.cuda.max_memory_allocated() / (1024 ** 2)
-            max_reserved = torch.cuda.max_memory_reserved() / (1024 ** 2)
-            self._logger.info(
-                "localmamba eval cuda %s | alloc=%.1fMB reserved=%.1fMB max_alloc=%.1fMB max_reserved=%.1fMB",
-                label,
-                alloc,
-                reserved,
-                max_alloc,
-                max_reserved,
-            )
-
         with torch.no_grad():
-            if torch.cuda.is_available():
-                torch.cuda.reset_peak_memory_stats()
-            _log_cuda_stats("start")
-            denoise_start = time.perf_counter()
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
                 if classifier_free:
                     model_input = torch.cat([sample, sample], dim=0)
@@ -930,13 +908,8 @@ class LocalMambaAdapter:
 
                 step_output = scheduler.step(model_output, timestep, sample, return_dict=True)
                 sample = step_output.prev_sample  # type: ignore
-            denoise_elapsed = time.perf_counter() - denoise_start
-            _log_cuda_stats(f"after_denoise t={denoise_elapsed:.2f}s")
 
-        decode_start = time.perf_counter()
         output = finalize_generated_sample(sample, device=device, vae=vae, latent_space=bool(extras.latent_space))
-        decode_elapsed = time.perf_counter() - decode_start
-        _log_cuda_stats(f"after_decode t={decode_elapsed:.2f}s")
         return output
 
 
