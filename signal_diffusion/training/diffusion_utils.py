@@ -1,9 +1,11 @@
 """Shared helpers for diffusion-based training pipelines."""
 from __future__ import annotations
 
+import logging
 import math
 import os
 import random
+import time
 from collections import deque
 from argparse import Namespace
 from pathlib import Path
@@ -34,6 +36,8 @@ __all__ = [
     "setup_repository",
     "build_image_caption_dataloader",
 ]
+
+LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +157,23 @@ def run_evaluation(
     if eval_examples <= 0 and eval_mmd_samples <= 0:
         return {}
 
+    def _log_cuda_stats(label: str) -> None:
+        if not torch.cuda.is_available():
+            return
+        torch.cuda.synchronize()
+        alloc = torch.cuda.memory_allocated() / (1024 ** 2)
+        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+        max_alloc = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        max_reserved = torch.cuda.max_memory_reserved() / (1024 ** 2)
+        LOGGER.info(
+            "eval cuda %s | alloc=%.1fMB reserved=%.1fMB max_alloc=%.1fMB max_reserved=%.1fMB",
+            label,
+            alloc,
+            reserved,
+            max_alloc,
+            max_reserved,
+        )
+
     num_generate = max(eval_examples, eval_mmd_samples, 1)
 
     eval_gen_seed = getattr(cfg.training, "eval_gen_seed", None)
@@ -172,6 +193,9 @@ def run_evaluation(
     generated_samples = []
     try:
         with torch.no_grad():
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+            _log_cuda_stats("start")
             num_classes = int(getattr(cfg.dataset, "num_classes", 0) or 0)
             unconditional_eval = 0
             if eval_examples > 0:
@@ -261,6 +285,7 @@ def run_evaluation(
                 else:
                     conditioning_input = None
 
+                batch_start = time.perf_counter()
                 generated_batch = adapter.generate_conditional_samples(
                     accelerator,
                     cfg,
@@ -271,6 +296,8 @@ def run_evaluation(
                     conditioning=conditioning_input,
                     generator=generator,
                 )
+                elapsed = time.perf_counter() - batch_start
+                _log_cuda_stats(f"after_generate bs={batch_size} t={elapsed:.2f}s")
                 generated_samples.append(generated_batch.cpu())
 
                 total_remaining -= batch_size
@@ -281,6 +308,7 @@ def run_evaluation(
                     task_queue[0] = (task_type, task_count)
                 pbar.update(batch_size)
         generated = torch.cat(generated_samples, dim=0)
+        _log_cuda_stats("after_concat")
     finally:
         if was_training:
             modules.denoiser.train()
@@ -351,7 +379,11 @@ def run_evaluation(
         else:
             ref_dataset = train_loader.dataset
 
+        _log_cuda_stats("before_kid")
+        kid_start = time.perf_counter()
         kid_mean, kid_std = compute_kid_score(gen_for_kid, ref_dataset)
+        kid_elapsed = time.perf_counter() - kid_start
+        _log_cuda_stats(f"after_kid t={kid_elapsed:.2f}s")
         metrics["eval/kid_mean"] = kid_mean
         metrics["eval/kid_std"] = kid_std
 
