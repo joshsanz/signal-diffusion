@@ -84,6 +84,7 @@ def update_config_for_test(
     config["training"]["checkpoint_interval"] = max_steps + 1
     config["training"]["eval_strategy"] = "no"
     config["training"]["eval_batch_size"] = eval_batch_size
+    config["training"]["initial_eval"] = False
 
     # Disable common logging to reduce overhead in quick tests.
     logging_cfg = config.get("logging")

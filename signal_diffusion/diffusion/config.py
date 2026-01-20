@@ -140,6 +140,7 @@ class TrainingConfig:
     eval_strategy: str = "epoch"
     eval_num_steps: int = 0
     eval_batch_size: int = 0
+    initial_eval: bool = True
 
 
 @dataclass(slots=True)
@@ -456,6 +457,7 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         eval_strategy=strategy,
         eval_num_steps=int(section.get("eval_num_steps", 0)),
         eval_batch_size=int(section.get("eval_batch_size", 0)),
+        initial_eval=bool(section.get("initial_eval", True)),
     )
 
 

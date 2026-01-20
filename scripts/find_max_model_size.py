@@ -122,6 +122,7 @@ class ConfigTester:
         config["training"]["epochs"] = 1
         config["training"]["checkpoint_interval"] = 1000
         config["training"]["eval_strategy"] = "no"
+        config["training"]["initial_eval"] = False
         config["logging"]["tensorboard"] = False
         config["optimizer"]["name"] = "adamw_8bit"
 

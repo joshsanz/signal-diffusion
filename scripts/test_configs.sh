@@ -177,6 +177,15 @@ test_config_with_conditioning() {
                 awk "/^\[dataset\]/{p=1} p && !done && /^[a-zA-Z]/{print \"num_classes = 0\"; done=1} {print}" "$temp_config" > "$temp_config.tmp" && mv "$temp_config.tmp" "$temp_config"
             fi
         fi
+
+        # Disable initial evaluation for quick config tests.
+        if grep -q "^initial_eval = " "$temp_config"; then
+            sed -i "s/^initial_eval = .*/initial_eval = false/" "$temp_config"
+        elif grep -q "^\[training\]" "$temp_config"; then
+            awk "/^\\[training\\]/{print; print \"initial_eval = false\"; next}1" "$temp_config" > "$temp_config.tmp" && mv "$temp_config.tmp" "$temp_config"
+        else
+            printf "\n[training]\ninitial_eval = false\n" >> "$temp_config"
+        fi
     else
         echo -e "${YELLOW}⊘ SKIPPED${NC} $test_name (config not found)"
         SKIPPED=$((SKIPPED + 1))

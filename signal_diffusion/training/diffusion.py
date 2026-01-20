@@ -530,7 +530,8 @@ def train(
             dtype,
         )
 
-    if accelerator.is_main_process:
+    if accelerator.is_main_process and cfg.training.initial_eval:
+        # Optionally run a baseline evaluation before training starts.
         LOGGER.info("Running initial evaluation...")
         torch.cuda.empty_cache()
         with ema_weights_context(accelerator, modules):
