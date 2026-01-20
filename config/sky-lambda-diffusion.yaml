@@ -28,8 +28,8 @@ setup: |
   uv pip install "torch>=2.8,<2.9"
   uv sync --extra gpu
   # Once NATTEN is built, store it to /data for future use.
-  ./install-natten.sh
-  cp -r NATTEN /data/NATTEN
+  # ./install-natten.sh
+  # cp -r NATTEN /data/NATTEN
   # If NATTEN is already built, install it from /data.
   # uv pip install -e /data/NATTEN
 

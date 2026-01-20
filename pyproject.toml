@@ -74,6 +74,11 @@ docs = [
 [tool.setuptools.packages.find]
 include = ["signal_diffusion*"]
 
+[[tool.uv.index]]
+name = "local-wheels"
+url = "file:///data/wheels"
+priority = "default"
+
 # [tool.uv.extra-build-dependencies]
 # mamba-ssm = ["torch"]
 # Tried to fix need for prior torch install when building mamba-ssm, but didn't work.
