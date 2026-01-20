@@ -276,20 +276,7 @@ def main() -> None:
         default=10,
         help="Number of steps required for success (default: 10).",
     )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=300,
-        help="Timeout per test in seconds (default: 300). Not enforced for in-process runs.",
-    )
-    parser.add_argument(
-        "--no-timeout",
-        action="store_true",
-        help="Disable timeout (let tests run indefinitely).",
-    )
     args = parser.parse_args()
-
-    timeout = None if args.no_timeout else args.timeout
     batch_sizes = build_batch_sizes(args.max_batch_size)
 
     print("=" * 80)
@@ -298,10 +285,6 @@ def main() -> None:
     print(f"Trainer module: {args.trainer_module}")
     print(f"Batch sizes: {batch_sizes}")
     print(f"Start batch size: {START_BATCH_SIZE}")
-    if timeout:
-        print(f"Timeout: {timeout}s per test (not enforced for in-process runs)")
-    else:
-        print("Timeout: DISABLED")
     print("=" * 80)
 
     max_ok = find_max_batch_size(
