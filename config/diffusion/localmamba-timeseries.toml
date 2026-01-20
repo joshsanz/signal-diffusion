@@ -89,6 +89,7 @@ ema_update_after_step = 1000
 tensorboard = true
 run_name = "localmamba-timeseries"
 log_dir = "runs/diffusion/tensorboard/localmamba-timeseries"
+wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 10

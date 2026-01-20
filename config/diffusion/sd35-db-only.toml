@@ -80,6 +80,7 @@ ema_update_after_step = 1000
 tensorboard = true
 run_name = "sd35-db-only"
 log_dir = "runs/diffusion/tensorboard/sd35-db-only"
+wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 10

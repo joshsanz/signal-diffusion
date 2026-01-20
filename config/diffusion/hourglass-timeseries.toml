@@ -93,6 +93,7 @@ ema_update_after_step = 1000
 tensorboard = true
 run_name = "hourglass-timeseries"
 log_dir = "runs/diffusion/tensorboard/hourglass-timeseries"
+wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 25

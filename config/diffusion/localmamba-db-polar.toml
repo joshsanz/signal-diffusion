@@ -87,6 +87,7 @@ ema_update_after_step = 1000
 tensorboard = true
 log_dir = "runs/diffusion/tensorboard/localmamba-db-polar"
 run_name = "localmamba_db_polar"
+wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 10
