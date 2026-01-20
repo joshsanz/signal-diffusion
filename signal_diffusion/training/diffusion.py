@@ -299,7 +299,7 @@ def train(
         project_name = cfg.logging.wandb_project or "signal_diffusion"
         init_kwargs: dict[str, Any] = {}
         if cfg.logging.wandb_project:
-            init_kwargs["wandb"] = {"run_name": run_name}
+            init_kwargs["wandb"] = {"name": run_name}
         accelerator.init_trackers(
             project_name,
             init_kwargs=init_kwargs,
