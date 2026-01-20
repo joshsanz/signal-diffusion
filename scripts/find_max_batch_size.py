@@ -2,18 +2,23 @@
 """
 Find the maximum batch size that can run a short training loop for a config.
 
-Batch sizes are tested in this order: 1, 2, 4, then multiples of 4.
+Batch sizes are restricted to 1, 2, 4, and multiples of 4. The search starts
+at batch size 8, expands by doubling or halving to bracket success/failure,
+then uses binary search to find the best working size.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
-import subprocess
+import gc
+import importlib
 import sys
 import tomllib
+import traceback
 from pathlib import Path
-from typing import Iterable
+import torch
+
+START_BATCH_SIZE = 8
 
 try:
     import tomli_w
@@ -41,19 +46,23 @@ def build_batch_sizes(max_batch_size: int) -> list[int]:
     return sizes
 
 
-def extract_steps(output: str) -> int:
-    """Extract completed steps from training output."""
-    # First try the explicit completion line.
-    match = re.search(r"Completed training after (\d+) steps", output)
-    if match:
-        return int(match.group(1))
+def clamp_start_batch_size(allowed_sizes: list[int]) -> int:
+    """Clamp the starting batch size to the closest allowed size <= start."""
+    for size in reversed(allowed_sizes):
+        if size <= START_BATCH_SIZE:
+            return size
+    return allowed_sizes[0]
 
-    # Fallback to scanning for step numbers in logs.
-    matches = re.findall(r"step[:\s]+(\d+)", output, re.IGNORECASE)
-    if matches:
-        return max(int(m) for m in matches)
 
-    return 0
+def resolve_train_callable(module_path: str):
+    """Resolve the training function from a module path."""
+    module = importlib.import_module(module_path)
+    train_fn = getattr(module, "train", None)
+    if train_fn is None:
+        raise ValueError(
+            f"Training module '{module_path}' does not expose a 'train' function."
+        )
+    return train_fn
 
 
 def update_config_for_test(
@@ -74,48 +83,22 @@ def update_config_for_test(
     config["training"]["epochs"] = 1
     config["training"]["checkpoint_interval"] = max_steps + 1
     config["training"]["eval_strategy"] = "no"
+    config["training"]["eval_batch_size"] = eval_batch_size
 
     # Disable common logging to reduce overhead in quick tests.
     logging_cfg = config.get("logging")
     if isinstance(logging_cfg, dict):
         logging_cfg["tensorboard"] = False
-        logging_cfg["wandb"] = False
-
-
-def run_training(
-    module: str,
-    config_path: Path,
-    output_dir: Path,
-    timeout: int | None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the training module with a config path."""
-    cmd = [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        module,
-        str(config_path),
-        "--output-dir",
-        str(output_dir),
-    ]
-
-    # Keep logs in-process for parsing and file output.
-    return subprocess.run(
-        cmd,
-        timeout=timeout,
-        capture_output=True,
-        text=True,
-    )
+        logging_cfg.pop("wandb_project", None)
+        logging_cfg.pop("wandb_entity", None)
 
 
 def test_batch_size(
     base_config_path: Path,
-    module: str,
+    train_fn,
     batch_size: int,
     eval_batch_size: int,
     max_steps: int,
-    timeout: int | None,
     temp_dir: Path,
 ) -> bool:
     """Test a single batch size against the given config."""
@@ -127,64 +110,138 @@ def test_batch_size(
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_config = temp_dir / f"test_batch_{batch_size}.toml"
     log_file = temp_dir / f"test_batch_{batch_size}.txt"
+    output_dir = temp_dir / f"batch_{batch_size}"
 
     try:
         with open(temp_config, "wb") as f:
             tomli_w.dump(config, f)
 
-        result = run_training(module, temp_config, temp_dir / "output", timeout)
-
+        # Invoke the training function directly to catch CUDA OOM errors.
+        train_fn(
+            config_path=temp_config,
+            output_dir=output_dir,
+            resume_from_checkpoint=None,
+            max_train_steps=max_steps,
+        )
+        return True
+    except torch.cuda.OutOfMemoryError as exc:
         with open(log_file, "w") as f:
-            f.write("=== STDOUT ===\n")
-            f.write(result.stdout)
-            f.write("\n\n=== STDERR ===\n")
-            f.write(result.stderr)
-
-        if result.returncode != 0:
-            return False
-
-        steps_completed = extract_steps(result.stdout + result.stderr)
-        return steps_completed >= max_steps
-    except subprocess.TimeoutExpired:
-        print(f"  (timed out after {timeout}s)")
+            f.write("CUDA OutOfMemoryError\n")
+            f.write(repr(exc))
+        print("  (CUDA out of memory)")
         return False
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "out of memory" in message:
+            with open(log_file, "w") as f:
+                f.write("RuntimeError: out of memory\n")
+                f.write("".join(traceback.format_exception(*sys.exc_info())))
+            print("  (CUDA out of memory)")
+            return False
+        raise
+    except Exception:
+        with open(log_file, "w") as f:
+            f.write("".join(traceback.format_exception(*sys.exc_info())))
+        raise
     finally:
         if temp_config.exists():
             temp_config.unlink()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
 
 
 def find_max_batch_size(
     base_config_path: Path,
     module: str,
-    batch_sizes: Iterable[int],
+    batch_sizes: list[int],
     eval_batch_size: int | None,
     max_steps: int,
-    timeout: int | None,
 ) -> int | None:
     """Return the largest batch size that succeeds for the given config."""
     temp_dir = Path("runs/model-size-tests/batch-size")
-    max_ok: int | None = None
+    train_fn = resolve_train_callable(module)
 
-    for batch_size in batch_sizes:
+    def run_trial(batch_size: int) -> bool:
         resolved_eval_batch = eval_batch_size or batch_size
         print(f"\nTesting batch_size={batch_size}, eval_batch_size={resolved_eval_batch}")
-
-        if test_batch_size(
+        success = test_batch_size(
             base_config_path,
-            module,
+            train_fn,
             batch_size,
             resolved_eval_batch,
             max_steps,
-            timeout,
             temp_dir,
-        ):
-            print("✓ SUCCESS")
-            max_ok = batch_size
-        else:
-            print("✗ FAILED")
-            break
+        )
+        print("✓ SUCCESS" if success else "✗ FAILED")
+        return success
 
-    return max_ok
+    start_size = clamp_start_batch_size(batch_sizes)
+    start_index = batch_sizes.index(start_size)
+
+    print(f"Starting at batch_size={start_size}")
+    start_success = run_trial(start_size)
+
+    if start_success:
+        low_idx = start_index
+        high_idx = None
+        current_idx = start_index
+
+        while True:
+            next_target = batch_sizes[current_idx] * 2
+            next_idx = None
+            for i, size in enumerate(batch_sizes):
+                if size >= next_target:
+                    next_idx = i
+                    break
+            if next_idx is None or next_idx == current_idx:
+                return batch_sizes[current_idx]
+
+            if run_trial(batch_sizes[next_idx]):
+                current_idx = next_idx
+                low_idx = current_idx
+            else:
+                high_idx = next_idx
+                break
+
+        if high_idx is None:
+            return batch_sizes[low_idx]
+    else:
+        high_idx = start_index
+        low_idx = None
+        current_idx = start_index
+
+        while current_idx > 0:
+            next_target = batch_sizes[current_idx] // 2
+            next_idx = None
+            for i in range(current_idx - 1, -1, -1):
+                if batch_sizes[i] <= next_target:
+                    next_idx = i
+                    break
+            if next_idx is None:
+                next_idx = 0
+
+            if next_idx == current_idx:
+                break
+
+            if run_trial(batch_sizes[next_idx]):
+                low_idx = next_idx
+                break
+
+            current_idx = next_idx
+            high_idx = current_idx
+
+        if low_idx is None:
+            return None
+
+    while high_idx - low_idx > 1:
+        mid_idx = (low_idx + high_idx) // 2
+        if run_trial(batch_sizes[mid_idx]):
+            low_idx = mid_idx
+        else:
+            high_idx = mid_idx
+
+    return batch_sizes[low_idx]
 
 
 def main() -> None:
@@ -199,7 +256,7 @@ def main() -> None:
     parser.add_argument(
         "--trainer-module",
         default="signal_diffusion.training.diffusion",
-        help="Python module to execute for training.",
+        help="Python module exposing a train(config_path, output_dir, resume_from_checkpoint, max_train_steps) function.",
     )
     parser.add_argument(
         "--max-batch-size",
@@ -223,7 +280,7 @@ def main() -> None:
         "--timeout",
         type=int,
         default=300,
-        help="Timeout per test in seconds (default: 300).",
+        help="Timeout per test in seconds (default: 300). Not enforced for in-process runs.",
     )
     parser.add_argument(
         "--no-timeout",
@@ -240,8 +297,9 @@ def main() -> None:
     print(f"Config: {args.config}")
     print(f"Trainer module: {args.trainer_module}")
     print(f"Batch sizes: {batch_sizes}")
+    print(f"Start batch size: {START_BATCH_SIZE}")
     if timeout:
-        print(f"Timeout: {timeout}s per test")
+        print(f"Timeout: {timeout}s per test (not enforced for in-process runs)")
     else:
         print("Timeout: DISABLED")
     print("=" * 80)
@@ -252,7 +310,6 @@ def main() -> None:
         batch_sizes,
         args.eval_batch_size,
         args.max_steps,
-        timeout,
     )
 
     print("\n" + "=" * 80)
