@@ -7,6 +7,7 @@
 - Before beginning complex tasks, create a detailed plan and present it to the user for approval.
 - Ask the user for clarification before making decisions that you are unsure about.
 - Prefer using tools to modify/create files over workarounds like `echo` calls in shell commands. This makes it easier for the user to follow along with your actions.
+- You may use non-destructive and side-effect free shell commands like `rg`, `git status`, `find`, `cat` without asking for approval.
 
 ## Project Structure & Module Organization
 

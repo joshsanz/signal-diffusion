@@ -222,7 +222,8 @@ uv run python metrics/calculate-metrics.py --help
 - `scripts/preprocess_spectrograms.py` – builds spectrograms and metadata from configured datasets.
 - `scripts/gen_weighted_spectrogram_dataset.py` – produces balanced meta datasets with diagnostic outputs.
 - `scripts/train_with_best_hpo.py` – trains classifier models using best hyperparameters from HPO studies.
-- `scripts/find_max_model_size.py` – determines maximum model size that fits in available GPU memory.
+- `scripts/find_max_model_size.py` – determines maximum model size that fits in available GPU memory for a give batch size.
+- `scripts/find_max_batch_size.py` – determines maximum batch size that fits in available GPU memory for a given model.
 - `scripts/prep-configs-for-sky.sh` – prepares configuration files for use with SkyPilot on, e.g., Lambda Cloud.
 - `scripts/test_configs.sh` – makes sure all model & conditioning combos run without errors.
 - `scripts/run_classification_training.sh` – helper for classification smoke tests across datasets.
