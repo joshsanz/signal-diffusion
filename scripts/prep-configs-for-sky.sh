@@ -15,3 +15,8 @@ uv run python scripts/edit_config.py -c config/diffusion/*-db-polar.toml \
 
 uv run python scripts/edit_config.py -c config/diffusion/*-timeseries.toml \
     -s dataset.name="/data/processed/reweighted_timeseries_meta_dataset_n2048_fs125"
+
+# Disable vae tiling for performance
+uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
+    -s model.vae_tiling=false
+

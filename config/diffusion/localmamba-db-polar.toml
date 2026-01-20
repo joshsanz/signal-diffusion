@@ -26,6 +26,7 @@ name = "localmamba"
 sample_size = 256
 conditioning = "gend_hlth_age"
 latent_space = true
+vae_tiling = true
 
 [model.extras]
 depths = [2, 2, 2]

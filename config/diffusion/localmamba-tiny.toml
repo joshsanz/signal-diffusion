@@ -21,6 +21,7 @@ num_classes = 102
 name = "localmamba"
 sample_size = 64
 conditioning = "classes" # none, caption, classes
+vae_tiling = true
 
 [model.extras]
 depths = [2, 2, 2]
