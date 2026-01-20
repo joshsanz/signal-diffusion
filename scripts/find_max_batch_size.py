@@ -24,7 +24,10 @@ START_BATCH_SIZE = 8
 try:
     import tomli_w
 except ImportError:
-    print("ERROR: tomli_w not found. Install with: uv pip install tomli-w", file=sys.stderr)
+    print(
+        "ERROR: tomli_w not found. Install with: uv pip install tomli-w",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 
@@ -167,8 +170,10 @@ def find_max_batch_size(
     def run_trial(batch_size: int) -> bool:
         attempt_start = time.monotonic()
         print("=" * 80)
-        resolved_eval_batch = eval_batch_size or batch_size
-        print(f"\nTesting batch_size={batch_size}, eval_batch_size={resolved_eval_batch}")
+        resolved_eval_batch = eval_batch_size or batch_size * 4
+        print(
+            f"\nTesting batch_size={batch_size}, eval_batch_size={resolved_eval_batch}"
+        )
         success = test_batch_size(
             base_config_path,
             train_fn,
@@ -275,7 +280,7 @@ def main() -> None:
         "--eval-batch-size",
         type=int,
         default=None,
-        help="Eval batch size to use (default: same as batch size).",
+        help="Eval batch size to use (default: batch size * 4).",
     )
     parser.add_argument(
         "--max-steps",
