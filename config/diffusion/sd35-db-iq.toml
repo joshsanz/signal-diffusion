@@ -37,8 +37,8 @@ latent_space = true
 enabled = false
 
 [objective]
-prediction_type = "epsilon"
-flow_match_timesteps = 1000
+prediction_type = "vector_field"
+num_timesteps = 1000
 
 [optimizer]
 name = "adamw"
@@ -84,4 +84,4 @@ wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 28
-cfg_scale = 7.5
+cfg_scale = 3.5

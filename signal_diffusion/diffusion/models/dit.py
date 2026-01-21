@@ -74,7 +74,7 @@ class DiTAdapter:
         num_classes_value = extras.get("num_classes", cfg.dataset.num_classes)
         num_classes = int(num_classes_value or 0)
         cfg_dropout = float(extras.get("cfg_dropout", 0.0))
-        timestep_embeddings = int(cfg.objective.flow_match_timesteps or 1000)
+        timestep_embeddings = int(cfg.objective.num_timesteps or 1000)
         text_encoder = extras.get("text_encoder")
         in_channels = int(extras.get("in_channels", 4 if latent_space else 3))
         out_channels = int(extras.get("out_channels", 4 if latent_space else 3))
@@ -186,7 +186,7 @@ class DiTAdapter:
         if cfg.model.lora.enabled:
             raise NotImplementedError("LoRA for DiT models is not yet implemented")
 
-        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.flow_match_timesteps)
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.num_timesteps)
         # noise_scheduler.register_to_config(prediction_type=cfg.objective.prediction_type)
         verify_scheduler(noise_scheduler)
 
@@ -194,7 +194,7 @@ class DiTAdapter:
             self._logger.info(
                 "Noise scheduler %s with %d timesteps and prediction_type=%s",
                 type(noise_scheduler).__name__,
-                cfg.objective.flow_match_timesteps,
+                cfg.objective.num_timesteps,
                 cfg.objective.prediction_type,
             )
 

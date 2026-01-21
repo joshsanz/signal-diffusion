@@ -220,14 +220,14 @@ class StableDiffusion35Adapter:
 
         # Create flow matching scheduler
         noise_scheduler = FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=cfg.objective.flow_match_timesteps
+            num_train_timesteps=cfg.objective.num_timesteps
         )
         verify_scheduler(noise_scheduler)
 
         if accelerator.is_main_process:
             self._logger.info(
                 "Using FlowMatchEulerDiscreteScheduler with %d timesteps",
-                cfg.objective.flow_match_timesteps,
+                cfg.objective.num_timesteps,
             )
 
         # Enable gradient checkpointing if requested

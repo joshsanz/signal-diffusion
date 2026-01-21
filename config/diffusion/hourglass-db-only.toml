@@ -53,7 +53,7 @@ enabled = false
 
 [objective]
 prediction_type = "vector_field"
-flow_match_timesteps = 1000
+num_timesteps = 1000
 
 [optimizer]
 name = "adamw"
@@ -97,4 +97,4 @@ log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 1.0
+cfg_scale = 3.5

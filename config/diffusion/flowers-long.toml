@@ -38,7 +38,7 @@ enabled = false
 
 [objective]
 prediction_type = "vector_field"
-flow_match_timesteps = 1000
+num_timesteps = 1000
 
 [optimizer]
 name = "adamw"
@@ -76,4 +76,4 @@ run_name = "flowers_testing"
 
 [inference]
 denoising_steps = 20
-cfg_scale = 7.5
+cfg_scale = 3.5

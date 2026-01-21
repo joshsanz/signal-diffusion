@@ -71,7 +71,7 @@ class ObjectiveConfig:
 
     prediction_type: str = "epsilon"
     scheduler: str = "ddim"
-    flow_match_timesteps: int = 1000
+    num_timesteps: int = 1000
 
 
 @dataclass(slots=True)
@@ -367,7 +367,7 @@ def _load_objective(section: Mapping[str, Any]) -> ObjectiveConfig:
     return ObjectiveConfig(
         prediction_type=str(section.get("prediction_type", "epsilon")),
         scheduler=str(section.get("scheduler", "ddim")),
-        flow_match_timesteps=int(section.get("flow_match_timesteps", 1000)),
+        num_timesteps=int(section.get("num_timesteps", 1000)),
     )
 
 

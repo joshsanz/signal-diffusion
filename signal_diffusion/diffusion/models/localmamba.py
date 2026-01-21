@@ -439,7 +439,7 @@ class LocalMambaAdapter:
         if accelerator.is_main_process:
             self._logger.info("Building LocalMamba2DModel with extras=%s", self._extras)
 
-        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.flow_match_timesteps)
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.num_timesteps)
         verify_scheduler(noise_scheduler)
 
         model = self._make_model(cfg, self._extras)
