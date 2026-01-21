@@ -26,6 +26,7 @@ setup: |
   curl -LsSf https://astral.sh/uv/install.sh | sh
   cp pyproject.toml.sky pyproject.toml
   uv venv --python=3.12
+  uv pip install --upgrade pip setuptools
   uv sync
   # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
   uv pip install /data/wheels/*.whl
@@ -44,8 +45,12 @@ run: |
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
   python ./scripts/edit_config.py -c config/diffusion/localmamba-*.toml config/diffusion/hourglass-*.toml -s training.initial_eval=false
-  python ./scripts/find_max_batch_size.py --max-batch-size 256 config/diffusion/localmamba-db-iq.toml | tee /data/logs/find_max_batch_size_localmamba.log
-  python ./scripts/find_max_batch_size.py --max-batch-size 256 config/diffusion/hourglass-db-iq.toml | tee /data/logs/find_max_batch_size_hourglass.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 --eval-batch-size 4 \
+    config/diffusion/localmamba-db-iq.toml | tee /data/logs/find_max_batch_size_localmamba.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 \
+    config/diffusion/hourglass-db-iq.toml | tee /data/logs/find_max_batch_size_hourglass.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 --eval-batch-size 4 \
+    config/diffusion/sd35-db-iq.toml | tee /data/logs/find_max_batch_size_sd35.log
   # python ./scripts/find_max_model_size.py --batch-size 8
   # ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
   echo "Run completed."

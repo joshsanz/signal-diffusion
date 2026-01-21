@@ -34,3 +34,13 @@ uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
     -s model.extras.mlp_ratio=4.0
 
 # Set batch sizes to what fits in memory
+uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
+    -s dataset.batch_size=32 \
+    -s training.eval_batch_size=4 \
+    -s training.gradient_accumulation_steps=4
+
+uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml \
+    -s dataset.batch_size=128 \
+    -s training.eval_batch_size=256 \
+    -s training.gradient_accumulation_steps=1
+
