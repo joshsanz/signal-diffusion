@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
+from signal_diffusion.diffusion.guidance import apply_cfg_guidance
 from signal_diffusion.diffusion.models.base import (
     DiffusionModules,
     create_noise_tensor,
@@ -865,46 +866,85 @@ class LocalMambaAdapter:
         else:
             raise TypeError("Unsupported conditioning value for LocalMamba sampling")
 
+        # Early exit optimization: skip CFG when cfg_scale is 1.0
         if classifier_free and cfg_scale_value == 1.0:
             classifier_free = False
             unconditional_labels = None
             unconditional_mapping_cond = None
 
+        # Prepare conditioning vectors for CFG guidance
+        if classifier_free:
+            cond_dict = {}
+            null_cond_dict = {}
+
+            if class_labels is not None and unconditional_labels is not None:
+                cond_dict["class"] = class_labels
+                null_cond_dict["class"] = unconditional_labels
+
+            if mapping_cond is not None:
+                cond_dict["mapping"] = mapping_cond
+                null_cond_dict["mapping"] = (
+                    unconditional_mapping_cond
+                    if unconditional_mapping_cond is not None
+                    else torch.zeros_like(mapping_cond)
+                )
+
+            cond_vector = cond_dict
+            null_cond_vector = null_cond_dict
+
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                if classifier_free:
-                    model_input = torch.cat([sample, sample], dim=0)
-                else:
-                    model_input = sample
+                model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
 
                 timesteps = torch.full((model_input.size(0),), timestep, device=device)
                 sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
 
-                # Prepare class conditioning for CFG
-                if classifier_free and unconditional_labels is not None and class_labels is not None:
-                    class_input = torch.cat([unconditional_labels, class_labels], dim=0)
-                else:
-                    class_input = class_labels
-
-                # Prepare mapping conditioning for CFG
-                if classifier_free and mapping_cond is not None:
-                    if unconditional_mapping_cond is not None:
-                        mapping_input = torch.cat([unconditional_mapping_cond, mapping_cond], dim=0)
-                    else:
-                        mapping_input = torch.cat([torch.zeros_like(mapping_cond), mapping_cond], dim=0)
-                else:
-                    mapping_input = mapping_cond
-
-                with self._checkpoint_context():
-                    model_output = modules.denoiser(
-                        model_input, sigma=sigmas, class_cond=class_input, mapping_cond=mapping_input
-                    )
-
                 if classifier_free:
-                    model_output_uncond, model_output_cond = model_output.chunk(2)
-                    model_output = model_output_uncond + cfg_scale_value * (model_output_cond - model_output_uncond)
+                    # Define model evaluation callback for CFG guidance
+                    def model_eval_fn(model_input_inner, timestep_inner, conditioning):
+                        """Evaluate denoiser, routing conditioning dict to model parameters.
+
+                        conditioning is a dict with keys like 'class' and 'mapping'.
+                        apply_cfg_guidance has already concatenated null+cond for each dict entry.
+                        """
+                        # Extract timesteps for sigma computation
+                        if isinstance(timestep_inner, torch.Tensor):
+                            timesteps_inner = timestep_inner
+                        else:
+                            timesteps_inner = torch.full(
+                                (model_input_inner.size(0),), timestep_inner, device=device
+                            )
+                        sigmas_inner = get_sigmas_from_timesteps(scheduler, timesteps_inner, device=device)
+
+                        class_cond_inner = conditioning.get("class")  # May be None
+                        mapping_cond_inner = conditioning.get("mapping")  # May be None
+
+                        with self._checkpoint_context():
+                            return modules.denoiser(
+                                model_input_inner,
+                                sigma=sigmas_inner,
+                                class_cond=class_cond_inner,
+                                mapping_cond=mapping_cond_inner,
+                            )
+
+                    # Apply CFG guidance (handles batching/concatenation internally)
+                    model_output = apply_cfg_guidance(
+                        x_t=model_input,
+                        timestep=timestep,
+                        model_eval_fn=model_eval_fn,
+                        cond_vector=cond_vector,
+                        null_cond_vector=null_cond_vector,
+                        cfg_scale=cfg_scale_value,
+                        prediction_type=cfg.objective.prediction_type,
+                    )
+                else:
+                    # Unconditional sampling (no CFG)
+                    with self._checkpoint_context():
+                        model_output = modules.denoiser(
+                            model_input, sigma=sigmas, class_cond=class_labels, mapping_cond=mapping_cond
+                        )
 
                 step_output = scheduler.step(model_output, timestep, sample, return_dict=True)
                 sample = step_output.prev_sample  # type: ignore

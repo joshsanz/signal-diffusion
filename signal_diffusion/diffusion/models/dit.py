@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
+from signal_diffusion.diffusion.guidance import apply_cfg_guidance
 from signal_diffusion.diffusion.models.base import (
     DiffusionModules,
     create_noise_tensor,
@@ -354,28 +355,57 @@ class DiTAdapter:
         else:
             raise TypeError("DiT adapter only supports tensor class-label conditioning during sampling")
 
+        # Prepare conditioning vectors for CFG guidance
+        if classifier_free:
+            # DiT only uses class conditioning (no mapping_cond)
+            cond_vector = {"class": class_labels}
+            null_cond_vector = {"class": unconditional_labels}
+
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                if classifier_free:
-                    model_input = torch.cat([sample, sample], dim=0)
-                else:
-                    model_input = sample
+                model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
 
-                denoiser_timestep = timestep.expand(model_input.shape[0])
-                if classifier_free and unconditional_labels is not None and class_labels is not None:
-                    class_input = torch.cat([unconditional_labels, class_labels], dim=0)
-                else:
-                    class_input = class_labels
-
-                model_output = modules.denoiser(
-                    model_input, timestep=denoiser_timestep, class_labels=class_input
-                ).sample
-
                 if classifier_free:
-                    model_output_uncond, model_output_cond = model_output.chunk(2)
-                    model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
+                    # Define model evaluation callback for CFG guidance
+                    def model_eval_fn(model_input_inner, timestep_inner, conditioning):
+                        """Evaluate denoiser, routing conditioning dict to model parameters.
+
+                        conditioning is a dict with key 'class'.
+                        apply_cfg_guidance has already concatenated null+cond for the class labels.
+                        """
+                        # Expand timestep to match batch size (CFG doubles the batch)
+                        if isinstance(timestep_inner, torch.Tensor):
+                            denoiser_timestep_inner = timestep_inner
+                        else:
+                            denoiser_timestep_inner = torch.full(
+                                (model_input_inner.shape[0],), timestep_inner, device=device
+                            )
+
+                        class_labels_inner = conditioning.get("class")
+
+                        # Call model and extract .sample attribute
+                        return modules.denoiser(
+                            model_input_inner, timestep=denoiser_timestep_inner, class_labels=class_labels_inner
+                        ).sample
+
+                    # Apply CFG guidance (handles batching/concatenation internally)
+                    model_output = apply_cfg_guidance(
+                        x_t=model_input,
+                        timestep=timestep,
+                        model_eval_fn=model_eval_fn,
+                        cond_vector=cond_vector,
+                        null_cond_vector=null_cond_vector,
+                        cfg_scale=cfg_scale,
+                        prediction_type=cfg.objective.prediction_type,
+                    )
+                else:
+                    # Unconditional sampling (no CFG)
+                    denoiser_timestep = timestep.expand(model_input.shape[0])
+                    model_output = modules.denoiser(
+                        model_input, timestep=denoiser_timestep, class_labels=class_labels
+                    ).sample
 
                 step_output = scheduler.step(model_output, timestep, sample)
                 sample = getattr(step_output, "prev_sample", step_output[0] if isinstance(step_output, tuple) else step_output)
