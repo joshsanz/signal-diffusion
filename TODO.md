@@ -2,13 +2,16 @@
 
 Tasks for implementing a completed signal diffusion paper
 
-FIX DIFFUSION MODELS
-
-- SWA for classifiers
-    - Fix eval comparison for train best
+- Check uv sync with pre-built wheels on setup
 - Tune diff model hyperparams
-- Train diff models for each data type
+  - model size for batch 8 / 16
+  - batch size for tuned models/sd35
+- Implement rectified cfg++
+- Train diff models for each 
+  - data type 
+  - conditioning
 
+# Completed
 - SOTA diffusion operations
   - [x] based on deep research results
   - [x] careful conditioning with text embeddings and cross-attention
@@ -53,3 +56,4 @@ FIX DIFFUSION MODELS
   - [x] bf16 mixed precision
   - [x] gradient checkpointing and accumulation for reduced memory use
     - Metric: KID for average of last four 1000-step checkpoints (per OLMO 3)
+  - [x] SWA for classifiers

@@ -48,14 +48,14 @@ dependencies = [
 
 # Optional GPU-accelerated packages (CUDA-dependent)
 # Install with: pip install signal-diffusion[gpu]
-[project.optional-dependencies]
-gpu = [
-    "flash-attn<=2.8.3",
+# [project.optional-dependencies]
+# gpu = [
+    # "flash-attn<=2.8.3",
     # "xformers>=0.0.33.post2",
-    "natten>=0.21.1",
-    "causal-conv1d>=1.5.3.post1",
-    "mamba-ssm>2",
-]
+    # "natten>=0.21.1",
+    # "causal-conv1d>=1.5.3.post1",
+    # "mamba-ssm>2",
+# ]
 
 [tool.uv]
 no-build-isolation = true
@@ -73,3 +73,7 @@ docs = [
 
 [tool.setuptools.packages.find]
 include = ["signal_diffusion*"]
+
+# [tool.uv.extra-build-dependencies]
+# mamba-ssm = ["torch"]
+# Tried to fix need for prior torch install when building mamba-ssm, but didn't work.

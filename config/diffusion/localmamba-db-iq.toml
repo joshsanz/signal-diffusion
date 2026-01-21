@@ -25,7 +25,7 @@ data_type = "spectrogram"
 name = "localmamba"
 sample_size = 256
 conditioning = "gend_hlth_age"
-latent_space = false
+latent_space = true
 vae_tiling = true
 
 [model.extras]

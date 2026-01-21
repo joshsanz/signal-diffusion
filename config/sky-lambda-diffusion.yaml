@@ -24,9 +24,12 @@ workdir: .
 setup: |
   echo "Running setup."
   curl -LsSf https://astral.sh/uv/install.sh | sh
+  cp pyproject.toml.sky pyproject.toml
   uv venv --python=3.12
-  uv pip install "torch>=2.8,<2.9"
-  uv sync --extra gpu
+  uv sync
+  # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
+  uv pip install /data/wheels/*.whl
+  mkdir -p /data/logs
   # Once NATTEN is built, store it to /data for future use.
   # ./install-natten.sh
   # cp -r NATTEN /data/NATTEN
@@ -37,10 +40,12 @@ setup: |
 # Invoked under the workdir (i.e., can use its files).
 run: |
   echo "Hello, SkyPilot!"
-  export MODEL=hourglass
-  export DATASET=db_iq
   export RUN_ID=$(date +%Y%m%d_%H%M%S)
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
-  ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
+  python ./scripts/edit_config.py -c config/diffusion/localmamba-*.toml config/diffusion/hourglass-*.toml -s training.initial_eval=false
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 config/diffusion/localmamba-db-iq.toml | tee /data/logs/find_max_batch_size_localmamba.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 config/diffusion/hourglass-db-iq.toml | tee /data/logs/find_max_batch_size_hourglass.log
+  # python ./scripts/find_max_model_size.py --batch-size 8
+  # ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
   echo "Run completed."

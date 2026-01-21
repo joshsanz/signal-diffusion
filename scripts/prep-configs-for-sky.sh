@@ -16,7 +16,21 @@ uv run python scripts/edit_config.py -c config/diffusion/*-db-polar.toml \
 uv run python scripts/edit_config.py -c config/diffusion/*-timeseries.toml \
     -s dataset.name="/data/processed/reweighted_timeseries_meta_dataset_n2048_fs125"
 
-# Disable vae tiling for performance
+# Disable vae tiling for performance and set latent space parameters for localmamba models
 uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
-    -s model.vae_tiling=false
+    -s model.vae_tiling=false \
+    -s model.latent_space=true \
+    -s model.extras.in_channels=16 \
+    -s model.extras.out_channels=16
 
+# Set hourglass and localmamba model sizes to maximum that fits in GPU memory with batch size 8
+uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml config/diffusion/localmamba-*.toml \
+    -s model.extras.depths="[4, 4, 4]" \
+    -s model.extras.widths="[128, 256, 512]"
+
+uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
+    -s model.extras.depths="[2, 2, 7, 2]" \
+    -s model.extras.dims="[96, 192, 384, 768]" \
+    -s model.extras.mlp_ratio=4.0
+
+# Set batch sizes to what fits in memory

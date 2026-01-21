@@ -21,6 +21,12 @@ class Colors:
 
 def parse_value(value_str: str) -> str:
     """Format value based on type inference."""
+    # Check if it's a TOML array format
+    # Matches: [1, 2, 3], [1, 2.5, 3], [true, false], [1, 2, 3, 4], etc.
+    array_pattern = re.compile(r'^\s*\[.*\]\s*$')
+    if array_pattern.match(value_str):
+        return value_str  # Return array as-is without quotes
+
     # Boolean
     if value_str.lower() in ("true", "false"):
         return value_str.lower()

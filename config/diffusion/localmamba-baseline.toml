@@ -22,9 +22,10 @@ name = "localmamba"
 sample_size = 64
 conditioning = "classes" # none, caption, classes
 vae_tiling = true
+latent_space = true
 
 [model.extras]
-depths = [2, 2, 9, 2]
+depths = [2, 2, 7, 2]
 dims = [96, 192, 384, 768]
 d_state = 16
 ssm_ratio = 2.0

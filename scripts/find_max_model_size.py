@@ -236,7 +236,21 @@ def main():
         action="store_true",
         help="Disable timeout (let tests run indefinitely)",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Training batch size to test (default: 1)",
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=-1,
+        help="Evaluation batch size to test (default: BATCH_SIZE)",
+    )
     args = parser.parse_args()
+    if args.eval_batch_size == -1:
+        args.eval_batch_size = args.batch_size
 
     timeout = None if args.no_timeout else args.timeout
 
