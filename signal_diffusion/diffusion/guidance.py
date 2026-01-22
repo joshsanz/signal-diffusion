@@ -11,6 +11,8 @@ from torch import Tensor
 def apply_cfg_guidance(
     x_t: Tensor,
     timestep: Tensor | float,
+    delta_t: float,
+    delta_T: float,
     model_eval_fn: Callable[[Tensor, Any, Any], Tensor],
     cond_vector: Any,
     null_cond_vector: Any,
@@ -26,6 +28,8 @@ def apply_cfg_guidance(
     Args:
         x_t: Current noisy sample (B, C, H, W)
         timestep: Current timestep (scalar or tensor)
+        delta_t: [0, 1] timestep difference for Rectified-CFG++ (only for vector_field)
+        delta_T: [1, T] timestep difference for Rectified-CFG++ (only for vector_field)
         model_eval_fn: Callback to evaluate model with signature:
             model_eval_fn(model_input, timestep, conditioning) -> output
             The callback takes model input, timestep, and a single conditioning tensor/dict,
@@ -80,17 +84,29 @@ def apply_cfg_guidance(
 
     elif prediction_type == "vector_field":
         # Rectified-CFG++ for flow matching (Hourglass, LocalMamba, DiT, SD 3.5)
-        # Separate model evaluations (not concatenated)
-        # TODO: Implement rectified-CFG++ algorithm from arxiv.org/pdf/2510.07631
-        # For now, use regular CFG formula with separate calls
-        output_uncond = model_eval_fn(x_t, timestep, null_cond_vector)
-        output_cond = model_eval_fn(x_t, timestep, cond_vector)
-
-        # TODO: Replace with rectified-CFG++ when implemented
-        # Rectified-CFG++ will require additional model_eval_fn calls at intermediate points
-        # between x_t and the final sample, using interpolated conditioning
-        return output_uncond + cfg_scale * (output_cond - output_uncond)
-
+        # From arxiv.org/pdf/2510.07631
+        v_t_cond = model_eval_fn(x_t, timestep, cond_vector)
+        x_t_halfdt = x_t + 0.5 * delta_t * v_t_cond
+        # TODO: optional additive noise here for stochasticity
+        # Prepare half-timestep
+        assert isinstance(timestep, Tensor), "timestep must be a Tensor for vector_field prediction with Rectified-CFG++"
+        halfdt_timestep = torch.cat([timestep, timestep], dim=0) - int(delta_T / 2)
+        halfdt_input = torch.cat([x_t_halfdt, x_t_halfdt], dim=0)
+        if isinstance(cond_vector, dict):
+            halfdt_cond_vector = {
+                key: torch.cat([null_cond_vector[key], cond_vector[key]], dim=0)
+                for key in cond_vector.keys()
+            }
+        elif isinstance(cond_vector, Tensor):
+            halfdt_cond_vector = torch.cat([null_cond_vector, cond_vector], dim=0)
+        else:
+            raise TypeError(f"Unsupported conditioning type: {type(cond_vector)}")
+        # Evaluate at half-timestep for both cond and uncond
+        v_t_uncond_halfdt, v_t_cond_halfdt = model_eval_fn(halfdt_input, halfdt_timestep, halfdt_cond_vector)
+        # alpha_t in the paper is computed as below, but cfg_scale is used directly in the implementation
+        # alpha_t = cfg_scale * (1 - t) ** gamma
+        v_lamda_t = v_t_cond + cfg_scale * (v_t_cond_halfdt - v_t_uncond_halfdt)
+        return v_lamda_t
     else:
         raise ValueError(
             f"Unknown prediction_type: {prediction_type}. Expected 'epsilon' or 'vector_field'."
