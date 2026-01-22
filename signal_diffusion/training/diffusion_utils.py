@@ -20,7 +20,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTokenizer
 from torchvision.transforms import v2 as transforms
 
-from signal_diffusion.diffusion.eval_utils import compute_kid_score, save_image_grid
+from signal_diffusion.diffusion.eval_utils import _to_uint8, compute_kid_score, save_image_grid
 
 __all__ = [
     "resolve_output_dir",
@@ -303,7 +303,10 @@ def run_evaluation(
             wandb_tracker = None
         if wandb_tracker:
             import wandb
-            images_list = [wandb.Image(img) for img in grid_images]
+            # Convert images from [-1, 1] to [0, 255] uint8 for wandb
+            images_uint8 = _to_uint8(grid_images)
+            # Convert to (H, W, C) numpy arrays for wandb.Image
+            images_list = [wandb.Image(img.permute(1, 2, 0).numpy()) for img in images_uint8]
             wandb_tracker.log({"eval/generated_samples": images_list}, step=global_step)
 
         # Log to tensorboard using log_images
