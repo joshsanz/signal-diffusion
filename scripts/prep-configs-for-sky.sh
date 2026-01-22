@@ -41,7 +41,7 @@ uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
 
 uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml \
     -s dataset.batch_size=128 \
-    -s training.eval_batch_size=256 \
+    -s training.eval_batch_size=128 \
     -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/sd35-*.toml \
