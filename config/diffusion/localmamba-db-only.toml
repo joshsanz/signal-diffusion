@@ -91,5 +91,5 @@ run_name = "localmamba_db_only"
 wandb_project = "signal-diffusion"
 
 [inference]
-denoising_steps = 10
-cfg_scale = 1.0
+denoising_steps = 25
+cfg_scale = 4.5

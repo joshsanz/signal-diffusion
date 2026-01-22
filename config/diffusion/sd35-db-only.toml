@@ -12,8 +12,8 @@ data_type = "spectrogram"
 name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_fs125"
 train_split = "train"
 val_split = "validation"
-batch_size = 1
-num_workers = 1
+batch_size = 64
+num_workers = 4
 resolution = 256
 center_crop = false
 random_flip = false
@@ -37,7 +37,7 @@ latent_space = true
 enabled = false
 
 [objective]
-prediction_type = "epsilon"
+prediction_type = "vector_field"
 flow_match_timesteps = 1000
 
 [optimizer]
@@ -52,7 +52,7 @@ warmup_steps = 500
 
 [training]
 seed = 42
-epochs = 10
+epochs = 20
 mixed_precision = "bf16"
 gradient_checkpointing = true
 gradient_accumulation_steps = 4
@@ -64,9 +64,9 @@ checkpoint_interval = 500
 checkpoint_total_limit = 3
 
 eval_strategy = "steps"
-eval_num_steps = 500
+eval_num_steps = 1000
 eval_num_examples = 4
-eval_batch_size = 16
+eval_batch_size = 64
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 1000
 
@@ -83,5 +83,5 @@ log_dir = "runs/diffusion/tensorboard/sd35-db-only"
 wandb_project = "signal-diffusion"
 
 [inference]
-denoising_steps = 10
-cfg_scale = 1.0
+denoising_steps = 25
+cfg_scale = 4.5

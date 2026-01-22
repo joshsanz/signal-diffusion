@@ -44,6 +44,15 @@ run: |
   export RUN_ID=$(date +%Y%m%d_%H%M%S)
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
-  python train.py --config config/diffusion/hourglass-db-only.toml --output_dir /data/runs/hourglass/test-$RUN_ID
-  python train.py --config config/diffusion/sd35-db-only.toml --output_dir /data/runs/sd35/test-$RUN_ID
+  python ./scripts/edit_config.py -c config/diffusion/*.toml -s training.initial_eval=false
+  # Enable VAE tiling otherwise batch sizes are too small
+  python ./scripts/edit_config.py -c config/diffusion/localmamba-*.toml config/diffusion/sd35-*.toml -s model.vae_tiling=true
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 \
+    config/diffusion/localmamba-db-iq.toml | tee /data/logs/find_max_batch_size_localmamba.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 \
+    config/diffusion/hourglass-db-iq.toml | tee /data/logs/find_max_batch_size_hourglass.log
+  python ./scripts/find_max_batch_size.py --max-batch-size 256 \
+    config/diffusion/sd35-db-iq.toml | tee /data/logs/find_max_batch_size_sd35.log
+  # python ./scripts/find_max_model_size.py --batch-size 8
+  # ./scripts/test_configs.sh 2>&1 | tee /data/logs/test_configs_${RUN_ID}.log
   echo "Run completed."

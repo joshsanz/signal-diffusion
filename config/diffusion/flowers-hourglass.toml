@@ -91,4 +91,4 @@ run_name = "flowers_hourglass"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 1.0
+cfg_scale = 4.5

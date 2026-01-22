@@ -83,5 +83,5 @@ log_dir = "runs/diffusion/tensorboard/sd35-db-polar"
 wandb_project = "signal-diffusion"
 
 [inference]
-denoising_steps = 28
-cfg_scale = 7.5
+denoising_steps = 25
+cfg_scale = 4.5
