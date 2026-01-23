@@ -218,6 +218,11 @@ class DiTAdapter:
             else:
                 vae = AutoencoderKL.from_pretrained(self._extras.vae, subfolder="vae")
 
+            if cfg.model.vae_tiling and hasattr(vae, "enable_tiling"):
+                vae.enable_tiling()
+                if accelerator.is_main_process:
+                    self._logger.info("Enabled VAE tiling for latent-space decode")
+
             vae.requires_grad_(False)
             vae.to(accelerator.device, dtype=weight_dtype)
 
@@ -386,7 +391,6 @@ class DiTAdapter:
             vae=vae,
             latent_space=self._extras.latent_space
         )
-
 
     def training_step(
         self,

@@ -33,6 +33,7 @@ from signal_diffusion.training.diffusion_utils import (
     run_evaluation,
     should_evaluate,
 )
+from signal_diffusion.training.memory_profiler import MemoryProfiler
 
 
 app = typer.Typer(add_completion=False, no_args_is_help=True,
@@ -345,6 +346,9 @@ def train(
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config, data_type=cfg.settings.data_type)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
 
+    # Initialize memory profiler
+    mem_profiler = MemoryProfiler(enabled=accelerator.is_main_process and torch.cuda.is_available())
+
     ema_model: EMAModel | None = None
     if cfg.training.ema_decay is not None and cfg.training.ema_decay > 0:
         ema_model = EMAModel(
@@ -367,6 +371,18 @@ def train(
                 int(cfg.training.ema_update_after_step),
                 bool(cfg.training.ema_use_ema_warmup),
             )
+
+    # Profile after model + EMA initialization
+    if accelerator.is_main_process:
+        mem_profiler.set_baseline("after_model_init")
+        mem_profiler.comprehensive_profile(
+            "after_model_init",
+            model=modules.denoiser,
+            ema_model=modules.ema,
+            optimizer=None,
+            vae=modules.vae if hasattr(modules, 'vae') else None,
+            text_encoder=modules.text_encoder if hasattr(modules, 'text_encoder') else None,
+        )
 
     def save_best_checkpoint(step: int, kid_mean: float) -> None:
         if not accelerator.is_main_process:
@@ -476,6 +492,16 @@ def train(
         modules.ema.to(accelerator.device)
         accelerator.register_for_checkpointing(modules.ema)
 
+    # Profile after optimizer initialization
+    if accelerator.is_main_process:
+        mem_profiler.comprehensive_profile(
+            "after_optimizer_init",
+            model=modules.denoiser,
+            ema_model=modules.ema,
+            optimizer=optimizer,
+            vae=modules.vae if hasattr(modules, 'vae') else None,
+            text_encoder=modules.text_encoder if hasattr(modules, 'text_encoder') else None,
+        )
 
     if accelerator.is_main_process:
         with (run_dir / "config.json").open("w", encoding="utf-8") as fp:
@@ -533,8 +559,23 @@ def train(
     if accelerator.is_main_process and cfg.training.initial_eval:
         # Optionally run a baseline evaluation before training starts.
         LOGGER.info("Running initial evaluation...")
+
+        # Profile before initial eval
+        mem_profiler.comprehensive_profile(
+            "initial_eval/before_gc",
+            model=modules.denoiser,
+            ema_model=modules.ema,
+            optimizer=optimizer,
+            vae=modules.vae if hasattr(modules, 'vae') else None,
+            text_encoder=modules.text_encoder if hasattr(modules, 'text_encoder') else None,
+        )
+
         torch.cuda.empty_cache()
+        mem_profiler.log_memory("initial_eval/after_cache_clear")
+
         with ema_weights_context(accelerator, modules):
+            mem_profiler.log_memory("initial_eval/inside_ema_context")
+
             eval_metrics = run_evaluation(
                 accelerator=accelerator,
                 adapter=adapter,
@@ -545,7 +586,10 @@ def train(
                 run_dir=run_dir,
                 global_step=0,
             )
+
+        mem_profiler.log_memory("initial_eval/after_ema_context")
         torch.cuda.empty_cache()
+
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
             LOGGER.info("Initial evaluation metrics: %s", eval_metrics)
@@ -613,6 +657,11 @@ def train(
 
             if accelerator.sync_gradients:
                 global_step += 1
+
+                # Profile memory for first few steps
+                if accelerator.is_main_process and global_step <= 5:
+                    mem_profiler.log_memory(f"train_step_{global_step}/after_sync")
+
                 log_payload = {
                     "train/loss": accelerator.gather_for_metrics(loss.detach()).mean().item(),
                     "train/lr": lr_scheduler.get_last_lr()[0],
@@ -672,8 +721,30 @@ def train(
                 eval_metrics: dict[str, float] = {}
                 if run_eval_now:
                     if accelerator.is_main_process:
+                        # === MEMORY PROFILING: BEFORE EVAL ===
+                        mem_profiler.comprehensive_profile(
+                            f"eval_step_{global_step}/before_gc",
+                            model=modules.denoiser,
+                            ema_model=modules.ema,
+                            optimizer=optimizer,
+                            vae=modules.vae if hasattr(modules, 'vae') else None,
+                            text_encoder=modules.text_encoder if hasattr(modules, 'text_encoder') else None,
+                        )
+
+                        # Force garbage collection
+                        mem_profiler.garbage_collect(f"eval_step_{global_step}/gc")
+
+                        # Clear CUDA cache
                         torch.cuda.empty_cache()
+                        mem_profiler.log_memory(f"eval_step_{global_step}/after_cache_clear")
+
+                        # Profile before EMA context
+                        mem_profiler.log_memory(f"eval_step_{global_step}/before_ema_context")
+
                         with ema_weights_context(accelerator, modules):
+                            # Profile inside EMA context (this is where OOM might happen)
+                            mem_profiler.log_memory(f"eval_step_{global_step}/inside_ema_context")
+
                             eval_metrics = run_evaluation(
                                 accelerator=accelerator,
                                 adapter=adapter,
@@ -684,7 +755,14 @@ def train(
                                 run_dir=run_dir,
                                 global_step=global_step,
                             )
+
+                        # Profile after exiting EMA context
+                        mem_profiler.log_memory(f"eval_step_{global_step}/after_ema_context")
+
                         torch.cuda.empty_cache()
+                        mem_profiler.log_memory(f"eval_step_{global_step}/final")
+                        # === END MEMORY PROFILING ===
+
                     accelerator.wait_for_everyone()
                     if eval_metrics and accelerator.is_main_process:
                         accelerator.log(eval_metrics, step=global_step)
@@ -706,8 +784,24 @@ def train(
     # Training finished
     if accelerator.is_main_process:
         LOGGER.info("Running final evaluation...")
+
+        # Profile before final eval
+        mem_profiler.comprehensive_profile(
+            "final_eval/before_gc",
+            model=modules.denoiser,
+            ema_model=modules.ema,
+            optimizer=optimizer,
+            vae=modules.vae if hasattr(modules, 'vae') else None,
+            text_encoder=modules.text_encoder if hasattr(modules, 'text_encoder') else None,
+        )
+
+        mem_profiler.garbage_collect("final_eval/gc")
         torch.cuda.empty_cache()
+        mem_profiler.log_memory("final_eval/after_cache_clear")
+
         with ema_weights_context(accelerator, modules):
+            mem_profiler.log_memory("final_eval/inside_ema_context")
+
             eval_metrics = run_evaluation(
                 accelerator=accelerator,
                 adapter=adapter,
@@ -718,7 +812,10 @@ def train(
                 run_dir=run_dir,
                 global_step=global_step,
             )
+
+        mem_profiler.log_memory("final_eval/after_ema_context")
         torch.cuda.empty_cache()
+
         if eval_metrics:
             accelerator.log(eval_metrics, step=global_step)
             LOGGER.info("Final evaluation metrics: %s", eval_metrics)

@@ -70,6 +70,11 @@ class StableDiffusionAdapterV15:
         vae = AutoencoderKL.from_pretrained(pretrained, subfolder="vae", revision=revision)
         unet = UNet2DConditionModel.from_pretrained(pretrained, subfolder="unet", revision=revision)
 
+        if cfg.model.vae_tiling and hasattr(vae, "enable_tiling"):
+            vae.enable_tiling()
+            if accelerator.is_main_process:
+                self._logger.info("Enabled VAE tiling for latent-space decode")
+
         if cfg.objective.prediction_type != "epsilon":
             raise ValueError(
                 "Stable Diffusion adapter only supports noise prediction ('epsilon') objective"
@@ -284,7 +289,6 @@ class StableDiffusionAdapterV15:
             images = vae.decode(latents.to(dtype=vae.dtype)).sample
 
         return images.to(dtype=torch.float32).detach()
-
 
     def training_step(
         self,

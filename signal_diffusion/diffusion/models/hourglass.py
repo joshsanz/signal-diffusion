@@ -262,7 +262,6 @@ class HourglassAdapter:
         )
         return extras
 
-
     def _build_attention_spec(self, spec: Mapping[str, Any]):
         attn_type = str(spec.get("type", "")).strip().lower()
         if attn_type == "global":
@@ -333,7 +332,6 @@ class HourglassAdapter:
             load_pretrained_weights(model, cfg.model.pretrained, self._logger, "Hourglass")
 
         return model
-
 
     def build_modules(
         self,
@@ -450,6 +448,11 @@ class HourglassAdapter:
             else:
                 vae = AutoencoderKL.from_pretrained(self._extras.vae, subfolder="vae")
 
+            if cfg.model.vae_tiling and hasattr(vae, "enable_tiling"):
+                vae.enable_tiling()
+                if accelerator.is_main_process:
+                    self._logger.info("Enabled VAE tiling for latent-space decode")
+
             vae.requires_grad_(False)
             vae.to(accelerator.device, dtype=weight_dtype)
 
@@ -500,7 +503,6 @@ class HourglassAdapter:
             clip_grad_norm_target=model.parameters(),
         )
         return modules
-
 
     def _checkpoint_context(self):
         if self._use_gradient_checkpointing and torch.is_grad_enabled():

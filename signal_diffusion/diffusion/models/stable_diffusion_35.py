@@ -205,6 +205,11 @@ class StableDiffusion35Adapter:
             model_id, subfolder="vae", torch_dtype=weight_dtype
         )
 
+        if cfg.model.vae_tiling and hasattr(vae, "enable_tiling"):
+            vae.enable_tiling()
+            if accelerator.is_main_process:
+                self._logger.info("Enabled VAE tiling for latent-space decode")
+
         # Load dual CLIP text encoder
         self._text_encoder = DualCLIPTextEncoder(
             sd_model_id=model_id,
