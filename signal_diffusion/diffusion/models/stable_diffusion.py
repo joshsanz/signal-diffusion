@@ -13,7 +13,12 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
-from signal_diffusion.diffusion.models.base import DiffusionModules, registry
+from signal_diffusion.diffusion.models.base import (
+    DiffusionModules,
+    registry,
+    compile_if_enabled,
+    extract_state_dict,
+)
 from signal_diffusion.log_setup import get_logger
 
 
@@ -119,6 +124,32 @@ class StableDiffusionAdapterV15:
         if accelerator.is_main_process:
             self._logger.info(
                 "Stable Diffusion modules moved to %s with dtype=%s", accelerator.device, str(weight_dtype)
+            )
+
+        # Compile models if enabled (compiles all models: unet + VAE + text_encoder, not EMA)
+        if cfg.training.compile_model:
+            unet = compile_if_enabled(
+                unet,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="UNet2D",
+                logger=self._logger,
+            )
+
+            vae = compile_if_enabled(
+                vae,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="VAE",
+                logger=self._logger,
+            )
+
+            text_encoder = compile_if_enabled(
+                text_encoder,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="CLIP text encoder",
+                logger=self._logger,
             )
 
         trainable_params: list[torch.nn.Parameter] = []

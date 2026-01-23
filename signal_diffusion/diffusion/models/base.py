@@ -291,6 +291,67 @@ def finalize_generated_sample(
     return sample.to(dtype=torch.float32).detach()
 
 
+def compile_if_enabled(
+    model: torch.nn.Module,
+    *,
+    enabled: bool,
+    mode: str,
+    model_name: str,
+    logger: Any,
+) -> torch.nn.Module:
+    """
+    Compile a model using torch.compile if enabled.
+
+    Args:
+        model: Model to compile
+        enabled: Whether compilation is enabled
+        mode: Compilation mode ("default", "reduce-overhead", "max-autotune")
+        model_name: Human-readable name for logging
+        logger: Logger instance
+
+    Returns:
+        Compiled model if enabled and successful, otherwise original model
+    """
+    if not enabled:
+        return model
+
+    try:
+        logger.info(
+            "Compiling %s with torch.compile(mode='%s')...",
+            model_name,
+            mode,
+        )
+        compiled = torch.compile(model, mode=mode)
+        logger.info("%s compilation successful", model_name)
+        return compiled
+    except Exception as exc:
+        logger.warning(
+            "Failed to compile %s: %s. Continuing with uncompiled model.",
+            model_name,
+            exc,
+        )
+        return model
+
+
+def extract_state_dict(model: torch.nn.Module) -> dict[str, Any]:
+    """
+    Extract state_dict from a model, handling torch.compile's _orig_mod wrapper.
+
+    When a model is compiled with torch.compile, the original model is stored
+    in the _orig_mod attribute. This function extracts the state_dict from the
+    original model for consistent checkpointing.
+
+    Args:
+        model: Model (potentially compiled)
+
+    Returns:
+        State dict from the original model
+    """
+    if hasattr(model, '_orig_mod'):
+        return model._orig_mod.state_dict()
+    return model.state_dict()
+
+
 __all__ = [
     "DiffusionModules",
     "DiffusionAdapter",
@@ -300,4 +361,6 @@ __all__ = [
     "resolve_checkpoint_candidates",
     "load_pretrained_weights",
     "finalize_generated_sample",
+    "compile_if_enabled",
+    "extract_state_dict",
 ]

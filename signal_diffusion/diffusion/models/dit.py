@@ -18,6 +18,8 @@ from signal_diffusion.diffusion.models.base import (
     create_noise_tensor,
     finalize_generated_sample,
     registry,
+    compile_if_enabled,
+    extract_state_dict,
 )
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
@@ -264,6 +266,25 @@ class DiTAdapter:
             self._logger.info(
                 "DiT model moved to %s with dtype=%s", accelerator.device, str(weight_dtype)
             )
+
+        # Compile models if enabled (compiles all models: denoiser + VAE, not EMA)
+        if cfg.training.compile_model:
+            model = compile_if_enabled(
+                model,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="DiT denoiser",
+                logger=self._logger,
+            )
+
+            if vae is not None:
+                vae = compile_if_enabled(
+                    vae,
+                    enabled=True,
+                    mode=cfg.training.compile_mode,
+                    model_name="VAE",
+                    logger=self._logger,
+                )
 
         params = list(model.parameters())
         modules = DiffusionModules(

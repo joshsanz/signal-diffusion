@@ -16,7 +16,12 @@ from tqdm import tqdm
 
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
-from signal_diffusion.diffusion.models.base import DiffusionModules, registry
+from signal_diffusion.diffusion.models.base import (
+    DiffusionModules,
+    registry,
+    compile_if_enabled,
+    extract_state_dict,
+)
 from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
@@ -257,6 +262,33 @@ class StableDiffusion35Adapter:
                 accelerator.device,
                 str(weight_dtype),
             )
+
+        # Compile models if enabled (compiles all models: transformer + VAE + text_encoder, not EMA)
+        if cfg.training.compile_model:
+            transformer = compile_if_enabled(
+                transformer,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="SD3 Transformer",
+                logger=self._logger,
+            )
+
+            vae = compile_if_enabled(
+                vae,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="VAE",
+                logger=self._logger,
+            )
+
+            if self._text_encoder is not None:
+                self._text_encoder = compile_if_enabled(
+                    self._text_encoder,
+                    enabled=True,
+                    mode=cfg.training.compile_mode,
+                    model_name="Dual CLIP text encoder",
+                    logger=self._logger,
+                )
 
         # Collect trainable parameters
         trainable_params = list(transformer.parameters())

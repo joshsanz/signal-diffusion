@@ -42,7 +42,7 @@ def zero_init(layer):
 
 def checkpoint(function, *args, **kwargs):
     if flags.get_checkpointing():
-        kwargs.setdefault("use_reentrant", True)
+        kwargs.setdefault("use_reentrant", False)
         return torch.utils.checkpoint.checkpoint(function, *args, **kwargs)
     else:
         return function(*args, **kwargs)

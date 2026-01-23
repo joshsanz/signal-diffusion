@@ -134,6 +134,9 @@ class TrainingConfig:
     ema_update_after_step: int = 5000
     ema_use_ema_warmup: bool = True
     allow_tf32: bool = True
+    # torch.compile configuration
+    compile_model: bool = False  # Enable model compilation (compiles all models when True)
+    compile_mode: str = "default"  # "default", "reduce-overhead", "max-autotune"
     snr_gamma: float | None = None
     eval_num_examples: int = 0
     eval_mmd_samples: int = 0
@@ -419,6 +422,17 @@ def _load_inference(section: Mapping[str, Any] | None) -> InferenceConfig:
     )
 
 
+def _validate_compile_mode(mode_raw: Any) -> str:
+    """Validate and normalize compile_mode value."""
+    mode = str(mode_raw).strip().lower() or "default"
+    valid_modes = {"default", "reduce-overhead", "max-autotune"}
+    if mode not in valid_modes:
+        raise ValueError(
+            f"Invalid compile_mode '{mode}'. Must be one of: {valid_modes}"
+        )
+    return mode
+
+
 def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
     output_dir = _path_from_value(section.get("output_dir"))
     resume = _path_from_value(section.get("resume"))
@@ -452,6 +466,9 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         ema_update_after_step=int(section.get("ema_update_after_step", 5000)),
         ema_use_ema_warmup=bool(ema_use_warmup_default),
         allow_tf32=bool(section.get("allow_tf32", True)),
+        # Parse compile options
+        compile_model=bool(section.get("compile_model", False)),
+        compile_mode=_validate_compile_mode(section.get("compile_mode", "default")),
         snr_gamma=section.get("snr_gamma"),
         eval_num_examples=int(section.get("eval_num_examples", 0)),
         eval_mmd_samples=int(section.get("eval_mmd_samples", 0)),

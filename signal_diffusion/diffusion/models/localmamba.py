@@ -27,6 +27,8 @@ from signal_diffusion.diffusion.models.base import (
     load_pretrained_weights,
     prepare_class_labels,
     registry,
+    compile_if_enabled,
+    extract_state_dict,
 )
 from signal_diffusion.log_setup import get_logger
 from signal_diffusion.diffusion.train_utils import (
@@ -455,6 +457,16 @@ class LocalMambaAdapter:
 
         model = model.to(accelerator.device, dtype=weight_dtype)
 
+        # Compile models if enabled (compiles all models: denoiser + VAE + text_encoder, not EMA)
+        if cfg.training.compile_model:
+            model = compile_if_enabled(
+                model,
+                enabled=True,
+                mode=cfg.training.compile_mode,
+                model_name="LocalMamba denoiser",
+                logger=self._logger,
+            )
+
         # Move age embedding modules to device if they exist
         if self._age_embedding is not None:
             self._age_embedding.to(accelerator.device, dtype=weight_dtype)
@@ -515,6 +527,26 @@ class LocalMambaAdapter:
 
             if accelerator.is_main_process:
                 self._logger.info("Loaded VAE from %s for latent space mode", self._extras.vae)
+
+        # Compile VAE and text encoder if enabled
+        if cfg.training.compile_model:
+            if vae is not None:
+                vae = compile_if_enabled(
+                    vae,
+                    enabled=True,
+                    mode=cfg.training.compile_mode,
+                    model_name="VAE",
+                    logger=self._logger,
+                )
+
+            if self._text_encoder is not None:
+                self._text_encoder = compile_if_enabled(
+                    self._text_encoder,
+                    enabled=True,
+                    mode=cfg.training.compile_mode,
+                    model_name="CLIP text encoder",
+                    logger=self._logger,
+                )
 
         if self._use_gradient_checkpointing and accelerator.is_main_process:
             self._logger.info("Enabled gradient checkpointing for LocalMamba denoiser")
@@ -925,8 +957,12 @@ class LocalMambaAdapter:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         path = output_path / "localmamba_model.pt"
+
+        # Handle both inner_model wrapper AND torch.compile wrapper
         inner_model = getattr(modules.denoiser, "inner_model", modules.denoiser)
-        torch.save(inner_model.state_dict(), path)
+        state_dict = extract_state_dict(inner_model)
+
+        torch.save(state_dict, path)
         self._logger.info("Saved LocalMamba checkpoint to %s", path)
 
 

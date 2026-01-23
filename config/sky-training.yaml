@@ -19,8 +19,6 @@ file_mounts:
 # Its contents are synced to ~/sky_workdir/ on the cluster.
 workdir: .
 
-# Typical use: pip install -r requirements.txt
-# Invoked under the workdir (i.e., can use its files).
 setup: |
   echo "Running setup."
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -37,8 +35,6 @@ setup: |
   # If NATTEN is already built, install it from /data.
   # uv pip install -e /data/NATTEN
 
-# Typical use: make use of resources, such as running training.
-# Invoked under the workdir (i.e., can use its files).
 run: |
   echo "Hello, SkyPilot!"
   export RUN_ID=$(date +%Y%m%d_%H%M%S)
