@@ -67,7 +67,7 @@ warmup_steps = 250
 
 [training]
 seed = 42
-epochs = 20
+epochs = 2
 mixed_precision = "bf16"
 gradient_checkpointing = true
 gradient_accumulation_steps = 1
@@ -89,6 +89,8 @@ ema_inv_gamma = 1
 ema_power = 0.75
 ema_decay = 0.999
 ema_update_after_step = 1000
+compile_model = true
+compile_mode = "default"
 
 [logging]
 tensorboard = true

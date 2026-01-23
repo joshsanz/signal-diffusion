@@ -78,6 +78,8 @@ ema_inv_gamma = 1
 ema_power = 0.75
 ema_decay = 0.999
 ema_update_after_step = 1000
+compile_model = true
+compile_mode = "default"
 
 [logging]
 tensorboard = true
