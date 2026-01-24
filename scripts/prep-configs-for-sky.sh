@@ -29,8 +29,8 @@ uv run python scripts/edit_config.py -c config/diffusion/sd35-*.toml \
 
 # Set hourglass and localmamba model sizes to maximum that fits in GPU memory with batch size 8
 uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml config/diffusion/localmamba-*.toml \
-    -s model.extras.depths="[4, 4, 4]" \
-    -s model.extras.widths="[128, 256, 512]"
+    -s model.extras.depths="[2, 2, 8]" \
+    -s model.extras.widths="[128, 384, 768]"
 
 uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
     -s model.extras.depths="[2, 2, 7, 2]" \
@@ -44,12 +44,12 @@ uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
     -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml \
-    -s dataset.batch_size=16 \
+    -s dataset.batch_size=128 \
     -s training.eval_batch_size=128 \
-    -s training.gradient_accumulation_steps=4
+    -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/sd35-*.toml \
     -s model.vae_tiling=true \
     -s dataset.batch_size=16 \
-    -s training.eval_batch_size=32 \
+    -s training.eval_batch_size=16 \
     -s training.gradient_accumulation_steps=4

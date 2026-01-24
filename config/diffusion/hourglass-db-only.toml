@@ -57,9 +57,9 @@ num_timesteps = 1000
 
 [optimizer]
 name = "adamw"
-learning_rate = 1e-4
-weight_decay = 1e-3
-betas = [0.9, 0.995]
+learning_rate = 2e-4
+weight_decay = 1e-2
+betas = [0.9, 0.95]
 
 [scheduler]
 name = "linear"
@@ -99,5 +99,5 @@ log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
 wandb_project = "signal-diffusion"
 
 [inference]
-denoising_steps = 25
+denoising_steps = 15
 cfg_scale = 2.5
