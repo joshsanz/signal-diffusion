@@ -59,15 +59,15 @@ num_timesteps = 1000
 name = "adamw"
 learning_rate = 1e-4
 weight_decay = 1e-3
-betas = [0.9, 0.95]
+betas = [0.9, 0.995]
 
 [scheduler]
-name = "constant_with_warmup"
-warmup_steps = 250
+name = "linear"
+warmup_steps = 500
 
 [training]
 seed = 42
-epochs = 2
+epochs = 20
 mixed_precision = "bf16"
 gradient_checkpointing = false
 gradient_accumulation_steps = 1
@@ -75,11 +75,11 @@ gradient_clip_norm = 1.0
 snr_gamma = 5.0
 
 log_every_steps = 10
-checkpoint_interval = 500
+checkpoint_interval = 1000
 checkpoint_total_limit = 3
 
 eval_strategy = "steps"
-eval_num_steps = 100
+eval_num_steps = 1000
 eval_num_examples = 8
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 1000
@@ -99,4 +99,4 @@ log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 4.5
+cfg_scale = 2.5
