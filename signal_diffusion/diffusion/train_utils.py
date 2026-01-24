@@ -63,10 +63,28 @@ def get_snr(scheduler, timesteps: torch.Tensor, *, device: torch.device) -> torc
     return snr
 
 
-def apply_min_gamma_snr(snr: torch.Tensor, *, timesteps: torch.Tensor, gamma: float | None, prediction_type: str) -> torch.Tensor:
+def apply_min_gamma_snr(snr: torch.Tensor, *, gamma: float | None, prediction_type: str) -> torch.Tensor:
+    # Hang et al., "Efficient Diffusion Training via Min-SNR Weighting", NeurIPS 2023
+    # https://arxiv.org/pdf/2303.09556
     if gamma is None:
         return torch.ones_like(snr)
+    # min(1/sigma^2, gamma)
     mse_loss_weights = torch.minimum(snr, gamma * torch.ones_like(snr))
+    if prediction_type == "epsilon":
+        return mse_loss_weights / snr
+    if prediction_type == "vector_field":
+        return mse_loss_weights / (snr + 1)
+    raise ValueError(f"Unsupported prediction type '{prediction_type}'")
+
+
+def apply_soft_min_gamma_snr(snr: torch.Tensor, *, gamma: float | None, prediction_type: str) -> torch.Tensor:
+    # Soft min variant of Hang et al., "Efficient Diffusion Training via Min-SNR Weighting", NeurIPS 2023
+    # Used by Hourglass Diffusion Models paper
+    # https://openreview.net/pdf?id=WRIn2HmtBS
+    if gamma is None:
+        return torch.ones_like(snr)
+    # 1 / (sigma^2 + gamma^-1)
+    mse_loss_weights = 1 / (1 / snr + 1 / gamma)
     if prediction_type == "epsilon":
         return mse_loss_weights / snr
     if prediction_type == "vector_field":

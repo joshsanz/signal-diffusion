@@ -27,7 +27,7 @@ from signal_diffusion.diffusion.models.base import (
 )
 from signal_diffusion.log_setup import get_logger
 from signal_diffusion.diffusion.train_utils import (
-    apply_min_gamma_snr,
+    apply_soft_min_gamma_snr,
     get_sigmas_from_timesteps,
     get_snr,
     sample_timestep_logitnorm,
@@ -657,9 +657,8 @@ class HourglassAdapter:
             model_pred = model(z_t, sigma=sigmas, class_cond=class_labels, mapping_cond=mapping_cond)
         loss = torch.nn.functional.mse_loss(model_pred.float(), target.float(), reduction="none")
         loss = loss.mean(dim=list(range(1, loss.ndim)))
-        weights = apply_min_gamma_snr(
+        weights = apply_soft_min_gamma_snr(
             snr,
-            timesteps=timesteps,
             gamma=cfg.training.snr_gamma,
             prediction_type=cfg.objective.prediction_type,
         )

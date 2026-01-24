@@ -25,7 +25,7 @@ from signal_diffusion.diffusion.models.base import (
 from signal_diffusion.diffusion.guidance import apply_cfg_guidance
 from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 from signal_diffusion.diffusion.train_utils import (
-    apply_min_gamma_snr,
+    apply_soft_min_gamma_snr,
     get_snr,
     sample_timestep_logitnorm,
     verify_scheduler,
@@ -390,9 +390,8 @@ class StableDiffusion35Adapter:
         # Compute loss with SNR weighting
         loss = torch.nn.functional.mse_loss(model_pred.float(), target.float(), reduction="none")
         loss = loss.mean(dim=list(range(1, loss.ndim)))
-        weights = apply_min_gamma_snr(
+        weights = apply_soft_min_gamma_snr(
             snr,
-            timesteps=timesteps,
             gamma=cfg.training.snr_gamma,
             prediction_type=cfg.objective.prediction_type,
         )
