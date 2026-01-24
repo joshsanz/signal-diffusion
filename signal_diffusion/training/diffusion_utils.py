@@ -1,6 +1,7 @@
 """Shared helpers for diffusion-based training pipelines."""
 from __future__ import annotations
 
+import gc
 import math
 import os
 import random
@@ -356,6 +357,14 @@ def run_evaluation(
         kid_mean, kid_std = compute_kid_score(gen_for_kid, ref_dataset)
         metrics["eval/kid_mean"] = kid_mean
         metrics["eval/kid_std"] = kid_std
+
+    # Free intermediate buffers before returning
+    del generated_samples
+    del generated
+    if eval_examples > 0:
+        del grid_images
+    if eval_mmd_samples > 0:
+        del gen_for_kid
 
     return metrics
 

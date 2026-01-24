@@ -12,7 +12,9 @@ from torchvision.utils import make_grid
 
 
 def _to_uint8(images: torch.Tensor) -> torch.Tensor:
-    images = images.detach().cpu().clamp(-1.0, 1.0)
+    images = images.detach().cpu()
+    images = torch.nan_to_num(images, nan=0.0, posinf=1.0, neginf=-1.0)
+    images = images.clamp(-1.0, 1.0)
     images = (images + 1.0) / 2.0
     return (images * 255.0).clamp(0, 255).to(torch.uint8)
 

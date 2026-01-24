@@ -1,6 +1,7 @@
 """Unified diffusion training entrypoint."""
 from __future__ import annotations
 
+import gc
 import json
 import math
 import os
@@ -556,6 +557,36 @@ def train(
             dtype,
         )
 
+    # Warmup step: compile both forward and backward before initial eval
+    # This allows PyTorch to optimize memory layout for the full graph
+    # Only needed when torch.compile is enabled
+    if accelerator.is_main_process and cfg.training.compile_model:
+        LOGGER.info("Running warmup step to compile forward+backward graphs...")
+        modules.denoiser.train()
+
+        # Get a single batch for warmup
+        warmup_batch = next(iter(train_loader))
+
+        try:
+            # Run forward + backward to trigger joint compilation
+            with accelerator.accumulate(modules.denoiser):
+                loss, _ = adapter.training_step(accelerator, cfg, modules, warmup_batch)
+                accelerator.backward(loss)
+                optimizer.zero_grad(set_to_none=True)
+
+            # Free warmup batch and collected gradients
+            del warmup_batch, loss
+            gc.collect()
+            torch.cuda.empty_cache()
+            mem_profiler.log_memory("after_warmup_step")
+            LOGGER.info("Warmup step completed - model compiled with full forward+backward graph")
+        except Exception as e:
+            LOGGER.warning(f"Warmup step failed: {e}. Continuing anyway.")
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    accelerator.wait_for_everyone()
+
     if accelerator.is_main_process and cfg.training.initial_eval:
         # Optionally run a baseline evaluation before training starts.
         LOGGER.info("Running initial evaluation...")
@@ -588,7 +619,11 @@ def train(
             )
 
         mem_profiler.log_memory("initial_eval/after_ema_context")
+
+        # Force garbage collection to release model buffers before freeing CUDA cache
+        gc.collect()
         torch.cuda.empty_cache()
+        mem_profiler.log_memory("initial_eval/after_gc_and_cache_clear")
 
         if eval_metrics:
             accelerator.log(eval_metrics, step=0)
