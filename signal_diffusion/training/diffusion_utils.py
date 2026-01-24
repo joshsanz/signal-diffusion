@@ -26,6 +26,7 @@ from signal_diffusion.diffusion.eval_utils import _to_uint8, compute_kid_score, 
 __all__ = [
     "resolve_output_dir",
     "build_optimizer",
+    "log_generated_samples",
     "run_evaluation",
     "flatten_and_sanitize_hparams",
     "should_evaluate",
@@ -135,6 +136,70 @@ def _build_caption(age: int, gender: str, health: str, modality: str) -> str:
     if health_clause:
         caption += f" {health_clause}"
     return caption
+
+
+def log_generated_samples(
+    accelerator: Accelerator,
+    samples: torch.Tensor,
+    run_dir: Path,
+    global_step: int,
+    *,
+    num_images: int,
+    grid_cols: int = 4,
+    log_prefix: str = "eval",
+) -> None:
+    """Log generated samples to disk and experiment trackers.
+
+    Mirrors the image logging behavior used in run_evaluation so it can be reused
+    by debug scripts that pre-generate samples.
+    """
+    if num_images <= 0:
+        return
+    if samples.ndim != 4:
+        raise ValueError("Expected generated samples tensor shaped (N, C, H, W)")
+
+    grid_images = samples[:num_images].detach().cpu()
+    grid_path = run_dir / f"{global_step:06d}.jpg"
+    save_image_grid(grid_images, grid_path, cols=grid_cols)
+
+    images_uint8 = _to_uint8(grid_images)
+    images_np = images_uint8.permute(0, 2, 3, 1).numpy()
+
+    # Log to wandb using log_images for proper image display
+    try:
+        wandb_tracker = accelerator.get_tracker("wandb")
+    except ValueError:
+        wandb_tracker = None
+    if wandb_tracker:
+        import wandb
+        images_list = [wandb.Image(img) for img in images_np]
+        wandb_tracker.log({f"{log_prefix}/generated_samples": images_list}, step=global_step)
+        wandb_tracker.log({f"{log_prefix}/generated_samples_hist": grid_images.flatten()}, step=global_step)
+
+
+    # Log to tensorboard using log_images
+    try:
+        tb_tracker = accelerator.get_tracker("tensorboard")
+    except ValueError:
+        tb_tracker = None
+    if tb_tracker:
+        tb_tracker.log({f"{log_prefix}/generated_samples": grid_images}, step=global_step)  # type: ignore[arg-type]
+
+    # Log to MLflow using mlflow.log_image API
+    try:
+        mlflow_tracker = accelerator.get_tracker("mlflow")
+    except ValueError:
+        mlflow_tracker = None
+    if mlflow_tracker and accelerator.is_main_process:
+        import mlflow
+
+        # Log each image individually using uint8 numpy arrays
+        for idx, img_np in enumerate(images_np):
+            mlflow.log_image(
+                img_np,
+                key=f"{log_prefix}/generated_samples/image_{idx}",
+                step=global_step,
+            )
 
 
 def run_evaluation(
@@ -293,56 +358,15 @@ def run_evaluation(
     metrics: dict[str, float] = {}
 
     if eval_examples > 0:
-        grid_images = generated[:eval_examples].detach().cpu()
-        grid_path = run_dir / f"{global_step:06d}.jpg"
-        save_image_grid(grid_images, grid_path, cols=4)
-
-        # Log to wandb using log_images for proper image display
-        try:
-            wandb_tracker = accelerator.get_tracker("wandb")
-        except ValueError:
-            wandb_tracker = None
-        if wandb_tracker:
-            import wandb
-            # Convert images from [-1, 1] to [0, 255] uint8 for wandb
-            images_uint8 = _to_uint8(grid_images)
-            # Convert to (H, W, C) numpy arrays for wandb.Image
-            images_list = [wandb.Image(img.permute(1, 2, 0).numpy()) for img in images_uint8]
-            wandb_tracker.log({"eval/generated_samples": images_list}, step=global_step)
-
-        # Log to tensorboard using log_images
-        try:
-            tb_tracker = accelerator.get_tracker("tensorboard")
-        except ValueError:
-            tb_tracker = None
-        if tb_tracker:
-            tb_tracker.log({"eval/generated_samples": grid_images}, step=global_step)  # type: ignore[arg-type]
-
-        # Log to MLflow using mlflow.log_image API
-        try:
-            mlflow_tracker = accelerator.get_tracker("mlflow")
-        except ValueError:
-            mlflow_tracker = None
-        if mlflow_tracker and accelerator.is_main_process:
-            import mlflow
-            # Convert tensor to numpy format for MLflow
-            # grid_images is (N, C, H, W) with values in [-1, 1]
-            images_np = grid_images.numpy()
-            # Normalize to [0, 1] range for MLflow
-            images_np = (images_np + 1.0) / 2.0
-            # Clip to ensure valid range
-            images_np = images_np.clip(0.0, 1.0)
-
-            # Log each image individually
-            for idx, img_np in enumerate(images_np):
-                # MLflow expects (H, W, C) for RGB or (H, W) for grayscale
-                # Our images are (C, H, W), so transpose
-                if img_np.shape[0] == 3:  # RGB
-                    img_np = img_np.transpose(1, 2, 0)
-                elif img_np.shape[0] == 1:  # Grayscale
-                    img_np = img_np[0]  # Remove channel dimension
-
-                mlflow.log_image(img_np, key=f"eval/generated_samples/image_{idx}", step=global_step)
+        log_generated_samples(
+            accelerator,
+            generated,
+            run_dir,
+            global_step,
+            num_images=eval_examples,
+            grid_cols=4,
+            log_prefix="eval",
+        )
 
     if eval_mmd_samples > 0:
         gen_for_kid = generated[:eval_mmd_samples]
