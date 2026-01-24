@@ -1,0 +1,45 @@
+resources:
+  # Optional; if left out, automatically pick the cheapest cloud.
+  infra: lambda/us-west-2
+  # 1x NVIDIA A100 GPU
+  accelerators: A100:1
+  autostop:
+    idle_minutes: 5
+    down: true
+
+file_mounts:
+  /data:
+    source: s3://signal-diffusion/
+    mode: MOUNT
+  ~/.netrc: ~/.netrc
+  ~/.aws: ~/.aws
+  ~/.cache/huggingface/token: ~/.cache/huggingface/token
+
+# Working directory (optional) containing the project codebase.
+# Its contents are synced to ~/sky_workdir/ on the cluster.
+workdir: .
+
+setup: |
+  echo "Running setup."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  cp pyproject.toml.sky pyproject.toml
+  uv venv --python=3.12
+  uv pip install --upgrade pip setuptools
+  uv sync
+  # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
+  uv pip install /data/wheels/*.whl
+  mkdir -p /data/logs
+  # Once NATTEN is built, store it to /data for future use.
+  # ./install-natten.sh
+  # cp -r NATTEN /data/NATTEN
+  # If NATTEN is already built, install it from /data.
+  # uv pip install -e /data/NATTEN
+
+run: |
+  echo "Hello, SkyPilot!"
+  export RUN_ID=$(date +%Y%m%d_%H%M%S)
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  source .venv/bin/activate
+  ./scripts/prep-configs-for-sky.sh
+  python train.py --config config/diffusion/hourglass-db-only.toml --output_dir /data/runs/hourglass/test-$RUN_ID
+  echo "Run completed."

@@ -347,8 +347,8 @@ def train(
     train_loader, val_loader = build_dataloaders(cfg.dataset, tokenizer=tokenizer, settings_path=cfg.settings_config, data_type=cfg.settings.data_type)
     modules = adapter.build_modules(accelerator, cfg, tokenizer=tokenizer)
 
-    # Initialize memory profiler
-    mem_profiler = MemoryProfiler(enabled=accelerator.is_main_process and torch.cuda.is_available())
+    # Initialize memory profiler (disabled)
+    mem_profiler = MemoryProfiler(enabled=False)
 
     ema_model: EMAModel | None = None
     if cfg.training.ema_decay is not None and cfg.training.ema_decay > 0:
