@@ -84,4 +84,4 @@ run_name = "flowers_testing"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 4.5
+cfg_scale = 2.5

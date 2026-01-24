@@ -94,4 +94,4 @@ wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 4.5
+cfg_scale = 2.5

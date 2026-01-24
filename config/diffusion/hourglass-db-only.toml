@@ -89,13 +89,14 @@ ema_inv_gamma = 1
 ema_power = 0.75
 ema_decay = 0.999
 ema_update_after_step = 1000
-compile_model = true
+compile_model = false
 compile_mode = "default"
 
 [logging]
 tensorboard = true
 run_name = "hourglass-db-only"
 log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
+wandb_project = "signal-diffusion"
 
 [inference]
 denoising_steps = 25

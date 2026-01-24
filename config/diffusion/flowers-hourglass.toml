@@ -29,7 +29,7 @@ mapping_depth = 2
 mapping_d_ff = 768
 mapping_cond_dim = 0
 mapping_dropout_rate = 0.0
-depths = [4, 4, 4]
+depths = [3, 3, 4]
 widths = [128, 256, 512]
 d_ffs = [768, 768, 768]
 self_attns = [
@@ -53,21 +53,21 @@ prediction_type = "vector_field"
 
 [optimizer]
 name = "adamw"
-learning_rate = 5e-4
+learning_rate = 2e-4
 weight_decay = 1e-3
-betas = [0.95, 0.999]
+betas = [0.9, 0.99]
 
 [scheduler]
-name = "constant_with_warmup"
-warmup_steps = 1000
+name = "linear"
+warmup_steps = 200
 
 [training]
-seed = 42
-epochs = 200
+seed = 4321
+epochs = 150
 gradient_accumulation_steps = 1
 gradient_checkpointing = true
 log_every_steps = 10
-checkpoint_interval = 500
+checkpoint_interval = 1000
 checkpoint_total_limit = 3
 mixed_precision = "bf16"
 gradient_clip_norm = 1.0
@@ -75,7 +75,7 @@ eval_strategy = "steps"
 eval_num_steps = 1000
 eval_num_examples = 8
 eval_gen_seed = 1234
-eval_batch_size = 256
+eval_batch_size = 128
 eval_mmd_samples = 1000
 eval_mmd_fallback_ntrain = 5000
 ema_use_warmup = true
@@ -83,14 +83,15 @@ ema_inv_gamma = 1 # always 1
 ema_power = 0.75 # 0.75 reaches decay 0.999 ~10k steps, 0.667 ~30k steps
 ema_decay = 0.999 # if use_warmup=false
 ema_update_after_step = 1000 # if use_warmup=false
-compile_model = true
+compile_model = false
 compile_mode = "default"
 
 [logging]
 tensorboard = true
 log_dir = "runs/diffusion/tensorboard/hourglass"
-run_name = "flowers_hourglass"
+run_name = "flowers_hourglass_rectcfgpp"
+wandb_project = "flowers"
 
 [inference]
 denoising_steps = 25
-cfg_scale = 4.5
+cfg_scale = 2.5
