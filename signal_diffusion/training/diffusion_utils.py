@@ -385,8 +385,6 @@ def run_evaluation(
     # Free intermediate buffers before returning
     del generated_samples
     del generated
-    if eval_examples > 0:
-        del grid_images
     if eval_mmd_samples > 0:
         del gen_for_kid
 
