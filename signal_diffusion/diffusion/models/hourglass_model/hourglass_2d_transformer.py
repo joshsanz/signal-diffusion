@@ -174,6 +174,8 @@ class FourierFeatures(nn.Module):
         self.register_buffer('weight', torch.randn([out_features // 2, in_features]) * std)
 
     def forward(self, input):
+        # Cast input to match weight dtype for mixed precision compatibility
+        input = input.to(dtype=self.weight.dtype)
         f = 2 * math.pi * input @ self.weight.T
         return torch.cat([f.cos(), f.sin()], dim=-1)
 
@@ -797,7 +799,7 @@ class Hourglass2DModel(nn.Module):
         if mapping_cond is None and self.mapping_cond_in_proj is not None:
             raise ValueError("mapping_cond must be specified if mapping_cond_dim > 0")
 
-        c_noise = torch.log(sigma) / 4
+        c_noise = torch.log(sigma + 1e-9) / 4  # Guard against sigma = 0
         time_emb = self.time_in_proj(self.time_emb(c_noise[..., None]))
         aug_cond = x.new_zeros([x.shape[0], 9]) if aug_cond is None else aug_cond
         aug_emb = self.aug_in_proj(self.aug_emb(aug_cond))

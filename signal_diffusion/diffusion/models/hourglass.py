@@ -420,7 +420,11 @@ class HourglassAdapter:
         if accelerator.is_main_process:
             self._logger.info("Building Hourglass2DModel with extras=%s", self._extras)
 
-        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.num_timesteps)
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(
+            num_train_timesteps=cfg.objective.num_timesteps,
+            # By default final timestep is 1 (no noise) so it's wasted during inference
+            shift_terminal=max(1 / cfg.objective.num_timesteps, 1 / cfg.inference.denoising_steps / 2),
+        )
         verify_scheduler(noise_scheduler)
 
         model = self._make_model(cfg, self._extras)
@@ -890,13 +894,19 @@ class HourglassAdapter:
 
                 timesteps = torch.full((model_input.size(0),), timestep, device=device)
                 sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
+
                 # Compute timestep delta.
-                if i < len(timesteps) - 1:
-                    dt = scheduler.sigmas[i + 1] - scheduler.sigmas[i]
-                    dT = scheduler.timesteps[i + 1] - scheduler.timesteps[i]
+                schedule_timesteps = scheduler.timesteps
+                schedule_sigmas = scheduler.sigmas
+                if schedule_timesteps is None or schedule_sigmas is None:
+                    raise RuntimeError("Scheduler timesteps/sigmas are not initialized")
+                schedule_len = len(schedule_timesteps)
+                if i < schedule_len - 1:
+                    dt = schedule_sigmas[i + 1] - schedule_sigmas[i]
+                    dT = schedule_timesteps[i + 1] - schedule_timesteps[i]
                 else:
-                    dt = -scheduler.sigmas[i]
-                    dT = -scheduler.timesteps[i]
+                    dt = -schedule_sigmas[i]
+                    dT = -schedule_timesteps[i]
 
                 if classifier_free:
                     # Define model evaluation callback for CFG guidance

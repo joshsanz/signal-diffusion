@@ -189,7 +189,11 @@ class DiTAdapter:
         if cfg.model.lora.enabled:
             raise NotImplementedError("LoRA for DiT models is not yet implemented")
 
-        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.objective.num_timesteps)
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(
+            num_train_timesteps=cfg.objective.num_timesteps,
+            # By default final timestep is 1 (no noise) so it's wasted during inference
+            shift_terminal=max(1 / cfg.objective.num_timesteps, 1 / cfg.inference.denoising_steps / 2),
+        )
         # noise_scheduler.register_to_config(prediction_type=cfg.objective.prediction_type)
         verify_scheduler(noise_scheduler)
 

@@ -51,16 +51,17 @@ def apply_cfg_guidance(
         - prediction_type="vector_field": Uses rectified-CFG++ (separate calls at intermediate points)
         - This function handles all input batching/concatenation logic
     """
+    if not isinstance(timestep, Tensor):
+        timestep = torch.tensor(timestep, device=x_t.device)
+    timestep = timestep.expand(x_t.size(0))
+
     if prediction_type == "epsilon":
         # Regular CFG for noise prediction (SD v1.5)
         # Single model evaluation with concatenated inputs
         model_input = torch.cat([x_t, x_t], dim=0)
 
         # Prepare timestep (double for concatenated batch)
-        if isinstance(timestep, Tensor):
-            timestep_input = torch.cat([timestep, timestep], dim=0)
-        else:
-            timestep_input = timestep
+        timestep_input = torch.cat([timestep, timestep], dim=0)
 
         # Concatenate conditioning (null first, cond second)
         if isinstance(cond_vector, dict):
@@ -89,8 +90,7 @@ def apply_cfg_guidance(
         x_t_halfdt = x_t + 0.5 * delta_t * v_t_cond
         # TODO: optional additive noise here for stochasticity
         # Prepare half-timestep
-        assert isinstance(timestep, Tensor), "timestep must be a Tensor for vector_field prediction with Rectified-CFG++"
-        halfdt_timestep = torch.cat([timestep, timestep], dim=0) - int(delta_T / 2)
+        halfdt_timestep = torch.cat([timestep, timestep], dim=0) + delta_T / 2
         halfdt_input = torch.cat([x_t_halfdt, x_t_halfdt], dim=0)
         if isinstance(cond_vector, dict):
             halfdt_cond_vector = {
@@ -102,7 +102,7 @@ def apply_cfg_guidance(
         else:
             raise TypeError(f"Unsupported conditioning type: {type(cond_vector)}")
         # Evaluate at half-timestep for both cond and uncond
-        v_t_uncond_halfdt, v_t_cond_halfdt = model_eval_fn(halfdt_input, halfdt_timestep, halfdt_cond_vector)
+        v_t_uncond_halfdt, v_t_cond_halfdt = model_eval_fn(halfdt_input, halfdt_timestep, halfdt_cond_vector).chunk(2)
         # alpha_t in the paper is computed as below, but cfg_scale is used directly in the implementation
         # alpha_t = cfg_scale * (1 - t) ** gamma
         v_lamda_t = v_t_cond + cfg_scale * (v_t_cond_halfdt - v_t_uncond_halfdt)

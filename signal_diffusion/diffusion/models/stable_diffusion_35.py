@@ -231,7 +231,9 @@ class StableDiffusion35Adapter:
 
         # Create flow matching scheduler
         noise_scheduler = FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=cfg.objective.num_timesteps
+            num_train_timesteps=cfg.objective.num_timesteps,
+            # By default final timestep is 1 (no noise) so it's wasted during inference
+            shift_terminal=max(1 / cfg.objective.num_timesteps, 1 / cfg.inference.denoising_steps / 2),
         )
         verify_scheduler(noise_scheduler)
 
