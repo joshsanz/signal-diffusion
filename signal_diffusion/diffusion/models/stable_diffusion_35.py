@@ -507,10 +507,23 @@ class StableDiffusion35Adapter:
 
         # Denoising loop with CFG
         with torch.no_grad():
-            for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
+            for i, timestep in tqdm(enumerate(scheduler.timesteps), desc="Denoising", leave=False):
                 latent_input = latents
                 if hasattr(scheduler, "scale_model_input"):
                     latent_input = scheduler.scale_model_input(latent_input, timestep)
+
+                # Compute timestep delta for rectified-CFG++.
+                schedule_timesteps = scheduler.timesteps
+                schedule_sigmas = scheduler.sigmas
+                if schedule_timesteps is None or schedule_sigmas is None:
+                    raise RuntimeError("Scheduler timesteps/sigmas are not initialized")
+                schedule_len = len(schedule_timesteps)
+                if i < schedule_len - 1:
+                    dt = schedule_sigmas[i + 1] - schedule_sigmas[i]
+                    dT = schedule_timesteps[i + 1] - schedule_timesteps[i]
+                else:
+                    dt = -schedule_sigmas[i]
+                    dT = -schedule_timesteps[i]
 
                 # Define model evaluation callback for CFG guidance
                 def model_eval_fn(latents_inner, timestep_inner, conditioning):
@@ -549,6 +562,8 @@ class StableDiffusion35Adapter:
                 # Apply CFG guidance (handles batching/concatenation internally)
                 model_output = apply_cfg_guidance(
                     x_t=latent_input,
+                    delta_t=dt,
+                    delta_T=dT,
                     timestep=timestep,
                     model_eval_fn=model_eval_fn,
                     cond_vector=cond_vector,

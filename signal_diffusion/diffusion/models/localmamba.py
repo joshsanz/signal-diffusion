@@ -929,13 +929,26 @@ class LocalMambaAdapter:
             null_cond_vector = null_cond_dict
 
         with torch.no_grad():
-            for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
+            for i, timestep in tqdm(enumerate(scheduler.timesteps), desc="Denoising", leave=False):
                 model_input = sample
                 if hasattr(scheduler, "scale_model_input"):
                     model_input = scheduler.scale_model_input(model_input, timestep)
 
                 timesteps = torch.full((model_input.size(0),), timestep, device=device)
                 sigmas = get_sigmas_from_timesteps(scheduler, timesteps, device=device)
+
+                # Compute timestep delta for rectified-CFG++.
+                schedule_timesteps = scheduler.timesteps
+                schedule_sigmas = scheduler.sigmas
+                if schedule_timesteps is None or schedule_sigmas is None:
+                    raise RuntimeError("Scheduler timesteps/sigmas are not initialized")
+                schedule_len = len(schedule_timesteps)
+                if i < schedule_len - 1:
+                    dt = schedule_sigmas[i + 1] - schedule_sigmas[i]
+                    dT = schedule_timesteps[i + 1] - schedule_timesteps[i]
+                else:
+                    dt = -schedule_sigmas[i]
+                    dT = -schedule_timesteps[i]
 
                 if classifier_free:
                     # Define model evaluation callback for CFG guidance
@@ -968,6 +981,8 @@ class LocalMambaAdapter:
                     # Apply CFG guidance (handles batching/concatenation internally)
                     model_output = apply_cfg_guidance(
                         x_t=model_input,
+                        delta_t=dt,
+                        delta_T=dT,
                         timestep=timestep,
                         model_eval_fn=model_eval_fn,
                         cond_vector=cond_vector,
