@@ -37,8 +37,8 @@ latent_space = true
 enabled = false
 
 [objective]
-prediction_type = "epsilon"
-flow_match_timesteps = 1000
+prediction_type = "vector_field"
+num_timesteps = 1000
 
 [optimizer]
 name = "adamw"

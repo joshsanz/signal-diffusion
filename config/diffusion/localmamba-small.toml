@@ -45,7 +45,7 @@ enabled = false
 
 [objective]
 prediction_type = "vector_field"
-flow_match_timesteps = 1000
+num_timesteps = 1000
 
 [optimizer]
 name = "adamw"

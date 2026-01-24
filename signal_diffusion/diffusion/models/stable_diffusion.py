@@ -19,6 +19,7 @@ from signal_diffusion.diffusion.models.base import (
     compile_if_enabled,
     extract_state_dict,
 )
+from signal_diffusion.diffusion.guidance import apply_cfg_guidance
 from signal_diffusion.log_setup import get_logger
 
 
@@ -288,6 +289,7 @@ class StableDiffusionAdapterV15:
         else:
             raise TypeError("Unsupported conditioning value for Stable Diffusion sampling")
 
+        # Tokenize and encode prompts
         text_inputs = tokenizer(
             prompts,
             padding="max_length",
@@ -305,15 +307,41 @@ class StableDiffusionAdapterV15:
                 return_tensors="pt",
             )
             uncond_embeddings = text_encoder(uncond_inputs.input_ids.to(device))[0]
-            prompt_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
+        # Prepare conditioning vectors for CFG guidance
+        cond_vector = text_embeddings
+        null_cond_vector = uncond_embeddings
+
+        with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                latent_model_input = torch.cat([latents, latents])
+                latent_model_input = latents
                 if hasattr(scheduler, 'scale_model_input'):
                     latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)
-                noise_pred = modules.denoiser(latent_model_input, timestep, encoder_hidden_states=prompt_embeddings).sample
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                guidance = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
+
+                # Define model evaluation callback for CFG guidance
+                def model_eval_fn(latents_inner, timestep_inner, encoder_hidden_states):
+                    """Evaluate denoiser, routing encoder_hidden_states to model.
+
+                    encoder_hidden_states is the sequence embeddings from CLIP.
+                    apply_cfg_guidance has already concatenated null+cond embeddings.
+                    """
+                    # Call model and extract .sample attribute
+                    return modules.denoiser(
+                        latents_inner, timestep_inner, encoder_hidden_states=encoder_hidden_states
+                    ).sample
+
+                # Apply CFG guidance (handles batching/concatenation internally)
+                # SD v1.5 uses epsilon prediction type
+                guidance = apply_cfg_guidance(
+                    x_t=latent_model_input,
+                    timestep=timestep,
+                    model_eval_fn=model_eval_fn,
+                    cond_vector=cond_vector,
+                    null_cond_vector=null_cond_vector,
+                    cfg_scale=cfg_scale,
+                    prediction_type="epsilon",
+                )
+
                 latents = scheduler.step(guidance, timestep, latents).prev_sample
 
             latents = latents / getattr(vae.config, 'scaling_factor', 1.0)

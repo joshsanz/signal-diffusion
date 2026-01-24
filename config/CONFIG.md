@@ -364,7 +364,7 @@ Model-specific hyperparameters (varies by model).
 |-----------|------|----------|---------|-------------|
 | `prediction_type` | string | No | `"epsilon"` | What model predicts: `"epsilon"`, `"sample"`, `"vector_field"` |
 | `scheduler` | string | No | `"ddim"` | Noise scheduler type |
-| `flow_match_timesteps` | int | No | `1000` | Timesteps for flow matching |
+| `num_timesteps` | int | No | `1000` | Timesteps for flow matching |
 
 ### `[optimizer]` Section
 

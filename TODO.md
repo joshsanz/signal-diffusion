@@ -1,14 +1,14 @@
 # TODOs
 
 Tasks for implementing a completed signal diffusion paper
-
+- Rename mapping_cond to something more accurate and descriptive
 - Check uv sync with pre-built wheels on setup
 - Tune diff model hyperparams
   - model size for batch 8 / 16
   - batch size for tuned models/sd35
 - Implement rectified cfg++
-- Train diff models for each 
-  - data type 
+- Train diff models for each
+  - data type
   - conditioning
 
 # Completed

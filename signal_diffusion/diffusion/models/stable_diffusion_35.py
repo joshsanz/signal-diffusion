@@ -22,6 +22,7 @@ from signal_diffusion.diffusion.models.base import (
     compile_if_enabled,
     extract_state_dict,
 )
+from signal_diffusion.diffusion.guidance import apply_cfg_guidance
 from signal_diffusion.diffusion.text_encoders import DualCLIPTextEncoder
 from signal_diffusion.diffusion.train_utils import (
     apply_min_gamma_snr,
@@ -230,14 +231,14 @@ class StableDiffusion35Adapter:
 
         # Create flow matching scheduler
         noise_scheduler = FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=cfg.objective.flow_match_timesteps
+            num_train_timesteps=cfg.objective.num_timesteps
         )
         verify_scheduler(noise_scheduler)
 
         if accelerator.is_main_process:
             self._logger.info(
                 "Using FlowMatchEulerDiscreteScheduler with %d timesteps",
-                cfg.objective.flow_match_timesteps,
+                cfg.objective.num_timesteps,
             )
 
         # Enable gradient checkpointing if requested
@@ -495,39 +496,64 @@ class StableDiffusion35Adapter:
             uncond_embeddings = self._text_encoder.encode([""] * num_images)
             uncond_embeddings = uncond_embeddings.to(device, dtype=dtype)
 
+        # Prepare conditioning vectors for CFG guidance
+        cond_vector = {"pooled": text_embeddings}
+        null_cond_vector = {"pooled": uncond_embeddings}
+
+        # Pre-compute joint_attention_dim for encoder_hidden_states
+        joint_attention_dim = modules.denoiser.config.joint_attention_dim
+
         # Denoising loop with CFG
         with torch.no_grad():
             for timestep in tqdm(scheduler.timesteps, desc="Denoising", leave=False):
-                # Duplicate for CFG
-                latent_input = torch.cat([latents, latents], dim=0)
+                latent_input = latents
                 if hasattr(scheduler, "scale_model_input"):
                     latent_input = scheduler.scale_model_input(latent_input, timestep)
 
-                # Prepare conditioning
-                pooled_projections = torch.cat([uncond_embeddings, text_embeddings], dim=0)
-                timesteps_input = timestep.expand(latent_input.shape[0])
+                # Define model evaluation callback for CFG guidance
+                def model_eval_fn(latents_inner, timestep_inner, conditioning):
+                    """Evaluate denoiser, routing conditioning dict to model parameters.
 
-                # Since we skip T5 (text_encoder_3), pass zero tensors for encoder_hidden_states
-                # to match behavior of official SD 3.5 pipeline when text_encoder_3=None
-                joint_attention_dim = modules.denoiser.config.joint_attention_dim
-                encoder_hidden_states = torch.zeros(
-                    (latent_input.shape[0], 77, joint_attention_dim),
-                    device=device,
-                    dtype=dtype,
+                    conditioning is a dict with key 'pooled'.
+                    apply_cfg_guidance has already concatenated null+cond for pooled projections.
+                    """
+                    # Expand timestep to match batch size (CFG doubles the batch)
+                    if isinstance(timestep_inner, torch.Tensor):
+                        timesteps_input_inner = timestep_inner
+                    else:
+                        timesteps_input_inner = torch.full(
+                            (latents_inner.shape[0],), timestep_inner, device=device
+                        )
+
+                    pooled_projections_inner = conditioning.get("pooled")
+
+                    # Since we skip T5 (text_encoder_3), pass zero tensors for encoder_hidden_states
+                    # to match behavior of official SD 3.5 pipeline when text_encoder_3=None
+                    encoder_hidden_states_inner = torch.zeros(
+                        (latents_inner.shape[0], 77, joint_attention_dim),
+                        device=device,
+                        dtype=dtype,
+                    )
+
+                    # Forward pass and extract [0] from tuple output
+                    return modules.denoiser(
+                        hidden_states=latents_inner,
+                        timestep=timesteps_input_inner,
+                        encoder_hidden_states=encoder_hidden_states_inner,
+                        pooled_projections=pooled_projections_inner,
+                        return_dict=False,
+                    )[0]
+
+                # Apply CFG guidance (handles batching/concatenation internally)
+                model_output = apply_cfg_guidance(
+                    x_t=latent_input,
+                    timestep=timestep,
+                    model_eval_fn=model_eval_fn,
+                    cond_vector=cond_vector,
+                    null_cond_vector=null_cond_vector,
+                    cfg_scale=cfg_scale,
+                    prediction_type="vector_field",
                 )
-
-                # Forward pass
-                model_output = modules.denoiser(
-                    hidden_states=latent_input,
-                    timestep=timesteps_input,
-                    encoder_hidden_states=encoder_hidden_states,
-                    pooled_projections=pooled_projections,
-                    return_dict=False,
-                )[0]
-
-                # Apply classifier-free guidance
-                model_output_uncond, model_output_cond = model_output.chunk(2)
-                model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
 
                 # Scheduler step
                 step_output = scheduler.step(model_output, timestep, latents, return_dict=True)
