@@ -1,11 +1,18 @@
 resources:
   # Optional; if left out, automatically pick the cheapest cloud.
-  infra: lambda/us-west-2
+  cloud: lambda
+  # region: us-west-2
   # 1x NVIDIA A100 GPU
-  accelerators: A100:1
+  accelerators: GH200:1
   autostop:
     idle_minutes: 5
     down: true
+  ordered:
+    - region: us-west-2
+    - region: us-west-1
+    - region: us-east-1
+    - region: us-east-2
+    - region: us-east-3
 
 file_mounts:
   /data:
@@ -27,13 +34,8 @@ setup: |
   uv pip install --upgrade pip setuptools
   uv sync
   # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
-  uv pip install /data/wheels/*.whl
+  uv pip install /data/wheels/$(uname -m)/*.whl
   mkdir -p /data/logs
-  # Once NATTEN is built, store it to /data for future use.
-  # ./install-natten.sh
-  # cp -r NATTEN /data/NATTEN
-  # If NATTEN is already built, install it from /data.
-  # uv pip install -e /data/NATTEN
 
 run: |
   echo "Hello, SkyPilot!"

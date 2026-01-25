@@ -27,13 +27,8 @@ setup: |
   uv pip install --upgrade pip setuptools
   uv sync
   # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
-  uv pip install /data/wheels/*.whl
+  uv pip install /data/wheels/$(uname -m)/*.whl
   mkdir -p /data/logs
-  # Once NATTEN is built, store it to /data for future use.
-  # ./install-natten.sh
-  # cp -r NATTEN /data/NATTEN
-  # If NATTEN is already built, install it from /data.
-  # uv pip install -e /data/NATTEN
 
 run: |
   echo "Hello, SkyPilot!"

@@ -44,9 +44,9 @@ uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
     -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml \
-    -s dataset.batch_size=128 \
+    -s dataset.batch_size=32 \
     -s training.eval_batch_size=128 \
-    -s training.gradient_accumulation_steps=1
+    -s training.gradient_accumulation_steps=4
 
 uv run python scripts/edit_config.py -c config/diffusion/sd35-*.toml \
     -s model.vae_tiling=true \
