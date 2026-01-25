@@ -1,24 +1,21 @@
 # TODOs
 
 Tasks for implementing a completed signal diffusion paper
+
 - Rename mapping_cond to something more accurate and descriptive
-- Check uv sync with pre-built wheels on setup
-- Tune diff model hyperparams
-  - model size for batch 8 / 16
-  - batch size for tuned models/sd35
-- Implement rectified cfg++
 - Train diff models for each
   - data type
   - conditioning
 
 # Completed
+
 - SOTA diffusion operations
+  - stochastic sampling for flow matching?
+  - Adjusted initial noise to avoid memorization <https://arxiv.org/pdf/2510.08625>
+  - Chamfer guidance for class adherence? <https://arxiv.org/pdf/2508.10631>
   - [x] based on deep research results
   - [x] careful conditioning with text embeddings and cross-attention
-  - stochastic sampling for flow matching?
-  - Rectified CFG++ https://arxiv.org/pdf/2510.07631
-  - Adjusted initial noise to avoid memorization https://arxiv.org/pdf/2510.08625
-  - Chamfer guidance for class adherence? https://arxiv.org/pdf/2508.10631
+  - [x] Rectified CFG++ <https://arxiv.org/pdf/2510.07631>
 - Metrics
   - MMD overall against test set and per-class
   - "Improved Precision and Recall" to get at accuracy and diversity
@@ -55,5 +52,5 @@ Tasks for implementing a completed signal diffusion paper
   - [x] configuration management
   - [x] bf16 mixed precision
   - [x] gradient checkpointing and accumulation for reduced memory use
-    - Metric: KID for average of last four 1000-step checkpoints (per OLMO 3)
+  - Metric: KID for average of last four 1000-step checkpoints (per OLMO 3)
   - [x] SWA for classifiers
