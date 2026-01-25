@@ -65,7 +65,8 @@ dependencies = [
 gpu = [
     "flash-attn<=2.8.3",
     # "xformers>=0.0.33.post2",
-    "natten>=0.21.1",
+    # "natten>=0.21.1",
+    "natten @ git+https://github.com/SHI-Labs/NATTEN",
     "causal-conv1d>=1.5.3.post1",
     "mamba-ssm>2",
 ]

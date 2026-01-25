@@ -8,7 +8,7 @@ trainer = "diffusion"
 name = "nkirschi/oxford-flowers"
 train_split = "train"
 val_split = "test"
-batch_size = 64
+batch_size = 128
 num_workers = 4
 resolution = 128
 center_crop = true
@@ -24,12 +24,12 @@ conditioning = "classes"
 # pretrained = "runs/diffusion/flowers/final/hourglass_model.pt"
 
 [model.extras]
-mapping_width = 256
+mapping_width = 512
 mapping_depth = 2
 mapping_d_ff = 768
 mapping_cond_dim = 0
 mapping_dropout_rate = 0.0
-depths = [3, 3, 4]
+depths = [2, 2, 8]
 widths = [128, 256, 512]
 d_ffs = [768, 768, 768]
 self_attns = [
@@ -53,18 +53,18 @@ prediction_type = "vector_field"
 
 [optimizer]
 name = "adamw"
-learning_rate = 2e-4
-weight_decay = 1e-3
-betas = [0.9, 0.99]
+learning_rate = 5e-4
+weight_decay = 1e-2
+betas = [0.9, 0.95]
 
 [scheduler]
-name = "linear"
-warmup_steps = 200
+name = "constant_with_warmup"
+warmup_steps = 1000
 
 [training]
 seed = 4321
-epochs = 150
-gradient_accumulation_steps = 1
+epochs = 300
+gradient_accumulation_steps = 2
 gradient_checkpointing = true
 log_every_steps = 10
 checkpoint_interval = 1000
@@ -93,5 +93,5 @@ run_name = "flowers_hourglass_rectcfgpp"
 wandb_project = "flowers"
 
 [inference]
-denoising_steps = 25
-cfg_scale = 2.5
+denoising_steps = 15
+cfg_scale = 1.5
