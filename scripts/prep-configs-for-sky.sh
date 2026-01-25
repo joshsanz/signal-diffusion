@@ -39,17 +39,17 @@ uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
 
 # Set batch sizes to what fits in memory
 uv run python scripts/edit_config.py -c config/diffusion/localmamba-*.toml \
-    -s dataset.batch_size=128 \
+    -s dataset.batch_size=256 \
     -s training.eval_batch_size=12 \
     -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/hourglass-*.toml \
-    -s dataset.batch_size=32 \
+    -s dataset.batch_size=128 \
     -s training.eval_batch_size=128 \
-    -s training.gradient_accumulation_steps=4
+    -s training.gradient_accumulation_steps=1
 
 uv run python scripts/edit_config.py -c config/diffusion/sd35-*.toml \
     -s model.vae_tiling=true \
-    -s dataset.batch_size=16 \
-    -s training.eval_batch_size=16 \
-    -s training.gradient_accumulation_steps=4
+    -s dataset.batch_size=128 \
+    -s training.eval_batch_size=128 \
+    -s training.gradient_accumulation_steps=2

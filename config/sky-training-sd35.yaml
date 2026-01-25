@@ -1,11 +1,17 @@
 resources:
   # Optional; if left out, automatically pick the cheapest cloud.
-  infra: lambda/us-west-2
+  cloud: lambda
   # 1x NVIDIA A100 GPU
-  accelerators: A100:1
+  accelerators: GH200:1
   autostop:
     idle_minutes: 5
     down: true
+  ordered:
+    - region: us-west-2
+    - region: us-west-1
+    - region: us-east-1
+    - region: us-east-2
+    - region: us-east-3
 
 file_mounts:
   /data:
