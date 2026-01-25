@@ -772,6 +772,7 @@ class Hourglass2DModel(nn.Module):
         self.out_norm = RMSNorm(levels[0].width)
         self.patch_out = TokenSplitWithoutSkip(levels[0].width, out_channels, patch_size)
         nn.init.zeros_(self.patch_out.proj.weight)
+        self.conv_out = apply_wd(nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1))
 
     def param_groups(self, base_lr=5e-4, mapping_lr_scale=1 / 3):
         wd = filter_params(lambda tags: "wd" in tags and "mapping" not in tags, self)
@@ -827,4 +828,6 @@ class Hourglass2DModel(nn.Module):
         x = self.patch_out(x)
         x = x.movedim(-1, -3)
 
+        # Smoothing output conv
+        x = self.conv_out(x)
         return x
