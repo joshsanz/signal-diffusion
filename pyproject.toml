@@ -2,6 +2,19 @@
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[[tool.uv.index]]
+name = "pytorch-gpu"
+url = "https://download.pytorch.org/whl/cu128" # Replace cu128 with your version
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-gpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-gpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
 [project]
 name = "signal-diffusion"
 version = "0.1.0"
@@ -13,7 +26,7 @@ dependencies = [
     "numpy>2",
     "scipy",
     "pandas",
-    "torch>=2.8,<2.9",
+    "torch",
     "torchaudio",
     "torchvision",
     "datasets[vision]",
