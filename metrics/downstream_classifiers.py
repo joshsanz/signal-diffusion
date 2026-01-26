@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import tomllib
 from dataclasses import asdict
 from datetime import datetime
@@ -68,9 +69,64 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+HPO_PATTERN = re.compile(r"hpo_study_([^_]+)_(gender|mixed)_(\d{8}_\d{6}|\d{8})\.json")
+
+
 def _load_hpo_summary(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        data = json.load(handle)
+    if not isinstance(data, Mapping):
+        raise ValueError(f"Expected HPO summary to be a mapping, got {type(data)}")
+    return dict(data)
+
+
+def _summarize_hpo_result(hpo_result: Mapping[str, Any]) -> dict[str, Any]:
+    best_user_attrs = hpo_result.get("best_user_attrs", {})
+    summary = {
+        "best_trial_num": hpo_result.get("best_trial"),
+        "best_objective": hpo_result.get("best_combined_objective"),
+        "best_params": hpo_result.get("best_params", {}),
+    }
+
+    task_metrics: dict[str, dict[str, Any]] = {}
+    if isinstance(best_user_attrs, Mapping):
+        for attr_name, attr_value in best_user_attrs.items():
+            if attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
+                task_name = attr_name.replace("task_", "").replace("_accuracy", "")
+                task_metrics.setdefault(task_name, {})["accuracy"] = attr_value
+            elif attr_name.startswith("task_") and attr_name.endswith("_mse"):
+                task_name = attr_name.replace("task_", "").replace("_mse", "")
+                task_metrics.setdefault(task_name, {})["mse"] = attr_value
+            elif attr_name.startswith("task_") and attr_name.endswith("_mae"):
+                task_name = attr_name.replace("task_", "").replace("_mae", "")
+                task_metrics.setdefault(task_name, {})["mae"] = attr_value
+
+    summary["task_metrics"] = task_metrics
+    return summary
+
+
+def _load_hpo_results_from_dir(hpo_dir: Path, spec_type: str) -> dict[str, dict[str, Any]]:
+    # Mirror scripts/train_with_best_hpo.py: keep the most recent run per (spec_type, task_type).
+    results: dict[str, tuple[Path, str]] = {}
+    for json_file in hpo_dir.glob("hpo_study_*.json"):
+        match = HPO_PATTERN.match(json_file.name)
+        if not match:
+            continue
+        file_spec, task_type, timestamp = match.groups()
+        if file_spec != spec_type:
+            continue
+        if task_type not in ("gender", "mixed"):
+            continue
+        if task_type not in results or timestamp > results[task_type][1]:
+            results[task_type] = (json_file, timestamp)
+
+    summarized: dict[str, dict[str, Any]] = {}
+    for task_type, (file_path, _) in results.items():
+        with file_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        summarized[f"{spec_type}_{task_type}"] = _summarize_hpo_result(data)
+
+    return summarized
 
 
 def _select_hpo_entry(summary: Mapping[str, Any], spec_type: str) -> tuple[str, dict[str, Any]]:
@@ -79,7 +135,7 @@ def _select_hpo_entry(summary: Mapping[str, Any], spec_type: str) -> tuple[str, 
         name: value for name, value in summary.items() if name.startswith(f"{spec_type}_")
     }
     if not candidates:
-        raise ValueError(f"No HPO entries found for spec_type '{spec_type}' in summary")
+        raise ValueError(f"No HPO entries found for spec_type '{spec_type}'")
 
     def _gender_accuracy(entry: Mapping[str, Any]) -> float:
         metrics = entry.get("task_metrics", {})
@@ -97,6 +153,32 @@ def _select_hpo_entry(summary: Mapping[str, Any], spec_type: str) -> tuple[str, 
             best_name,
         )
     return best_name, best_entry
+
+
+def _resolve_hpo_entry(hpo_path: Path, spec_type: str) -> tuple[str, dict[str, Any], Path]:
+    summary: dict[str, Any] = {}
+    hpo_source = hpo_path
+    if hpo_path.is_dir():
+        summary = _load_hpo_results_from_dir(hpo_path, spec_type)
+    else:
+        summary = _load_hpo_summary(hpo_path)
+
+    if not any(name.startswith(f"{spec_type}_") for name in summary.keys()):
+        fallback_dir = hpo_path if hpo_path.is_dir() else hpo_path.parent
+        LOGGER.warning(
+            "No HPO entries for spec_type '%s' in %s; falling back to %s",
+            spec_type,
+            hpo_path,
+            fallback_dir,
+        )
+        summary = _load_hpo_results_from_dir(fallback_dir, spec_type)
+        hpo_source = fallback_dir
+
+    if not summary:
+        raise ValueError(f"No HPO results found for spec_type '{spec_type}' in {hpo_path}")
+
+    entry_name, entry = _select_hpo_entry(summary, spec_type)
+    return entry_name, entry, hpo_source
 
 
 def _apply_hpo_params(config: ClassificationExperimentConfig, hpo_params: Mapping[str, Any]) -> None:
@@ -462,8 +544,7 @@ def main(args: argparse.Namespace) -> None:
     hpo_path = Path(args.hpo_summary).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
 
-    hpo_summary = _load_hpo_summary(hpo_path)
-    hpo_key, hpo_entry = _select_hpo_entry(hpo_summary, spec_type)
+    hpo_key, hpo_entry, hpo_source = _resolve_hpo_entry(hpo_path, spec_type)
 
     base_config_path = Path(SPEC_TO_CONFIG[spec_type]).expanduser().resolve()
     base_config = load_experiment_config(base_config_path)
@@ -549,6 +630,7 @@ def main(args: argparse.Namespace) -> None:
             "real_dataset": str(real_path),
             "synthetic_dataset": str(synth_path),
             "hpo_summary": str(hpo_path),
+            "hpo_source": str(hpo_source),
             "hpo_selection": {
                 "config_name": hpo_key,
                 "gender_accuracy": hpo_entry.get("task_metrics", {}).get("gender", {}).get("accuracy"),
