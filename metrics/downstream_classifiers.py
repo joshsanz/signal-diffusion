@@ -427,6 +427,17 @@ def _serialize_training_config(training) -> dict[str, Any]:
     return data
 
 
+def _format_eval_key(
+    train_source: str,
+    train_split: str,
+    eval_source: str,
+    eval_split: str,
+) -> str:
+    train_label = f"{train_source}_{train_split}".replace("-", "_")
+    eval_label = f"{eval_source}_{eval_split}".replace("-", "_")
+    return f"{train_label}__{eval_label}"
+
+
 def _save_training_config(
     output_path: Path,
     *,
@@ -615,6 +626,18 @@ def main(args: argparse.Namespace) -> None:
         shuffle=False,
     )
 
+    real_val_loader = _build_loader(
+        settings,
+        dataset_name=str(real_path),
+        split=real_train_config.dataset.val_split,
+        tasks=tasks,
+        batch_size=real_train_config.dataset.batch_size,
+        num_workers=real_train_config.dataset.num_workers,
+        pin_memory=pin_memory,
+        extras=extras,
+        shuffle=False,
+    )
+
     results = {
         "meta": {
             "data_type": spec_type,
@@ -636,8 +659,17 @@ def main(args: argparse.Namespace) -> None:
         "evaluations": {},
     }
 
+    real_train_split = real_train_config.dataset.train_split
+    real_val_split = real_train_config.dataset.val_split
+    synth_train_split = synth_train_config.dataset.train_split
+    real_test_key = _format_eval_key("real", real_train_split, "real", "test")
+    synth_test_key = _format_eval_key("synth", synth_train_split, "real", "test")
+    synth_train_key = _format_eval_key("real", real_train_split, "synth", synth_train_split)
+    real_val_key = _format_eval_key("real", real_train_split, "real", real_val_split)
+    synth_val_key = _format_eval_key("synth", synth_train_split, "real", real_val_split)
+
     LOGGER.info("Evaluating real-trained classifier on real test split...")
-    results["evaluations"]["real_train__real_test"] = _evaluate_model(
+    results["evaluations"][real_test_key] = _evaluate_model(
         real_model,
         real_test_loader,
         task_specs,
@@ -645,7 +677,7 @@ def main(args: argparse.Namespace) -> None:
     )
 
     LOGGER.info("Evaluating synthetic-trained classifier on real test split...")
-    results["evaluations"]["synth_train__real_test"] = _evaluate_model(
+    results["evaluations"][synth_test_key] = _evaluate_model(
         synth_model,
         real_test_loader,
         task_specs,
@@ -653,9 +685,25 @@ def main(args: argparse.Namespace) -> None:
     )
 
     LOGGER.info("Evaluating real-trained classifier on synthetic train split...")
-    results["evaluations"]["real_train__synth_train"] = _evaluate_model(
+    results["evaluations"][synth_train_key] = _evaluate_model(
         real_model,
         synth_train_loader,
+        task_specs,
+        device,
+    )
+
+    LOGGER.info("Evaluating real-trained classifier on real val split...")
+    results["evaluations"][real_val_key] = _evaluate_model(
+        real_model,
+        real_val_loader,
+        task_specs,
+        device,
+    )
+
+    LOGGER.info("Evaluating synthetic-trained classifier on real val split...")
+    results["evaluations"][synth_val_key] = _evaluate_model(
+        synth_model,
+        real_val_loader,
         task_specs,
         device,
     )
