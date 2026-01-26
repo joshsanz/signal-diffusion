@@ -44,5 +44,5 @@ run: |
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
   python scripts/edit_config.py -c config/diffusion/sd35-db-only.toml -s training.compile_model=false
-  python scripts/generate_synthetic_dataset.py -m /data/runs/sd35/test-$RUN_PATH/best_eval/checkpoint-4000/ema/transformer -c config/diffusion/sd35-db-only.toml -o /data/data/signal-diffusion/generated/sd35-db-only-$RUN_ID/ -n 10000 -b 128 --overwrite
+  python scripts/generate_synthetic_dataset.py -m /data/runs/sd35/test-$RUN_PATH/best_eval/checkpoint-4000/ema/transformer -c config/diffusion/sd35-db-only.toml -o /data/generated/sd35-db-only-$RUN_ID.large/ -n 50000 -b 128 --overwrite
   echo "Run completed."

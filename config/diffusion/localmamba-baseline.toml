@@ -55,7 +55,7 @@ betas = [0.9, 0.99]
 
 [scheduler]
 name = "constant_with_warmup"
-warmup_steps = 1000
+warmup_steps = 500
 
 [training]
 seed = 42
@@ -68,7 +68,7 @@ log_every_steps = 10
 checkpoint_interval = 1000
 checkpoint_total_limit = 3
 eval_strategy = "steps"
-eval_num_steps = 1000
+eval_num_steps = 500
 eval_num_examples = 8
 eval_gen_seed = 1234
 eval_batch_size = 256

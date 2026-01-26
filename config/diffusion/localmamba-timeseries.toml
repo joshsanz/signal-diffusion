@@ -60,7 +60,7 @@ betas = [0.9, 0.99]
 
 [scheduler]
 name = "constant_with_warmup"
-warmup_steps = 100
+warmup_steps = 500
 
 [training]
 seed = 42
@@ -76,7 +76,7 @@ checkpoint_interval = 1000
 checkpoint_total_limit = 3
 
 eval_strategy = "epoch"
-eval_num_steps = 100
+eval_num_steps = 500
 eval_num_examples = 8
 eval_batch_size = 1
 
