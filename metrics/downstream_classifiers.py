@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--real-dataset", required=True, help="Path to real dataset (HF load_dataset dir)")
     parser.add_argument("--synthetic-dataset", required=True, help="Path to synthetic dataset (HF load_dataset dir)")
     parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override training epochs for downstream runs",
+    )
+    parser.add_argument(
         "--hpo-summary",
         required=True,
         help="Path to HPO results directory (or any file inside it, e.g., hpo_results/)",
@@ -211,6 +217,7 @@ def _prepare_run_config(
     tasks: tuple[str, ...],
     run_label: str,
     runs_root: Path,
+    epochs_override: int | None = None,
 ) -> ClassificationExperimentConfig:
     config = copy.deepcopy(base_config)
     _configure_dataset(
@@ -223,6 +230,10 @@ def _prepare_run_config(
     # Route all run artifacts under a shared output directory for traceability.
     config.training.output_dir = runs_root
     config.training.run_name = run_label
+    if epochs_override is not None:
+        if epochs_override <= 0:
+            raise ValueError("--epochs must be positive when provided")
+        config.training.epochs = epochs_override
     return config
 
 
@@ -545,6 +556,7 @@ def main(args: argparse.Namespace) -> None:
         tasks=tasks,
         run_label=f"downstream_real_{spec_type}",
         runs_root=runs_root,
+        epochs_override=args.epochs,
     )
     synth_train_config = _prepare_run_config(
         base_config,
@@ -554,6 +566,7 @@ def main(args: argparse.Namespace) -> None:
         tasks=tasks,
         run_label=f"downstream_synth_{spec_type}",
         runs_root=runs_root,
+        epochs_override=args.epochs,
     )
 
     real_config_path = runs_root / f"{real_train_config.training.run_name}_config.toml"
