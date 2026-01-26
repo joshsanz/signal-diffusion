@@ -63,21 +63,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hpo-summary",
         required=True,
-        help="Path to HPO summary JSON (e.g., hpo_results/hpo_summary.json)",
+        help="Path to HPO results directory (or any file inside it, e.g., hpo_results/)",
     )
     parser.add_argument("--output", required=True, help="Output JSON filename for results")
     return parser.parse_args()
 
 
 HPO_PATTERN = re.compile(r"hpo_study_([^_]+)_(gender|mixed)_(\d{8}_\d{6}|\d{8})\.json")
-
-
-def _load_hpo_summary(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, Mapping):
-        raise ValueError(f"Expected HPO summary to be a mapping, got {type(data)}")
-    return dict(data)
 
 
 def _summarize_hpo_result(hpo_result: Mapping[str, Any]) -> dict[str, Any]:
@@ -156,27 +148,10 @@ def _select_hpo_entry(summary: Mapping[str, Any], spec_type: str) -> tuple[str, 
 
 
 def _resolve_hpo_entry(hpo_path: Path, spec_type: str) -> tuple[str, dict[str, Any], Path]:
-    summary: dict[str, Any] = {}
-    hpo_source = hpo_path
-    if hpo_path.is_dir():
-        summary = _load_hpo_results_from_dir(hpo_path, spec_type)
-    else:
-        summary = _load_hpo_summary(hpo_path)
-
-    if not any(name.startswith(f"{spec_type}_") for name in summary.keys()):
-        fallback_dir = hpo_path if hpo_path.is_dir() else hpo_path.parent
-        LOGGER.warning(
-            "No HPO entries for spec_type '%s' in %s; falling back to %s",
-            spec_type,
-            hpo_path,
-            fallback_dir,
-        )
-        summary = _load_hpo_results_from_dir(fallback_dir, spec_type)
-        hpo_source = fallback_dir
-
+    hpo_source = hpo_path if hpo_path.is_dir() else hpo_path.parent
+    summary = _load_hpo_results_from_dir(hpo_source, spec_type)
     if not summary:
-        raise ValueError(f"No HPO results found for spec_type '{spec_type}' in {hpo_path}")
-
+        raise ValueError(f"No HPO results found for spec_type '{spec_type}' in {hpo_source}")
     entry_name, entry = _select_hpo_entry(summary, spec_type)
     return entry_name, entry, hpo_source
 
