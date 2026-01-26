@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import tomllib
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import torch
+import tomli_w
 from torch.utils.data import DataLoader
 
 from signal_diffusion.classification import (
@@ -354,6 +356,99 @@ def _serialize_training_config(training) -> dict[str, Any]:
     return data
 
 
+def _save_training_config(
+    output_path: Path,
+    *,
+    template_path: Path,
+    config: ClassificationExperimentConfig,
+) -> None:
+    with template_path.open("rb") as handle:
+        data = tomllib.load(handle)
+
+    dataset = data.setdefault("dataset", {})
+    dataset["name"] = config.dataset.name
+    dataset["train_split"] = config.dataset.train_split
+    dataset["val_split"] = config.dataset.val_split
+    dataset["tasks"] = list(config.dataset.tasks)
+    dataset["batch_size"] = config.dataset.batch_size
+    dataset["num_workers"] = config.dataset.num_workers
+    dataset["shuffle"] = config.dataset.shuffle
+    dataset["pin_memory"] = config.dataset.pin_memory
+    if config.dataset.extras:
+        extras = dataset.setdefault("extras", {})
+        extras.update(config.dataset.extras)
+
+    model = data.setdefault("model", {})
+    model["backbone"] = config.model.backbone
+    model["input_channels"] = config.model.input_channels
+    model["embedding_dim"] = config.model.embedding_dim
+    model["dropout"] = config.model.dropout
+    model["activation"] = config.model.activation
+    model["depth"] = config.model.depth
+    model["layer_repeats"] = config.model.layer_repeats
+    if config.model.extras:
+        extras = model.setdefault("extras", {})
+        extras.update(config.model.extras)
+
+    optimizer = data.setdefault("optimizer", {})
+    optimizer["name"] = config.optimizer.name
+    optimizer["learning_rate"] = config.optimizer.learning_rate
+    optimizer["weight_decay"] = config.optimizer.weight_decay
+    optimizer["betas"] = list(config.optimizer.betas)
+
+    scheduler = data.setdefault("scheduler", {})
+    scheduler["name"] = config.scheduler.name
+    scheduler["warmup_steps"] = config.scheduler.warmup_steps
+    if config.scheduler.kwargs:
+        scheduler["kwargs"] = dict(config.scheduler.kwargs)
+
+    training = data.setdefault("training", {})
+    training["epochs"] = config.training.epochs
+    training["max_steps"] = config.training.max_steps
+    training["clip_grad_norm"] = config.training.clip_grad_norm
+    training["log_every_batches"] = config.training.log_every_batches
+    training["eval_strategy"] = config.training.eval_strategy
+    if config.training.eval_steps is not None:
+        training["eval_steps"] = config.training.eval_steps
+    training["checkpoint_strategy"] = config.training.checkpoint_strategy
+    if config.training.checkpoint_steps is not None:
+        training["checkpoint_steps"] = config.training.checkpoint_steps
+    if config.training.checkpoint_total_limit is not None:
+        training["checkpoint_total_limit"] = config.training.checkpoint_total_limit
+    training["tensorboard"] = config.training.tensorboard
+    training["compile_model"] = config.training.compile_model
+    training["compile_mode"] = config.training.compile_mode
+    training["swa_enabled"] = config.training.swa_enabled
+    training["swa_extra_ratio"] = config.training.swa_extra_ratio
+    training["swa_lr_frac"] = config.training.swa_lr_frac
+    training["early_stopping"] = config.training.early_stopping
+    training["early_stopping_patience"] = config.training.early_stopping_patience
+    training["max_best_checkpoints"] = config.training.max_best_checkpoints
+    training["use_amp"] = config.training.use_amp
+    if config.training.task_weights:
+        training["task_weights"] = dict(config.training.task_weights)
+    if config.training.output_dir is not None:
+        training["output_dir"] = str(config.training.output_dir)
+    if config.training.log_dir is not None:
+        training["log_dir"] = str(config.training.log_dir)
+    if config.training.metrics_summary_path is not None:
+        training["metrics_summary_path"] = str(config.training.metrics_summary_path)
+    if config.training.run_name is not None:
+        training["run_name"] = config.training.run_name
+    if config.training.device is not None:
+        training["device"] = config.training.device
+    if config.training.wandb_project is not None:
+        training["wandb_project"] = config.training.wandb_project
+    if config.training.wandb_entity is not None:
+        training["wandb_entity"] = config.training.wandb_entity
+    if config.training.wandb_tags:
+        training["wandb_tags"] = list(config.training.wandb_tags)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("wb") as handle:
+        tomli_w.dump(data, handle)
+
+
 def print_results_tables(results_path: Path) -> None:
     with results_path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -401,6 +496,11 @@ def main(args: argparse.Namespace) -> None:
         run_label=f"downstream_synth_{spec_type}",
         runs_root=runs_root,
     )
+
+    real_config_path = runs_root / f"{real_train_config.training.run_name}_config.toml"
+    synth_config_path = runs_root / f"{synth_train_config.training.run_name}_config.toml"
+    _save_training_config(real_config_path, template_path=base_config_path, config=real_train_config)
+    _save_training_config(synth_config_path, template_path=base_config_path, config=synth_train_config)
 
     LOGGER.info("Training classifier on real data...")
     real_summary = train_from_config(real_train_config)
