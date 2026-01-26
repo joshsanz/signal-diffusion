@@ -33,6 +33,7 @@ if flags.get_use_compile():
 
 # Helpers
 
+
 def zero_init(layer):
     nn.init.zeros_(layer.weight)
     if layer.bias is not None:
@@ -54,6 +55,7 @@ def downscale_pos(pos):
 
 
 # Param tags
+
 
 def tag_param(param, tag):
     if not hasattr(param, "_tags"):
@@ -85,6 +87,7 @@ def filter_params(function, module):
 
 # Kernels
 
+
 @flags.compile_wrap
 def linear_geglu(x, weight, bias=None):
     x = x @ weight.mT
@@ -97,7 +100,7 @@ def linear_geglu(x, weight, bias=None):
 @flags.compile_wrap
 def rms_norm(x, scale, eps):
     dtype = reduce(torch.promote_types, (x.dtype, scale.dtype, torch.float32))
-    mean_sq = torch.mean(x.to(dtype)**2, dim=-1, keepdim=True)
+    mean_sq = torch.mean(x.to(dtype) ** 2, dim=-1, keepdim=True)
     scale = scale.to(dtype) * torch.rsqrt(mean_sq + eps)
     return x * scale.to(x.dtype)
 
@@ -105,8 +108,8 @@ def rms_norm(x, scale, eps):
 @flags.compile_wrap
 def scale_for_cosine_sim(q, k, scale, eps) -> Tuple[torch.Tensor, torch.Tensor]:
     dtype = reduce(torch.promote_types, (q.dtype, k.dtype, scale.dtype, torch.float32))
-    sum_sq_q = torch.sum(q.to(dtype)**2, dim=-1, keepdim=True)
-    sum_sq_k = torch.sum(k.to(dtype)**2, dim=-1, keepdim=True)
+    sum_sq_q = torch.sum(q.to(dtype) ** 2, dim=-1, keepdim=True)
+    sum_sq_k = torch.sum(k.to(dtype) ** 2, dim=-1, keepdim=True)
     sqrt_scale = torch.sqrt(scale.to(dtype))
     scale_q = sqrt_scale * torch.rsqrt(sum_sq_q + eps)
     scale_k = sqrt_scale * torch.rsqrt(sum_sq_k + eps)
@@ -121,6 +124,7 @@ def scale_for_cosine_sim_qkv(qkv, scale, eps) -> torch.Tensor:
 
 
 # Layers
+
 
 class Linear(nn.Linear):
     def forward(self, input):
@@ -167,11 +171,12 @@ class AdaRMSNorm(nn.Module):
 
 # Random Fourier feature embeddings
 
+
 class FourierFeatures(nn.Module):
-    def __init__(self, in_features, out_features, std=1.):
+    def __init__(self, in_features, out_features, std=1.0):
         super().__init__()
         assert out_features % 2 == 0
-        self.register_buffer('weight', torch.randn([out_features // 2, in_features]) * std)
+        self.register_buffer("weight", torch.randn([out_features // 2, in_features]) * std)
 
     def forward(self, input):
         # Cast input to match weight dtype for mixed precision compatibility
@@ -182,13 +187,14 @@ class FourierFeatures(nn.Module):
 
 # Rotary position embeddings
 
+
 def centers(start, stop, num, dtype=None, device=None):
     edges = torch.linspace(start, stop, num + 1, dtype=dtype, device=device)
     return (edges[:-1] + edges[1:]) / 2
 
 
 def make_grid(h_pos, w_pos):
-    grid = torch.stack(torch.meshgrid(h_pos, w_pos, indexing='ij'), dim=-1)
+    grid = torch.stack(torch.meshgrid(h_pos, w_pos, indexing="ij"), dim=-1)
     h, w, d = grid.shape
     return grid.view(h * w, d)
 
@@ -271,18 +277,18 @@ class ApplyRotaryEmbeddingInplace(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        theta, = ctx.saved_tensors
+        (theta,) = ctx.saved_tensors
         grad_output = ApplyRotaryEmbeddingInplace.apply(grad_output.clone(), theta, not ctx.conj)
         return grad_output, None, None
 
     @staticmethod
     def jvp(ctx, grad_input, _, __):
-        theta, = ctx.saved_tensors
+        (theta,) = ctx.saved_tensors
         return ApplyRotaryEmbeddingInplace.apply(grad_input, theta, ctx.conj)
 
 
 def apply_rotary_emb_(x, theta) -> torch.Tensor:
-    return ApplyRotaryEmbeddingInplace.apply(x, theta, False) # type: ignore
+    return ApplyRotaryEmbeddingInplace.apply(x, theta, False)  # type: ignore
 
 
 class AxialRoPE(nn.Module):
@@ -294,7 +300,7 @@ class AxialRoPE(nn.Module):
         self.register_buffer("freqs", freqs.view(dim // 4, n_heads).T.contiguous())
 
     def extra_repr(self):
-        return f"dim={self.freqs.shape[1] * 4}, n_heads={self.freqs.shape[0]}" # type: ignore
+        return f"dim={self.freqs.shape[1] * 4}, n_heads={self.freqs.shape[0]}"  # type: ignore
 
     def forward(self, pos):
         theta_h = pos[..., None, 0:1] * self.freqs.to(pos.dtype)
@@ -303,6 +309,7 @@ class AxialRoPE(nn.Module):
 
 
 # Shifted window attention
+
 
 def window(window_size, x):
     *b, h, w, c = x.shape
@@ -434,7 +441,7 @@ class SelfAttentionBlock(nn.Module):
             qkv = apply_rotary_emb_(qkv, theta)
             flops_shape = qkv.shape[-5], qkv.shape[-2], qkv.shape[-4], qkv.shape[-1]
             flops.op(flops.op_attention, flops_shape, flops_shape, flops_shape)
-            x = flash_attn.flash_attn_qkvpacked_func(qkv, softmax_scale=1.0) # type: ignore
+            x = flash_attn.flash_attn_qkvpacked_func(qkv, softmax_scale=1.0)  # type: ignore
             x = rearrange(x, "n (h w) nh e -> n h w (nh e)", h=skip.shape[-3], w=skip.shape[-2])
         else:
             q, k, v = rearrange(qkv, "n h w (t nh e) -> t n nh (h w) e", t=3, e=self.d_head)
@@ -550,7 +557,9 @@ class GlobalTransformerLayer(nn.Module):
 class NeighborhoodTransformerLayer(nn.Module):
     def __init__(self, d_model, d_ff, d_head, cond_features, kernel_size, dropout=0.0):
         super().__init__()
-        self.self_attn = NeighborhoodSelfAttentionBlock(d_model, d_head, cond_features, kernel_size, dropout=dropout)
+        self.self_attn = NeighborhoodSelfAttentionBlock(
+            d_model, d_head, cond_features, kernel_size, dropout=dropout
+        )
         self.ff = FeedForwardBlock(d_model, d_ff, cond_features, dropout=dropout)
 
     def forward(self, x, pos, cond):
@@ -563,7 +572,9 @@ class ShiftedWindowTransformerLayer(nn.Module):
     def __init__(self, d_model, d_ff, d_head, cond_features, window_size, index, dropout=0.0):
         super().__init__()
         window_shift = window_size // 2 if index % 2 == 1 else 0
-        self.self_attn = ShiftedWindowSelfAttentionBlock(d_model, d_head, cond_features, window_size, window_shift, dropout=dropout)
+        self.self_attn = ShiftedWindowSelfAttentionBlock(
+            d_model, d_head, cond_features, window_size, window_shift, dropout=dropout
+        )
         self.ff = FeedForwardBlock(d_model, d_ff, cond_features, dropout=dropout)
 
     def forward(self, x, pos, cond):
@@ -591,6 +602,7 @@ class Level(nn.ModuleList):
 
 # Mapping network
 
+
 class MappingFeedForwardBlock(nn.Module):
     def __init__(self, d_model, d_ff, dropout=0.0):
         super().__init__()
@@ -612,7 +624,9 @@ class MappingNetwork(nn.Module):
     def __init__(self, n_layers, d_model, d_ff, dropout=0.0):
         super().__init__()
         self.in_norm = RMSNorm(d_model)
-        self.blocks = nn.ModuleList([MappingFeedForwardBlock(d_model, d_ff, dropout=dropout) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList(
+            [MappingFeedForwardBlock(d_model, d_ff, dropout=dropout) for _ in range(n_layers)]
+        )
         self.out_norm = RMSNorm(d_model)
 
     def forward(self, x):
@@ -624,6 +638,7 @@ class MappingNetwork(nn.Module):
 
 
 # Token merging and splitting
+
 
 class TokenMerge(nn.Module):
     def __init__(self, in_features, out_features, patch_size=(2, 2)):
@@ -665,6 +680,7 @@ class TokenSplit(nn.Module):
 
 # Configuration
 
+
 @dataclass
 class GlobalAttentionSpec:
     d_head: int
@@ -692,7 +708,9 @@ class LevelSpec:
     depth: int
     width: int
     d_ff: int
-    self_attn: Union[GlobalAttentionSpec, NeighborhoodAttentionSpec, ShiftedWindowAttentionSpec, NoAttentionSpec]
+    self_attn: Union[
+        GlobalAttentionSpec, NeighborhoodAttentionSpec, ShiftedWindowAttentionSpec, NoAttentionSpec
+    ]
     dropout: float
 
 
@@ -706,8 +724,18 @@ class MappingSpec:
 
 # Model class
 
+
 class Hourglass2DModel(nn.Module):
-    def __init__(self, levels, mapping, in_channels, out_channels, patch_size, num_classes=0, mapping_cond_dim=0):
+    def __init__(
+        self,
+        levels,
+        mapping,
+        in_channels,
+        out_channels,
+        patch_size,
+        num_classes=0,
+        mapping_cond_dim=0,
+    ):
         super().__init__()
         self.num_classes = num_classes
 
@@ -718,11 +746,17 @@ class Hourglass2DModel(nn.Module):
         self.aug_emb = FourierFeatures(9, mapping.width)
         self.aug_in_proj = Linear(mapping.width, mapping.width, bias=False)
         self.class_emb = nn.Embedding(num_classes, mapping.width) if num_classes else None
-        self.mapping_cond_in_proj = Linear(mapping_cond_dim, mapping.width, bias=False) if mapping_cond_dim else None
-        self.mapping = tag_module(MappingNetwork(mapping.depth, mapping.width, mapping.d_ff, dropout=mapping.dropout), "mapping")
+        self.mapping_cond_in_proj = (
+            Linear(mapping_cond_dim, mapping.width, bias=False) if mapping_cond_dim else None
+        )
+        self.mapping = tag_module(
+            MappingNetwork(mapping.depth, mapping.width, mapping.d_ff, dropout=mapping.dropout),
+            "mapping",
+        )
 
         self.down_levels, self.up_levels = nn.ModuleList(), nn.ModuleList()
         for i, spec in enumerate(levels):
+
             def layer_factory(index: int) -> nn.Module:
                 if isinstance(spec.self_attn, GlobalAttentionSpec):
                     return GlobalTransformerLayer(
@@ -762,17 +796,29 @@ class Hourglass2DModel(nn.Module):
 
             if i < len(levels) - 1:
                 self.down_levels.append(Level([layer_factory(i) for i in range(spec.depth)]))
-                self.up_levels.append(Level([layer_factory(i + spec.depth) for i in range(spec.depth)]))
+                self.up_levels.append(
+                    Level([layer_factory(i + spec.depth) for i in range(spec.depth)])
+                )
             else:
                 self.mid_level = Level([layer_factory(i) for i in range(spec.depth)])
 
-        self.merges = nn.ModuleList([TokenMerge(spec_1.width, spec_2.width) for spec_1, spec_2 in zip(levels[:-1], levels[1:])])
-        self.splits = nn.ModuleList([TokenSplit(spec_2.width, spec_1.width) for spec_1, spec_2 in zip(levels[:-1], levels[1:])])
+        self.merges = nn.ModuleList(
+            [
+                TokenMerge(spec_1.width, spec_2.width)
+                for spec_1, spec_2 in zip(levels[:-1], levels[1:])
+            ]
+        )
+        self.splits = nn.ModuleList(
+            [
+                TokenSplit(spec_2.width, spec_1.width)
+                for spec_1, spec_2 in zip(levels[:-1], levels[1:])
+            ]
+        )
 
         self.out_norm = RMSNorm(levels[0].width)
         self.patch_out = TokenSplitWithoutSkip(levels[0].width, out_channels, patch_size)
         nn.init.zeros_(self.patch_out.proj.weight)
-        self.conv_out = apply_wd(nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1))
+        # self.conv_out = apply_wd(nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1))
 
     def param_groups(self, base_lr=5e-4, mapping_lr_scale=1 / 3):
         wd = filter_params(lambda tags: "wd" in tags and "mapping" not in tags, self)
@@ -783,7 +829,7 @@ class Hourglass2DModel(nn.Module):
             {"params": list(wd), "lr": base_lr},
             {"params": list(no_wd), "lr": base_lr, "weight_decay": 0.0},
             {"params": list(mapping_wd), "lr": base_lr * mapping_lr_scale},
-            {"params": list(mapping_no_wd), "lr": base_lr * mapping_lr_scale, "weight_decay": 0.0}
+            {"params": list(mapping_no_wd), "lr": base_lr * mapping_lr_scale, "weight_decay": 0.0},
         ]
         return groups
 
@@ -792,7 +838,9 @@ class Hourglass2DModel(nn.Module):
         x = x.movedim(-3, -1)
         x = self.patch_in(x)
         # TODO: pixel aspect ratio for nonsquare patches
-        pos = make_axial_pos(x.shape[-3], x.shape[-2], device=x.device).view(x.shape[-3], x.shape[-2], 2)
+        pos = make_axial_pos(x.shape[-3], x.shape[-2], device=x.device).view(
+            x.shape[-3], x.shape[-2], 2
+        )
 
         # Mapping network
         if class_cond is None and self.class_emb is not None:
@@ -805,7 +853,9 @@ class Hourglass2DModel(nn.Module):
         aug_cond = x.new_zeros([x.shape[0], 9]) if aug_cond is None else aug_cond
         aug_emb = self.aug_in_proj(self.aug_emb(aug_cond))
         class_emb = self.class_emb(class_cond) if self.class_emb is not None else 0
-        mapping_emb = self.mapping_cond_in_proj(mapping_cond) if self.mapping_cond_in_proj is not None else 0
+        mapping_emb = (
+            self.mapping_cond_in_proj(mapping_cond) if self.mapping_cond_in_proj is not None else 0
+        )
         cond = self.mapping(time_emb + aug_emb + class_emb + mapping_emb)
 
         # Hourglass transformer
@@ -819,7 +869,9 @@ class Hourglass2DModel(nn.Module):
 
         x = self.mid_level(x, pos, cond)
 
-        for up_level, split, skip, pos in reversed(list(zip(self.up_levels, self.splits, skips, poses))):
+        for up_level, split, skip, pos in reversed(
+            list(zip(self.up_levels, self.splits, skips, poses))
+        ):
             x = split(x, skip)
             x = up_level(x, pos, cond)
 
@@ -829,5 +881,5 @@ class Hourglass2DModel(nn.Module):
         x = x.movedim(-1, -3)
 
         # Smoothing output conv
-        x = self.conv_out(x)
+        # x = self.conv_out(x)
         return x
