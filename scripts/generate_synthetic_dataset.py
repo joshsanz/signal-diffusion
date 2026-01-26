@@ -3,6 +3,7 @@
 Creates a parquet dataset with controlled attribute distributions (gender, health, age)
 using the specified diffusion model for generation.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -117,8 +118,12 @@ def prepare_conditioning(
 @app.command()
 def main(
     config: Path = typer.Option(..., "-c", "--config", help="Path to diffusion config TOML file"),
-    model_path: Path = typer.Option(..., "-m", "--model-path", help="Path to pretrained model checkpoint (.pt)"),
-    output_dir: Path = typer.Option(..., "-o", "--output-dir", help="Output directory for parquet dataset"),
+    model_path: Path = typer.Option(
+        ..., "-m", "--model-path", help="Path to pretrained model checkpoint (.pt)"
+    ),
+    output_dir: Path = typer.Option(
+        ..., "-o", "--output-dir", help="Output directory for parquet dataset"
+    ),
     n: int = typer.Option(..., "-n", help="Number of samples to generate"),
     batch_size: int = typer.Option(4, "-b", "--batch-size", help="Batch size for generation"),
     seed: int = typer.Option(42, help="Random seed"),
@@ -170,7 +175,7 @@ def main(
         modules.denoiser,
         model_path,
         logger,
-        model_name="SD3 transformer",
+        model_name=cfg.model.name,
     )
     modules.denoiser.to(accelerator.device)
     modules.denoiser.eval()

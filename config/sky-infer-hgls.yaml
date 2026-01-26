@@ -1,0 +1,48 @@
+resources:
+  # Optional; if left out, automatically pick the cheapest cloud.
+  cloud: lambda
+  # 1x NVIDIA A100 GPU
+  accelerators: GH200:1
+  autostop:
+    idle_minutes: 5
+    down: true
+  ordered:
+    - region: us-west-2
+    - region: us-west-1
+    - region: us-east-1
+    - region: us-east-2
+    - region: us-east-3
+
+file_mounts:
+  /data:
+    source: s3://signal-diffusion/
+    mode: MOUNT
+  ~/.netrc: ~/.netrc
+  ~/.aws: ~/.aws
+  ~/.cache/huggingface/token: ~/.cache/huggingface/token
+
+# Working directory (optional) containing the project codebase.
+# Its contents are synced to ~/sky_workdir/ on the cluster.
+workdir: .
+
+setup: |
+  echo "Running setup."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  cp pyproject.toml.sky pyproject.toml
+  uv venv --python=3.12
+  uv pip install --upgrade pip setuptools
+  uv sync
+  # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
+  uv pip install /data/wheels/$(uname -m)/*.whl
+  mkdir -p /data/logs
+
+run: |
+  echo "Hello, SkyPilot!"
+  export RUN_ID=20260126_035132
+  export RUN_PATH=/data/runs/hourglass/test-20260126_035126/best_eval/checkpoint-3000/
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  source .venv/bin/activate
+  ./scripts/prep-configs-for-sky.sh
+  python scripts/edit_config.py -c config/diffusion/sd35-db-only.toml -s training.compile_model=false
+  python scripts/generate_synthetic_dataset.py -m $RUN_PATH -c config/diffusion/hourglass-db-only.toml -o /data/generated/hourglass-db-only-$RUN_ID/ -n 10000 -b 256 --overwrite
+  echo "Run completed."
