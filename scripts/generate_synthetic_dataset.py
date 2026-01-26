@@ -149,12 +149,17 @@ def main(
     conditioning_mode = resolve_conditioning_mode(cfg)
     logger.info("Conditioning mode: %s", conditioning_mode)
 
-    # Initialize accelerator and generator
-    accelerator = Accelerator()
+    # Initialize accelerator with mixed precision from config
+    accelerator = Accelerator(
+        mixed_precision=cfg.training.mixed_precision,
+    )
     generator = torch.Generator(device=accelerator.device).manual_seed(seed)
 
-    if torch.cuda.is_available():
+    # Enable TF32 if configured and CUDA is available
+    if cfg.training.allow_tf32 and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("TF32 enabled for CUDA matmul and cuDNN operations")
 
     # Load model
     adapter = registry.get(cfg.model.name)

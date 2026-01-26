@@ -62,7 +62,7 @@ weight_decay = 1e-2
 betas = [0.9, 0.95]
 
 [scheduler]
-name = "constant_with_warmup"
+name = "cosine"
 warmup_steps = 1000
 
 [training]

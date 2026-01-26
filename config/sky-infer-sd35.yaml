@@ -1,8 +1,7 @@
 resources:
   # Optional; if left out, automatically pick the cheapest cloud.
   cloud: lambda
-  # region: us-west-2
-  # Or A100, H100, etc.
+  # 1x NVIDIA A100 GPU
   accelerators: GH200:1
   autostop:
     idle_minutes: 5
@@ -39,9 +38,11 @@ setup: |
 
 run: |
   echo "Hello, SkyPilot!"
-  export RUN_ID=$(date +%Y%m%d_%H%M%S)
+  export RUN_ID=20260125_052405
+  export RUN_PATH=20260125_052350
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
-  python train.py --config config/diffusion/hourglass-db-only.toml --output_dir /data/runs/hourglass/test-$RUN_ID
+  python scripts/edit_config.py -c config/diffusion/sd35-db-only.toml -s training.compile_model=false
+  python scripts/generate_synthetic_dataset.py -m /data/runs/sd35/test-$RUN_PATH/best_eval/checkpoint-4000/ema/transformer -c config/diffusion/sd35-db-only.toml -o /data/data/signal-diffusion/generated/sd35-db-only-$RUN_ID/ -n 10000 -b 128 --overwrite
   echo "Run completed."
