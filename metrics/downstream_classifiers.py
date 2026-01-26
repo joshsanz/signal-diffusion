@@ -256,6 +256,9 @@ def _load_model(checkpoint_path: Path, classifier_config: ClassifierConfig) -> t
         state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
     except TypeError:
         state_dict = torch.load(checkpoint_path, map_location=device)
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        # Strip torch.compile wrapper prefix so keys match uncompiled module names.
+        state_dict = {key.replace("_orig_mod.", "", 1): value for key, value in state_dict.items()}
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
