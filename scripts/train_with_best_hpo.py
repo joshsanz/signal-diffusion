@@ -17,9 +17,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
-import re
 import copy
+import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +27,15 @@ from typing import Dict, List, Optional, Tuple
 import tomli_w
 import typer
 
+from signal_diffusion.hpo import (
+    SPEC_TYPES,
+    TASK_TYPES,
+    SPEC_TO_CONFIG,
+    TASK_TYPE_TO_TASKS,
+    HPOStudyResult,
+    find_hpo_results,
+    get_base_config_path,
+)
 from signal_diffusion.training.classification import (
     load_experiment_config,
     train_from_config,
@@ -37,35 +45,8 @@ from signal_diffusion.log_setup import get_logger
 
 LOGGER = get_logger(__name__)
 
-# Constants
-SPEC_TYPES = ["db-only", "db-polar", "db-iq", "timeseries"]
-TASK_TYPES = ["gender", "mixed"]
-
-# Spec type → base config path
-SPEC_TO_CONFIG = {
-    "db-only": "config/classification/baseline.toml",
-    "db-polar": "config/classification/baseline-db-polar.toml",
-    "db-iq": "config/classification/baseline-db-iq.toml",
-    "timeseries": "config/classification/baseline-timeseries.toml",
-}
-
-# Task type → tasks list
-TASK_TYPE_TO_TASKS = {
-    "gender": ["gender"],
-    "mixed": ["gender", "health", "age"],
-}
-
-
-@dataclass(slots=True)
-class HPOResult:
-    """Parsed HPO result from JSON file."""
-    spec_type: str
-    task_type: str
-    file_path: Path
-    best_params: dict
-    best_epoch: int
-    best_metric: float
-    timestamp: str
+# Type alias for backward compatibility
+HPOResult = HPOStudyResult
 
 
 @dataclass(slots=True)
@@ -77,84 +58,6 @@ class TrainingJob:
     output_dir: Path
     hpo_result: HPOResult
     user_overrides: dict
-
-
-def find_hpo_results(
-    hpo_dir: Path,
-    spec_types: List[str],
-    task_types: List[str],
-) -> Dict[Tuple[str, str], HPOResult]:
-    """
-    Find the most recent HPO result file for each (spec_type, task_type) combination.
-
-    Pattern: hpo_study_{spec_type}_{task_type}_{timestamp}.json
-
-    Args:
-        hpo_dir: Directory containing HPO result JSON files
-        spec_types: List of spec types to search for
-        task_types: List of task types to search for
-
-    Returns:
-        Dictionary mapping (spec_type, task_type) → HPOResult
-    """
-    pattern = re.compile(r"hpo_study_([^_]+)_(gender|mixed)_(\d{8}_\d{6}|\d{8})\.json")
-
-    # Track latest result for each combination
-    results: Dict[Tuple[str, str], Tuple[Path, str]] = {}
-
-    for json_file in hpo_dir.glob("hpo_study_*.json"):
-        match = pattern.match(json_file.name)
-        if not match:
-            continue
-
-        spec_type, task_type, timestamp = match.groups()
-
-        # Skip if not in requested types
-        if spec_type not in spec_types or task_type not in task_types:
-            continue
-
-        key = (spec_type, task_type)
-
-        # Keep the most recent result for each combination
-        if key not in results or timestamp > results[key][1]:
-            results[key] = (json_file, timestamp)
-
-    # Parse JSON files into HPOResult objects
-    parsed_results = {}
-    for (spec_type, task_type), (file_path, timestamp) in results.items():
-        try:
-            hpo_result = parse_hpo_result(file_path, spec_type, task_type, timestamp)
-            parsed_results[(spec_type, task_type)] = hpo_result
-        except Exception as e:
-            LOGGER.warning(f"Failed to parse HPO result {file_path}: {e}. Skipping.")
-
-    return parsed_results
-
-
-def parse_hpo_result(
-    file_path: Path,
-    spec_type: str,
-    task_type: str,
-    timestamp: str,
-) -> HPOResult:
-    """Parse HPO result JSON file."""
-    with file_path.open("r") as f:
-        data = json.load(f)
-
-    best_params = data.get("best_params", {})
-    best_user_attrs = data.get("best_user_attrs", {})
-    best_epoch = best_user_attrs.get("best_epoch", 1)
-    best_metric = best_user_attrs.get("best_metric", 0.0)
-
-    return HPOResult(
-        spec_type=spec_type,
-        task_type=task_type,
-        file_path=file_path,
-        best_params=best_params,
-        best_epoch=best_epoch,
-        best_metric=best_metric,
-        timestamp=timestamp,
-    )
 
 
 def merge_hpo_params_to_config(
@@ -510,9 +413,12 @@ def create_training_jobs(
     jobs = []
 
     for (spec_type, task_type), hpo_result in hpo_results.items():
-        # Get base config path (relative to cwd)
-        base_config_rel = SPEC_TO_CONFIG[spec_type]
-        base_config_path = (cwd / base_config_rel).resolve()
+        # Get base config path using utility function
+        try:
+            base_config_path = get_base_config_path(spec_type, cwd)
+        except ValueError as e:
+            LOGGER.warning(f"{e}. Skipping {spec_type}_{task_type}")
+            continue
 
         if not base_config_path.exists():
             LOGGER.warning(f"Base config not found: {base_config_path}. Skipping {spec_type}_{task_type}")

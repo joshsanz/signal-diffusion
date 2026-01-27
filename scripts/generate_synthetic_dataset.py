@@ -19,11 +19,12 @@ from PIL import Image
 from tqdm.auto import tqdm
 
 from signal_diffusion.diffusion.config import load_diffusion_config
-from signal_diffusion.diffusion.eval_utils import _to_uint8
+from signal_diffusion.diffusion.image_utils import tensor_to_pil
 from signal_diffusion.diffusion.models import registry
 from signal_diffusion.diffusion.models.base import load_pretrained_weights
 from signal_diffusion.log_setup import get_logger
-from weighted_dataset_utils import build_caption, prepare_output_dir, set_random_seeds
+from signal_diffusion.utils import set_random_seeds
+from weighted_dataset_utils import build_caption, prepare_output_dir
 
 logger = get_logger(__name__)
 
@@ -39,14 +40,6 @@ def resolve_conditioning_mode(cfg) -> str:
     if conditioning_value is None:
         conditioning_value = cfg.model.extras.get("conditioning", "none")
     return str(conditioning_value or "none").strip().lower()
-
-
-def tensor_to_pil(image: torch.Tensor) -> Image.Image:
-    """Convert a tensor in [-1, 1] range to a PIL.Image."""
-    if image.ndim != 3:
-        raise ValueError("Expected image tensor shaped (C, H, W)")
-    uint8 = _to_uint8(image.unsqueeze(0))[0].permute(1, 2, 0).numpy()
-    return Image.fromarray(uint8)
 
 
 def generate_attributes(

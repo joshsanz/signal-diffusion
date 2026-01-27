@@ -241,8 +241,10 @@ def prepare_output_dir(output_dir: Path, *, overwrite: bool, force: bool = False
 
 
 def set_random_seeds(seed: int) -> None:
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    """Set random seeds - use signal_diffusion.utils.set_random_seeds instead."""
+    # Import here to avoid circular dependencies during transition
+    from signal_diffusion.utils import set_random_seeds as _set_seeds
+    _set_seeds(seed)
 
 
 def compute_scaled_weights(weights: torch.Tensor) -> torch.Tensor:

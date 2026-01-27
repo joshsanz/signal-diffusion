@@ -9,15 +9,22 @@ Runs HPO across different spectrogram types and task objectives:
 Generates descriptively-named output files and summarizes results.
 """
 
-import subprocess
+import argparse
 import json
 import logging
-from pathlib import Path
+import subprocess
 from datetime import datetime
-from typing import Dict, Any, List, Optional
-import argparse
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import coloredlogs
+
+from signal_diffusion.hpo import (
+    SPEC_TO_CONFIG,
+    get_optimize_task_arg,
+    extract_task_metrics,
+    load_hpo_result,
+)
 
 # Setup logging
 coloredlogs.install(level='INFO', fmt='%(levelname)s:%(name)s - %(message)s')
@@ -81,12 +88,8 @@ def create_hpo_configs(
     Returns:
         List of HPOConfig objects
     """
-    spec_types = [
-        ("db-only", "config/classification/baseline.toml"),
-        ("db-polar", "config/classification/baseline-db-polar.toml"),
-        ("db-iq", "config/classification/baseline-db-iq.toml"),
-        ("timeseries", "config/classification/baseline-timeseries.toml"),
-    ]
+    # Use SPEC_TO_CONFIG from hpo module
+    spec_types = list(SPEC_TO_CONFIG.items())
     task_objectives = ["gender", "mixed"]
 
     configs = []
@@ -106,23 +109,6 @@ def create_hpo_configs(
     return configs
 
 
-def get_optimize_task(task_objective: str) -> str:
-    """Get optimize_task argument for HPO script.
-
-    Args:
-        task_objective: 'gender' or 'mixed'
-
-    Returns:
-        Argument value for --optimize-task
-    """
-    if task_objective == "gender":
-        return "gender"
-    elif task_objective == "mixed":
-        return "combined"
-    else:
-        raise ValueError(f"Unknown task objective: {task_objective}")
-
-
 def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
     """Run a single HPO study.
 
@@ -138,7 +124,7 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
     logger.info(f"{'='*80}\n")
 
     # Build HPO command
-    optimize_task = get_optimize_task(config.task_objective)
+    optimize_task = get_optimize_task_arg(config.task_objective)
     cmd = [
         "uv",
         "run",
@@ -199,21 +185,8 @@ def run_hpo(config: HPOConfig, output_dir: Path) -> tuple[bool, Optional[Path]]:
         return False, None
 
 
-def load_hpo_results(results_path: Path) -> Dict[str, Any]:
-    """Load HPO results from JSON file.
-
-    Args:
-        results_path: Path to hpo_study_results.json
-
-    Returns:
-        Parsed JSON data
-    """
-    with open(results_path, "r") as f:
-        return json.load(f)
-
-
 def summarize_trial_metrics(hpo_results: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract and summarize best trial metrics.
+    """Extract and summarize best trial metrics using hpo utilities.
 
     Args:
         hpo_results: Parsed HPO results
@@ -230,24 +203,19 @@ def summarize_trial_metrics(hpo_results: Dict[str, Any]) -> Dict[str, Any]:
         "best_params": hpo_results["best_params"],
     }
 
-    # Extract task metrics
+    # Extract task metrics using utility function
+    task_metrics_objs = extract_task_metrics(best_user_attrs)
+
+    # Convert TaskMetrics objects to dicts for serialization
     task_metrics = {}
-    for attr_name, attr_value in best_user_attrs.items():
-        if attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
-            task_name = attr_name.replace("task_", "").replace("_accuracy", "")
-            if task_name not in task_metrics:
-                task_metrics[task_name] = {}
-            task_metrics[task_name]["accuracy"] = attr_value
-        elif attr_name.startswith("task_") and attr_name.endswith("_mse"):
-            task_name = attr_name.replace("task_", "").replace("_mse", "")
-            if task_name not in task_metrics:
-                task_metrics[task_name] = {}
-            task_metrics[task_name]["mse"] = attr_value
-        elif attr_name.startswith("task_") and attr_name.endswith("_mae"):
-            task_name = attr_name.replace("task_", "").replace("_mae", "")
-            if task_name not in task_metrics:
-                task_metrics[task_name] = {}
-            task_metrics[task_name]["mae"] = attr_value
+    for task_name, metrics_obj in task_metrics_objs.items():
+        task_metrics[task_name] = {}
+        if metrics_obj.accuracy is not None:
+            task_metrics[task_name]["accuracy"] = metrics_obj.accuracy
+        if metrics_obj.mse is not None:
+            task_metrics[task_name]["mse"] = metrics_obj.mse
+        if metrics_obj.mae is not None:
+            task_metrics[task_name]["mae"] = metrics_obj.mae
 
     summary["task_metrics"] = task_metrics
     return summary
@@ -410,7 +378,7 @@ def main():
 
         if success and results_path is not None:
             try:
-                hpo_results = load_hpo_results(results_path)
+                hpo_results = load_hpo_result(results_path)
                 summary = summarize_trial_metrics(hpo_results)
                 results[config_name] = summary
                 results_files[config_name] = str(results_path)

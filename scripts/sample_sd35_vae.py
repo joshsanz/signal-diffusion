@@ -16,7 +16,8 @@ from typing import Any, cast
 import torch
 from datasets import load_dataset
 from diffusers import AutoencoderKL
-from torchvision import transforms
+
+from signal_diffusion.diffusion.image_utils import pil_to_tensor, tensor_to_pil_simple, ensure_rgb
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,24 +68,6 @@ def load_dataset_split(dataset_dir: Path):
     return load_dataset("parquet", data_files=data_files, split="train")
 
 
-def ensure_rgb(image):
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    return image
-
-
-def preprocess_image(image) -> torch.Tensor:
-    tensor = transforms.ToTensor()(image)  # in [0, 1]
-    tensor = tensor * 2 - 1  # scale to [-1, 1] for the VAE
-    return tensor.unsqueeze(0)
-
-
-def tensor_to_pil(tensor: torch.Tensor):
-    tensor = tensor.detach().cpu().clamp(-1, 1)
-    tensor = (tensor + 1) / 2  # back to [0, 1]
-    return transforms.ToPILImage()(tensor.squeeze(0))
-
-
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -104,7 +87,7 @@ def main() -> None:
     print(f"Loaded sample {args.index} from {args.dataset_dir}")
     print(f"Metadata: file_name={sample.get('file_name')}, split={sample.get('split')}")
 
-    pixel_values = preprocess_image(image).to(device=device, dtype=dtype)
+    pixel_values = pil_to_tensor(image).to(device=device, dtype=dtype)
 
     vae_config = cast(Any, vae.config)
     with torch.no_grad():
@@ -120,7 +103,7 @@ def main() -> None:
     orig_path = args.output_dir / f"sample_{args.index}_original.png"
     recon_path = args.output_dir / f"sample_{args.index}_reconstruction.png"
     image.save(orig_path)
-    tensor_to_pil(decoded).save(recon_path)
+    tensor_to_pil_simple(decoded).save(recon_path)
 
     print(f"Saved original to {orig_path}")
     print(f"Saved reconstruction to {recon_path}")
@@ -134,7 +117,7 @@ def main() -> None:
 
     for i in range(num_samples):
         sample_img = ensure_rgb(shuffled[i]["image"])
-        pixels = preprocess_image(sample_img).to(device=device, dtype=dtype)
+        pixels = pil_to_tensor(sample_img).to(device=device, dtype=dtype)
         with torch.no_grad():
             latent_dist = vae.encode(pixels).latent_dist
             sample_latents = latent_dist.sample() * vae_config.scaling_factor

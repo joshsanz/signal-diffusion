@@ -6,42 +6,27 @@ Provides utilities to parse HPO results and generate formatted summaries,
 comparisons, and detailed analysis.
 """
 
-import json
 import argparse
+import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 import coloredlogs
 
+from signal_diffusion.hpo import (
+    load_hpo_result,
+    extract_spec_type_and_task,
+    parse_best_trial,
+    TrialSummary,
+)
+
 coloredlogs.install(level='INFO', fmt='%(levelname)s:%(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class TrialMetrics:
-    """Parsed metrics for a trial."""
-
-    trial_num: int
-    objective: float
-    gender_acc: Optional[float] = None
-    health_acc: Optional[float] = None
-    age_mse: Optional[float] = None
-    age_mae: Optional[float] = None
-    hyperparams: Optional[Dict[str, Any]] = None
-
-    def __repr__(self) -> str:
-        parts = [f"trial_{self.trial_num}: obj={self.objective:.4f}"]
-        if self.gender_acc is not None:
-            parts.append(f"gender={self.gender_acc:.4f}")
-        if self.health_acc is not None:
-            parts.append(f"health={self.health_acc:.4f}")
-        if self.age_mse is not None:
-            parts.append(f"age_mse={self.age_mse:.4f}")
-        if self.age_mae is not None:
-            parts.append(f"age_mae={self.age_mae:.4f}")
-        return " | ".join(parts)
+# Legacy alias for backward compatibility
+TrialMetrics = TrialSummary
 
 
 @dataclass
@@ -50,7 +35,7 @@ class HPORunSummary:
 
     config_name: str
     results_path: Path
-    best_metrics: TrialMetrics
+    best_metrics: TrialSummary
     num_trials: int
     success_rate: float
 
@@ -61,54 +46,6 @@ class HPORunSummary:
             f"(trial {self.best_metrics.trial_num}) | "
             f"Trials: {self.num_trials} ({self.success_rate:.1%} success)"
         )
-
-
-def load_hpo_results(results_path: Path) -> Dict[str, Any]:
-    """Load HPO results from JSON file.
-
-    Args:
-        results_path: Path to hpo_study_results.json
-
-    Returns:
-        Parsed JSON data
-    """
-    with open(results_path, "r") as f:
-        return json.load(f)
-
-
-def parse_trial_metrics(
-    trial_num: int,
-    best_user_attrs: Dict[str, Any],
-    params: Optional[Dict[str, Any]] = None,
-) -> TrialMetrics:
-    """Extract metrics from trial user attributes.
-
-    Args:
-        trial_num: Trial number
-        best_user_attrs: User attributes from best trial
-        params: Hyperparameters for the trial
-
-    Returns:
-        TrialMetrics object
-    """
-    metrics = TrialMetrics(
-        trial_num=trial_num,
-        objective=best_user_attrs.get("combined_objective", 0.0),
-        hyperparams=params or {},
-    )
-
-    # Parse task metrics
-    for attr_name, attr_value in best_user_attrs.items():
-        if attr_name == "task_gender_accuracy":
-            metrics.gender_acc = attr_value
-        elif attr_name == "task_health_accuracy":
-            metrics.health_acc = attr_value
-        elif attr_name == "task_age_mse":
-            metrics.age_mse = attr_value
-        elif attr_name == "task_age_mae":
-            metrics.age_mae = attr_value
-
-    return metrics
 
 
 def analyze_hpo_directory(results_dir: Path) -> List[HPORunSummary]:
@@ -126,24 +63,24 @@ def analyze_hpo_directory(results_dir: Path) -> List[HPORunSummary]:
     logger.info(f"Found {len(hpo_files)} HPO result files")
 
     for results_path in hpo_files:
-        # Extract config name from filename
-        # Format: hpo_study_{spec_type}_{task_obj}_{timestamp}.json
-        parts = results_path.stem.split("_")
-        if len(parts) >= 4:
-            config_name = f"{parts[2]}_{parts[3]}"
+        # Extract config name from filename using utility
+        extracted = extract_spec_type_and_task(results_path.name)
+        if extracted:
+            spec_type, task_type, _ = extracted
+            config_name = f"{spec_type}_{task_type}"
         else:
             config_name = results_path.stem
 
         try:
-            hpo_results = load_hpo_results(results_path)
+            hpo_results = load_hpo_result(results_path)
 
             best_trial = hpo_results["best_trial"]
             best_user_attrs = hpo_results["best_user_attrs"]
             best_params = hpo_results.get("best_params", {})
             all_trials = hpo_results["all_trials"]
 
-            # Parse metrics
-            best_metrics = parse_trial_metrics(best_trial, best_user_attrs, best_params)
+            # Parse metrics using utility function
+            best_metrics = parse_best_trial(best_trial, best_user_attrs, best_params)
 
             # Calculate success rate
             completed_trials = sum(
@@ -208,10 +145,15 @@ def print_detailed_metrics(summaries: List[HPORunSummary]) -> None:
 
     for summary in summaries:
         m = summary.best_metrics
-        gender = f"{m.gender_acc:.4f}" if m.gender_acc is not None else "N/A"
-        health = f"{m.health_acc:.4f}" if m.health_acc is not None else "N/A"
-        age_mse = f"{m.age_mse:.4f}" if m.age_mse is not None else "N/A"
-        age_mae = f"{m.age_mae:.4f}" if m.age_mae is not None else "N/A"
+        # Access task_metrics for new TrialSummary structure
+        gender_metric = m.task_metrics.get("gender")
+        health_metric = m.task_metrics.get("health")
+        age_metric = m.task_metrics.get("age")
+
+        gender = f"{gender_metric.accuracy:.4f}" if gender_metric and gender_metric.accuracy is not None else "N/A"
+        health = f"{health_metric.accuracy:.4f}" if health_metric and health_metric.accuracy is not None else "N/A"
+        age_mse = f"{age_metric.mse:.4f}" if age_metric and age_metric.mse is not None else "N/A"
+        age_mae = f"{age_metric.mae:.4f}" if age_metric and age_metric.mae is not None else "N/A"
 
         print(
             f"{summary.config_name:<25} {gender:<15} {health:<15} "
@@ -239,13 +181,17 @@ def print_best_comparison(
         if metric == "objective":
             return m.objective
         elif metric == "gender":
-            return m.gender_acc if m.gender_acc is not None else -1
+            gender_metric = m.task_metrics.get("gender")
+            return gender_metric.accuracy if gender_metric and gender_metric.accuracy is not None else -1
         elif metric == "health":
-            return m.health_acc if m.health_acc is not None else -1
+            health_metric = m.task_metrics.get("health")
+            return health_metric.accuracy if health_metric and health_metric.accuracy is not None else -1
         elif metric == "age_mse":
-            return -m.age_mse if m.age_mse is not None else float("inf")  # Lower is better
+            age_metric = m.task_metrics.get("age")
+            return -age_metric.mse if age_metric and age_metric.mse is not None else float("inf")  # Lower is better
         elif metric == "age_mae":
-            return -m.age_mae if m.age_mae is not None else float("inf")  # Lower is better
+            age_metric = m.task_metrics.get("age")
+            return -age_metric.mae if age_metric and age_metric.mae is not None else float("inf")  # Lower is better
         return 0
 
     sorted_summaries = sorted(
@@ -417,13 +363,17 @@ def save_comparison_json(
     comparison = {}
     for summary in summaries:
         m = summary.best_metrics
+        gender_metric = m.task_metrics.get("gender")
+        health_metric = m.task_metrics.get("health")
+        age_metric = m.task_metrics.get("age")
+
         comparison[summary.config_name] = {
             "best_trial": m.trial_num,
             "best_objective": m.objective,
-            "gender_accuracy": m.gender_acc,
-            "health_accuracy": m.health_acc,
-            "age_mse": m.age_mse,
-            "age_mae": m.age_mae,
+            "gender_accuracy": gender_metric.accuracy if gender_metric else None,
+            "health_accuracy": health_metric.accuracy if health_metric else None,
+            "age_mse": age_metric.mse if age_metric else None,
+            "age_mae": age_metric.mae if age_metric else None,
             "num_trials": summary.num_trials,
             "success_rate": summary.success_rate,
             "results_file": str(summary.results_path),
