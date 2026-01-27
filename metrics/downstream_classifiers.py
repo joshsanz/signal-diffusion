@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
+import shutil
 import tomllib
 from dataclasses import asdict
 from datetime import datetime
@@ -15,6 +17,7 @@ from typing import Any, Mapping
 import numpy as np
 import torch
 import tomli_w
+from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 
 from signal_diffusion.classification import (
@@ -72,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to HPO results directory (or any file inside it, e.g., hpo_results/)",
     )
     parser.add_argument("--output", required=True, help="Output JSON filename for results")
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Retrain models even if cached versions exist",
+    )
     return parser.parse_args()
 
 
@@ -208,6 +216,79 @@ def _apply_data_overrides(config: ClassificationExperimentConfig):
     return settings
 
 
+def _get_cache_dir() -> Path:
+    """Get the model cache directory."""
+    cache_dir = Path.home() / ".cache" / "signal-diffusion" / "downstream-models"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _get_relevant_config_for_cache(config: ClassificationExperimentConfig) -> dict[str, Any]:
+    """Extract config parts relevant for caching, excluding runtime paths."""
+    return {
+        "dataset": {
+            "tasks": config.dataset.tasks,
+            "batch_size": config.dataset.batch_size,
+        },
+        "model": {
+            "backbone": config.model.backbone,
+            "input_channels": config.model.input_channels,
+            "embedding_dim": config.model.embedding_dim,
+            "dropout": config.model.dropout,
+            "depth": config.model.depth,
+            "layer_repeats": config.model.layer_repeats,
+            "activation": config.model.activation,
+            "extras": config.model.extras,
+        },
+        "optimizer": {
+            "name": config.optimizer.name,
+            "learning_rate": config.optimizer.learning_rate,
+            "weight_decay": config.optimizer.weight_decay,
+            "betas": config.optimizer.betas,
+        },
+        "scheduler": {
+            "name": config.scheduler.name,
+            "warmup_steps": config.scheduler.warmup_steps,
+            "kwargs": config.scheduler.kwargs,
+        },
+        "training": {
+            "epochs": config.training.epochs,
+            "clip_grad_norm": config.training.clip_grad_norm,
+            "compile_model": config.training.compile_model,
+            "compile_mode": config.training.compile_mode,
+            "task_weights": config.training.task_weights,
+            "use_amp": config.training.use_amp,
+            "label_smoothing": getattr(config.training, "label_smoothing", 0.0),
+            "seed": config.training.seed,
+        },
+    }
+
+
+def _get_cache_key(dataset_path: str, config: ClassificationExperimentConfig) -> str:
+    """Generate a hash key based on dataset and config."""
+    relevant_config = _get_relevant_config_for_cache(config)
+    content = f"{dataset_path}:{json.dumps(relevant_config, sort_keys=True, default=str)}"
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def _get_cached_checkpoint(dataset_path: str, config: ClassificationExperimentConfig) -> Path | None:
+    """Get the cached checkpoint if it exists."""
+    cache_key = _get_cache_key(dataset_path, config)
+    checkpoint_path = _get_cache_dir() / f"{cache_key}.pt"
+    if checkpoint_path.exists():
+        return checkpoint_path
+    return None
+
+
+def _cache_checkpoint(src: Path, dataset_path: str, config: ClassificationExperimentConfig) -> Path:
+    """Copy checkpoint to cache and return the cache path."""
+    cache_key = _get_cache_key(dataset_path, config)
+    cache_path = _get_cache_dir() / f"{cache_key}.pt"
+    shutil.copy(src, cache_path)
+    LOGGER.info("Cached model to %s", cache_path)
+    return cache_path
+
+
 def _prepare_run_config(
     base_config: ClassificationExperimentConfig,
     *,
@@ -234,6 +315,9 @@ def _prepare_run_config(
         if epochs_override <= 0:
             raise ValueError("--epochs must be positive when provided")
         config.training.epochs = epochs_override
+    # Set a fixed seed for reproducibility across real-train runs
+    if config.training.seed is None:
+        config.training.seed = 42
     return config
 
 
@@ -318,6 +402,8 @@ def _evaluate_model(
             "correct": 0,
             "total": 0,
             "confusion": np.zeros((spec.output_dim, spec.output_dim), dtype=np.int64),
+            "targets": [],
+            "predictions": [],
         }
         for name, spec in task_specs.items()
         if spec.task_type == "classification"
@@ -351,6 +437,10 @@ def _evaluate_model(
                     targets_np = targets.detach().cpu().numpy().astype(np.int64, copy=False)
                     preds_np = preds.detach().cpu().numpy().astype(np.int64, copy=False)
                     np.add.at(classification_stats[name]["confusion"], (targets_np, preds_np), 1)
+
+                    # Store for F1 computation
+                    classification_stats[name]["targets"].append(targets_np)
+                    classification_stats[name]["predictions"].append(preds_np)
                 else:
                     logits = outputs[name].view(-1)
                     targets = targets.float().view(-1)
@@ -362,8 +452,14 @@ def _evaluate_model(
     metrics: dict[str, Any] = {}
     for name, stats in classification_stats.items():
         total = max(stats["total"], 1)
+        # Compute macro F1
+        all_targets = np.concatenate(stats["targets"]) if stats["targets"] else np.array([])
+        all_predictions = np.concatenate(stats["predictions"]) if stats["predictions"] else np.array([])
+        macro_f1 = f1_score(all_targets, all_predictions, average="macro", zero_division=0)
+
         metrics[name] = {
             "accuracy": stats["correct"] / total,
+            "macro_f1": macro_f1,
             "confusion_matrix": stats["confusion"].tolist(),
         }
     for name, stats in regression_stats.items():
@@ -386,17 +482,17 @@ def _format_results_table(results: dict[str, Any]) -> str:
     lines.append("DOWNSTREAM CLASSIFIER RESULTS")
     lines.append("=" * 120)
     lines.append(
-        f"{'Evaluation':<32} {'Gender Acc':<12} {'Health Acc':<12} {'Age MAE':<12} {'Age MSE':<12}"
+        f"{'Evaluation':<32} {'Gender Acc':<12} {'Health F1':<12} {'Age MAE':<12} {'Age MSE':<12}"
     )
     lines.append("-" * 120)
 
     for name, payload in evaluations.items():
         gender_acc = _safe_metric(payload, "gender", "accuracy")
-        health_acc = _safe_metric(payload, "health", "accuracy")
+        health_f1 = _safe_metric(payload, "health", "macro_f1")
         age_mae = _safe_metric(payload, "age", "mae")
         age_mse = _safe_metric(payload, "age", "mse")
         lines.append(
-            f"{name:<32} {gender_acc:<12} {health_acc:<12} {age_mae:<12} {age_mse:<12}"
+            f"{name:<32} {gender_acc:<12} {health_f1:<12} {age_mae:<12} {age_mse:<12}"
         )
 
     lines.append("=" * 120)
@@ -507,6 +603,8 @@ def _save_training_config(
     training["early_stopping_patience"] = config.training.early_stopping_patience
     training["max_best_checkpoints"] = config.training.max_best_checkpoints
     training["use_amp"] = config.training.use_amp
+    if config.training.seed is not None:
+        training["seed"] = config.training.seed
     if config.training.task_weights:
         training["task_weights"] = dict(config.training.task_weights)
     if config.training.output_dir is not None:
@@ -585,10 +683,33 @@ def main(args: argparse.Namespace) -> None:
     _save_training_config(real_config_path, template_path=base_config_path, config=real_train_config)
     _save_training_config(synth_config_path, template_path=base_config_path, config=synth_train_config)
 
-    LOGGER.info("Training classifier on real data...")
-    real_summary = train_from_config(real_train_config)
-    LOGGER.info("Training classifier on synthetic data...")
-    synth_summary = train_from_config(synth_train_config)
+    # Check cache for real model
+    if not args.no_cache:
+        cached_real = _get_cached_checkpoint(str(real_path), real_train_config)
+        if cached_real:
+            LOGGER.info("Using cached real-trained model from %s", cached_real)
+            real_summary = type("Summary", (), {"best_checkpoint": cached_real})()
+        else:
+            LOGGER.info("Training classifier on real data...")
+            real_summary = train_from_config(real_train_config)
+            _cache_checkpoint(real_summary.best_checkpoint, str(real_path), real_train_config)
+    else:
+        LOGGER.info("Training classifier on real data (cache disabled)...")
+        real_summary = train_from_config(real_train_config)
+
+    # Check cache for synthetic model
+    if not args.no_cache:
+        cached_synth = _get_cached_checkpoint(str(synth_path), synth_train_config)
+        if cached_synth:
+            LOGGER.info("Using cached synthetic-trained model from %s", cached_synth)
+            synth_summary = type("Summary", (), {"best_checkpoint": cached_synth})()
+        else:
+            LOGGER.info("Training classifier on synthetic data...")
+            synth_summary = train_from_config(synth_train_config)
+            _cache_checkpoint(synth_summary.best_checkpoint, str(synth_path), synth_train_config)
+    else:
+        LOGGER.info("Training classifier on synthetic data (cache disabled)...")
+        synth_summary = train_from_config(synth_train_config)
 
     settings = _apply_data_overrides(base_config)
     device = _select_device()
