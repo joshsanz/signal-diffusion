@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, cast
 
 import numpy as np
@@ -18,6 +19,16 @@ class ImageFolderConfig:
 
     data_dir: str
     split: str = DEFAULT_SPLIT
+    image_mode: str = "RGB"
+
+
+@dataclass(frozen=True)
+class ParquetDatasetConfig:
+    """Configuration describing how to load a parquet dataset with images."""
+
+    data_dir: str
+    split: str = DEFAULT_SPLIT
+    image_key: str = "image"
     image_mode: str = "RGB"
 
 
@@ -87,3 +98,53 @@ def load_imagefolder_dataset(
 
     dataset = dataset_dict[config.split]
     return cast(Dataset[Any], dataset)
+
+
+def load_parquet_dataset(
+    config: ParquetDatasetConfig,
+    *,
+    transform: Optional[Callable] = None,
+) -> Dataset[Any]:
+    """Load a parquet dataset with HuggingFace datasets."""
+
+    parquet_path = _resolve_parquet_path(config.data_dir, config.split)
+    dataset = cast(
+        Dataset[Any],
+        load_dataset(
+            "parquet",
+            data_files={config.split: str(parquet_path)},
+            split=config.split,
+        ).with_format("torch"),
+    )
+    dataset_any = cast(Any, dataset)
+
+    if config.image_key in dataset_any.column_names:
+        dataset_any = dataset_any.cast_column(config.image_key, Image(mode=config.image_mode))
+
+    if transform is not None:
+        dataset_any = dataset_any.with_transform(_wrap_transform(transform, config.image_key))
+
+    return cast(Dataset[Any], dataset_any)
+
+
+def _wrap_transform(transform: Callable, image_key: str) -> Callable:
+    def _apply(example: dict[str, Any]) -> dict[str, Any]:
+        if image_key in example:
+            example[image_key] = transform(example[image_key])
+        return example
+
+    return _apply
+
+
+def _resolve_parquet_path(data_dir: str, split: str) -> Path:
+    path = Path(data_dir)
+    if path.is_file():
+        return path
+    candidate = path / f"{split}.parquet"
+    if candidate.exists():
+        return candidate
+    parquet_files = sorted(path.glob("*.parquet")) if path.exists() else []
+    available = ", ".join(p.name for p in parquet_files) if parquet_files else "<none>"
+    raise FileNotFoundError(
+        f"Could not find parquet file for split '{split}' in {path}. Available: {available}"
+    )

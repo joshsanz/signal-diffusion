@@ -8,18 +8,47 @@ from typing import Sequence
 from signal_diffusion.metrics import (
     FEATURE_EXTRACTORS,
     FidelityConfig,
-    ImageFolderConfig,
+    ParquetDatasetConfig,
     RandomSubsetDataset,
     calculate_metrics_for_extractors,
     clear_fidelity_cache,
-    load_imagefolder_dataset,
+    load_parquet_dataset,
+)
+
+
+FEATURE_EXTRACTOR_CHOICES = (
+    "inception-v3-compat",
+    "vgg16",
+    "clip-rn50",
+    "clip-rn101",
+    "clip-rn50x4",
+    "clip-rn50x16",
+    "clip-rn50x64",
+    "clip-vit-b-32",
+    "clip-vit-b-16",
+    "clip-vit-l-14",
+    "clip-vit-l-14-336px",
+    "dinov2-vit-s-14",
+    "dinov2-vit-b-14",
+    "dinov2-vit-l-14",
+    "dinov2-vit-g-14",
 )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Calculate image fidelity metrics for generated datasets")
+    parser = argparse.ArgumentParser(
+        description="Calculate image fidelity metrics for generated datasets",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("-g", "--generated", required=True, help="Path to generated dataset")
     parser.add_argument("-r", "--real", required=True, help="Path to real dataset")
+    parser.add_argument("--split", default="train", help="Dataset split to load when dataset is a parquet directory")
+    parser.add_argument(
+        "--generated-split",
+        default=None,
+        help="Override the split for the generated dataset (defaults to --split)",
+    )
+    parser.add_argument("--image-key", default="image", help="Column name for images in the parquet dataset")
     parser.add_argument("--kid-subset-size", type=int, default=1000, help="Samples per subset for KID calculation")
     parser.add_argument("-b", "--batch-size", type=int, default=64, help="Batch size for feature extraction")
     parser.add_argument("-o", "--output", default="metrics.json", help="Path to write metrics JSON")
@@ -29,6 +58,7 @@ def parse_args() -> argparse.Namespace:
         "--feature-extractor",
         dest="feature_extractors",
         action="append",
+        choices=FEATURE_EXTRACTOR_CHOICES,
         help="Feature extractor identifier (may be provided multiple times)",
     )
     parser.add_argument(
@@ -41,11 +71,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_dataset(path: str, subset_size: int) -> RandomSubsetDataset:
-    dataset = load_imagefolder_dataset(ImageFolderConfig(path))
+def build_dataset(path: str, subset_size: int, split: str, image_key: str) -> RandomSubsetDataset:
+    dataset = load_parquet_dataset(
+        ParquetDatasetConfig(
+            data_dir=path,
+            split=split,
+            image_key=image_key,
+        )
+    )
     if subset_size > 0:
-        return RandomSubsetDataset(dataset, subset_size=subset_size)
-    return RandomSubsetDataset(dataset)
+        return RandomSubsetDataset(dataset, subset_size=subset_size, image_key=image_key)
+    return RandomSubsetDataset(dataset, image_key=image_key)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -59,8 +95,11 @@ def main(args: argparse.Namespace) -> None:
         clear_fidelity_cache(generated_name)
 
     subset_size = args.subset_size
-    real_dataset = build_dataset(args.real, subset_size)
-    generated_dataset = build_dataset(args.generated, subset_size)
+    split = args.split
+    generated_split = args.generated_split or split
+    image_key = args.image_key
+    real_dataset = build_dataset(args.real, subset_size, split, image_key)
+    generated_dataset = build_dataset(args.generated, subset_size, generated_split, image_key)
 
     config = FidelityConfig(
         kid_subset_size=args.kid_subset_size,
