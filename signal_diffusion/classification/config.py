@@ -89,6 +89,9 @@ class TrainingConfig:
     swa_extra_ratio: float = 0.34
     swa_lr_frac: float = 0.25
     label_smoothing: float = 0.0
+    use_focal_loss_health: bool = False
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
     seed: int | None = None
 
 

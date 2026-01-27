@@ -19,6 +19,7 @@ import typer
 from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
+from signal_diffusion.losses import FocalLoss
 from signal_diffusion.classification.config import (
     DatasetConfig,
     ModelConfig,
@@ -504,7 +505,19 @@ def train_from_config(
     for name in tasks:
         spec = task_lookup[name]
         if spec.task_type == "classification":
-            criteria[name] = nn.CrossEntropyLoss(label_smoothing=training_cfg.label_smoothing)
+            if name == "health" and training_cfg.use_focal_loss_health:
+                criteria[name] = FocalLoss(
+                    alpha=training_cfg.focal_alpha,
+                    gamma=training_cfg.focal_gamma,
+                    reduction="mean",
+                )
+                LOGGER.info(
+                    "Using focal loss for health task (alpha=%.3f, gamma=%.3f)",
+                    training_cfg.focal_alpha,
+                    training_cfg.focal_gamma,
+                )
+            else:
+                criteria[name] = nn.CrossEntropyLoss(label_smoothing=training_cfg.label_smoothing)
         else:
             criteria[name] = nn.HuberLoss(delta=2.0)
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)

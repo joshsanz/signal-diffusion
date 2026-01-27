@@ -44,7 +44,7 @@ warmup_steps = 100
 min_lr_ratio = 0.03  # For linear or cosine
 
 [training]
-epochs = 15
+epochs = 10
 max_steps = -1
 clip_grad_norm = 1.0
 log_every_batches = 5
@@ -60,6 +60,13 @@ swa_enabled = false
 swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
 label_smoothing = 0.1
+
+# Focal loss for imbalanced health task (set use_focal_loss_health=true to enable)
+# Focal loss helps address severe class imbalance by down-weighting easy examples
+# and focusing learning on hard examples
+# use_focal_loss_health = true
+# focal_alpha = 0.25  # Weight for minority class (lower = more weight)
+# focal_gamma = 2.0   # Focusing parameter (higher = more focus on hard examples)
 
 [training.task_weights]
 gender = 2.0

@@ -259,6 +259,9 @@ def _get_relevant_config_for_cache(config: ClassificationExperimentConfig) -> di
             "task_weights": config.training.task_weights,
             "use_amp": config.training.use_amp,
             "label_smoothing": getattr(config.training, "label_smoothing", 0.0),
+            "use_focal_loss_health": getattr(config.training, "use_focal_loss_health", False),
+            "focal_alpha": getattr(config.training, "focal_alpha", 0.25),
+            "focal_gamma": getattr(config.training, "focal_gamma", 2.0),
             "seed": config.training.seed,
         },
     }
