@@ -48,17 +48,18 @@ class FocalLoss(nn.Module):
         Returns:
             Scalar loss value.
         """
-        # Compute softmax probabilities
-        p = F.softmax(inputs, dim=-1)
+        # Use a single log_softmax to avoid redundant softmax/cross-entropy work.
+        log_probs = F.log_softmax(inputs, dim=-1)
 
-        # Get the probability of the target class using gather
-        p_t = p.gather(1, targets.unsqueeze(1)).squeeze(1)
+        # Select the target-class log-probabilities.
+        log_p_t = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        p_t = log_p_t.exp()
 
-        # Compute cross entropy loss
-        ce = F.cross_entropy(inputs, targets, reduction="none")
+        # Cross-entropy per sample from log-probabilities.
+        ce = -log_p_t
 
         # Compute focal loss: FL(p_t) = -alpha * (1 - p_t)^gamma * log(p_t)
-        focal_loss = self.alpha * (1 - p_t) ** self.gamma * ce
+        focal_loss = self.alpha * (1 - p_t).pow(self.gamma) * ce
 
         if self.reduction == "mean":
             return focal_loss.mean()
