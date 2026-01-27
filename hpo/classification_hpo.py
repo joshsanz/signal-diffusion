@@ -9,9 +9,12 @@ import json
 import argparse
 import logging
 import coloredlogs
+import contextlib
+import random
 from pathlib import Path
 from typing import Dict, Any
 
+import numpy as np
 import torch
 import optuna
 from optuna.samplers import TPESampler
@@ -47,6 +50,32 @@ SEARCH_SPACE = {
     "batch_size": [192],
     "label_smoothing": [0.0, 0.33],
 }
+
+
+def _capture_rng_state() -> dict[str, Any]:
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def _restore_rng_state(state: dict[str, Any]) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if state["cuda"] is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+@contextlib.contextmanager
+def preserve_hpo_rng_state():
+    state = _capture_rng_state()
+    try:
+        yield
+    finally:
+        _restore_rng_state(state)
 
 
 def _get_float_range(name: str) -> tuple[float, float]:
@@ -164,8 +193,15 @@ def run_training_trial(
     try:
         logger.info(f"Starting trial {trial.number} with in-process training")
 
+        if config.training.seed is None:
+            raise ValueError(
+                "HPO trials require config.training.seed to be set for deterministic runs. "
+                "Please set [training] seed in the base configuration."
+            )
+
         # Execute training with trial support (enables intermediate pruning)
-        summary = train_from_config(config, trial=trial)
+        with preserve_hpo_rng_state():
+            summary = train_from_config(config, trial=trial)
 
         # Extract final metrics from training summary
         if summary.history:
