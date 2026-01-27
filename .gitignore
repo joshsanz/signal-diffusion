@@ -144,6 +144,7 @@ tensorboard_logs*/
 *.npy
 *.npz
 output/
+metrics/downstream_runs/
 
 # Coding agent files
 AGENTS.md

@@ -91,7 +91,7 @@ plt.close()
 # KDD
 fig, ax = plt.subplots(figsize=(8, 5))
 gen_metrics.unstack().plot.bar(y="kernel_inception_distance_mean", ax=ax,
-                              yerr="kernel_inception_distance_std", capsize=5)
+                               yerr="kernel_inception_distance_std", capsize=5)
 plt.xticks(rotation=0)
 plt.ylabel(r"MMD$\downarrow$")
 # plt.title("Maximal Mean Discrepancy (MMD)")
