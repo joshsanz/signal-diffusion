@@ -67,9 +67,9 @@ def _iter_diffusion_parameters(modules) -> Iterator[tuple[str, torch.nn.Paramete
 
 def _load_classification_model(config_path: Path):
     from signal_diffusion.classification import ClassifierConfig, build_classifier, build_task_specs
-    from signal_diffusion.training.classification import load_experiment_config
+    from signal_diffusion.classification.config import load_classification_config
 
-    cfg = load_experiment_config(config_path)
+    cfg = load_classification_config(config_path)
     task_specs = build_task_specs(cfg.dataset.name, cfg.dataset.tasks)
     classifier_config = ClassifierConfig(
         backbone=cfg.model.backbone,

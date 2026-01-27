@@ -21,6 +21,8 @@ from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
 from signal_diffusion.losses import FocalLoss
 from signal_diffusion.classification.config import (
+    ClassificationConfig,
+    load_classification_config,
     DatasetConfig,
     ModelConfig,
     OptimizerConfig,
@@ -125,20 +127,6 @@ def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
 
 
 @dataclass(slots=True)
-class ClassificationExperimentConfig:
-    """Top-level experiment configuration."""
-
-    path: Path
-    settings_path: Path
-    dataset: DatasetConfig
-    model: ModelConfig
-    optimizer: OptimizerConfig
-    scheduler: SchedulerConfig
-    training: TrainingConfig
-    data_overrides: dict[str, Any] = field(default_factory=dict)  # Overrides from [data] section
-
-
-@dataclass(slots=True)
 class EpochMetrics:
     """Captured metrics for an epoch."""
 
@@ -180,116 +168,8 @@ class CheckpointRecord:
     global_step: int
 
 
-def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
-    """Load a TOML configuration file describing a classification experiment."""
-
-    config_path = Path(path).expanduser().resolve()
-    with config_path.open("rb") as handle:
-        data = tomllib.load(handle)
-
-    base_dir = config_path.parent
-    settings_section = data.get("settings", {})
-    settings_path = _resolve_path(settings_section.get("config", "config/default.toml"), base_dir)
-
-    dataset_section = data.get("dataset")
-    if not dataset_section:
-        raise ValueError("Configuration missing [dataset] section")
-    dataset = DatasetConfig(
-        name=_require(dataset_section, "name"),
-        tasks=tuple(dataset_section.get("tasks", ())),
-        train_split=dataset_section.get("train_split", "train"),
-        val_split=dataset_section.get("val_split", "val"),
-        batch_size=int(dataset_section.get("batch_size", 32)),
-        num_workers=int(dataset_section.get("num_workers", 4)),
-        pin_memory=bool(dataset_section.get("pin_memory", True)),
-        shuffle=bool(dataset_section.get("shuffle", True)),
-    )
-    if not dataset.tasks:
-        raise ValueError("[dataset] section must define at least one task")
-
-    model_section = data.get("model")
-    if not model_section:
-        raise ValueError("Configuration missing [model] section")
-    model = ModelConfig(
-        backbone=_require(model_section, "backbone"),
-        input_channels=int(_require(model_section, "input_channels")),
-        embedding_dim=int(model_section.get("embedding_dim", 256)),
-        dropout=float(model_section.get("dropout", 0.3)),
-        activation=str(model_section.get("activation", "gelu")),
-        extras=dict(model_section.get("extras", {})),
-    )
-
-    optimizer_section = data.get("optimizer", {})
-    optimizer = OptimizerConfig(
-        name=str(optimizer_section.get("name", "adamw")).lower(),
-        learning_rate=float(optimizer_section.get("learning_rate", 3e-4)),
-        weight_decay=float(optimizer_section.get("weight_decay", 1e-4)),
-        betas=tuple(optimizer_section.get("betas", [0.9, 0.999])),
-    )
-
-    scheduler_section = data.get("scheduler", {})
-    scheduler = SchedulerConfig(
-        name=str(scheduler_section.get("name", "constant")).lower(),
-        warmup_steps=int(scheduler_section.get("warmup_steps", 0)),
-        kwargs=dict(scheduler_section.get("kwargs", {})),
-    )
-
-    training_section = data.get("training", {})
-    training = TrainingConfig(
-        epochs=int(training_section.get("epochs", 25)),
-        max_steps=int(training_section.get("max_steps", -1)),
-        clip_grad_norm=_optional_float(training_section.get("clip_grad_norm", 1.0)),
-        device=training_section.get("device"),
-        log_every_batches=int(training_section.get("log_every_batches", training_section.get("log_every", 10))),
-        eval_strategy=str(training_section.get("eval_strategy", "epoch")).lower(),
-        eval_steps=_optional_int(training_section.get("eval_steps")),
-        output_dir=_optional_path(training_section.get("output_dir"), base_dir),
-        log_dir=_optional_path(training_section.get("log_dir"), base_dir),
-        tensorboard=bool(training_section.get("tensorboard", False)),
-        wandb_project=training_section.get("wandb_project"),
-        wandb_entity=training_section.get("wandb_entity"),
-        wandb_tags=tuple(training_section.get("wandb_tags", ())),
-        run_name=training_section.get("run_name"),
-        checkpoint_total_limit=_optional_int(training_section.get("checkpoint_total_limit")),
-        checkpoint_strategy=str(training_section.get("checkpoint_strategy", "epoch")).lower(),
-        checkpoint_steps=_optional_int(training_section.get("checkpoint_steps")),
-        task_weights={str(k): float(v) for k, v in training_section.get("task_weights", {}).items()},
-        use_amp=bool(training_section.get("use_amp", False)),
-        metrics_summary_path=_optional_path(training_section.get("metrics_summary_path"), base_dir),
-        max_best_checkpoints=int(training_section.get("max_best_checkpoints", 1)),
-        early_stopping=bool(training_section.get("early_stopping", False)),
-        early_stopping_patience=int(training_section.get("early_stopping_patience", 5)),
-        compile_model=bool(training_section.get("compile_model", True)),
-        compile_mode=str(training_section.get("compile_mode", "default")).lower(),
-        swa_enabled=bool(training_section.get("swa_enabled", False)),
-        swa_extra_ratio=float(training_section.get("swa_extra_ratio", 0.333)),
-        swa_lr_frac=float(training_section.get("swa_lr_frac", 0.25)),
-        label_smoothing=float(training_section.get("label_smoothing", 0.0)),
-    )
-
-    _validate_eval_config(training)
-    _validate_checkpoint_config(training)
-    if training.max_best_checkpoints < 1:
-        raise ValueError("[training] max_best_checkpoints must be >= 1")
-
-    # Extract optional [data] section overrides
-    data_section = data.get("data", {})
-    data_overrides = dict(data_section) if isinstance(data_section, Mapping) else {}
-
-    return ClassificationExperimentConfig(
-        path=config_path,
-        settings_path=settings_path,
-        dataset=dataset,
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        training=training,
-        data_overrides=data_overrides,
-    )
-
-
 def train_from_config(
-    config: ClassificationExperimentConfig,
+    config: ClassificationConfig,
     trial: Any | None = None,
 ) -> TrainingSummary:
     """Run a classification experiment from a parsed configuration.
@@ -300,6 +180,13 @@ def train_from_config(
                If provided, intermediate metrics will be reported and
                pruning will be checked after each validation.
     """
+
+    training_cfg = config.training
+
+    _validate_eval_config(training_cfg)
+    _validate_checkpoint_config(training_cfg)
+    if training_cfg.max_best_checkpoints < 1:
+        raise ValueError("[training] max_best_checkpoints must be >= 1")
 
     # Set random seeds for reproducibility
     if config.training.seed is not None:
@@ -333,7 +220,6 @@ def train_from_config(
             settings.data_type = str(config.data_overrides["data_type"])
 
     dataset_cfg = config.dataset
-    training_cfg = config.training
     _validate_backbone_data_type(getattr(settings, "data_type", "spectrogram"), config.model.backbone)
 
     tasks = dataset_cfg.tasks
@@ -1469,7 +1355,7 @@ def _resolve_task_weights(tasks: Iterable[str], weights: Mapping[str, float]) ->
     return {name: uniform for name in tasks}
 
 
-def _prepare_run_dir(config: ClassificationExperimentConfig) -> Path:
+def _prepare_run_dir(config: ClassificationConfig) -> Path:
     base = config.training.output_dir or (config.path.parent / "runs")
     base = base if base.is_absolute() else base.resolve()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1702,7 +1588,7 @@ def train(
 ) -> None:
     """Train a classifier experiment from a TOML configuration."""
 
-    experiment = load_experiment_config(config)
+    experiment = load_classification_config(config)
     if output_dir is not None:
         experiment.training.output_dir = output_dir.resolve()
     if metrics_summary_path is not None:

@@ -56,6 +56,7 @@ swa_enabled = false
 swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
 label_smoothing = 0.1
+seed = 1234
 
 [training.task_weights]
 health = 1.0

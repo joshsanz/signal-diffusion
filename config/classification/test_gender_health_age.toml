@@ -50,6 +50,7 @@ checkpoint_total_limit = 3
 compile_model = true
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 label_smoothing = 0.1
+seed = 1234
 
 [training.task_weights]
 gender = 1.0

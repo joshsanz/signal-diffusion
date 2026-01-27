@@ -37,10 +37,10 @@ from signal_diffusion.hpo import (
     get_base_config_path,
 )
 from signal_diffusion.training.classification import (
-    load_experiment_config,
     train_from_config,
     TrainingSummary,
 )
+from signal_diffusion.classification.config import load_classification_config
 from signal_diffusion.log_setup import get_logger
 
 LOGGER = get_logger(__name__)
@@ -362,7 +362,7 @@ def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[Tr
         LOGGER.info(f"Saved optimized config to: {config_toml_path}")
 
         # Load experiment config
-        experiment = load_experiment_config(config_toml_path)
+        experiment = load_classification_config(config_toml_path)
 
         # Override output_dir
         experiment.training.output_dir = job.output_dir

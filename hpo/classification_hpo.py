@@ -20,15 +20,15 @@ import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import HyperbandPruner
 
-from signal_diffusion.training.classification import (
-    load_experiment_config,
-    train_from_config,
-    ClassificationExperimentConfig,
+from signal_diffusion.training.classification import train_from_config
+from signal_diffusion.classification.config import (
+    ClassificationConfig,
+    load_classification_config,
 )
 from signal_diffusion.classification import build_task_specs
 
 # Setup logging
-coloredlogs.install(level='INFO', fmt='%(levelname)s:%(name)s - %(message)s')
+coloredlogs.install(level="INFO", fmt="%(levelname)s:%(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Hyperparameter search space (refined based on HPO analysis)
@@ -42,11 +42,11 @@ logger = logging.getLogger(__name__)
 # - Focal loss parameters for health task: use_focal_loss_health, focal_alpha, focal_gamma
 SEARCH_SPACE = {
     "learning_rate": [5e-5, 5e-3],
-    "weight_decay": [1e-5, 1e-2],
+    "weight_decay": [1e-4, 1e-2],
     "scheduler": ["constant", "linear", "cosine"],
-    "dropout": [0.15, 0.50],
-    "depth": [2, 4],
-    "layer_repeats": [2, 5],
+    "dropout": [0.10, 0.50],
+    "depth": [2, 3],
+    "layer_repeats": [2, 4],
     "embedding_dim": [192, 256, 384],
     "batch_size": [192],
     "label_smoothing": [0.0, 0.33],
@@ -88,7 +88,9 @@ def _get_float_range(name: str) -> tuple[float, float]:
         raise ValueError(f"Expected '{name}' to be a 2-item range, got: {values!r}")
     low, high = values
     if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
-        raise ValueError(f"Expected '{name}' range values to be numeric, got: {values!r}")
+        raise ValueError(
+            f"Expected '{name}' range values to be numeric, got: {values!r}"
+        )
     return float(low), float(high)
 
 
@@ -116,26 +118,25 @@ def _parse_prune_max(value: str) -> str | int:
         ) from exc
 
     if max_eval <= 0:
-        raise argparse.ArgumentTypeError(
-            "--prune-max-steps must be positive or 'auto'"
-        )
+        raise argparse.ArgumentTypeError("--prune-max-steps must be positive or 'auto'")
 
     return max_eval
 
 
-def load_base_config(config_path: str | Path) -> ClassificationExperimentConfig:
+def load_base_config(config_path: str | Path) -> ClassificationConfig:
     """Load base configuration from TOML file."""
     config_path = Path(config_path).expanduser().resolve()
-    return load_experiment_config(config_path)
+    return load_classification_config(config_path)
 
 
 def create_trial_config(
     trial_params: Dict[str, Any],
-    base_config: ClassificationExperimentConfig,
-) -> ClassificationExperimentConfig:
+    base_config: ClassificationConfig,
+) -> ClassificationConfig:
     """Create configuration for a trial by modifying base config."""
     # Create a copy of the config
     import copy
+
     config = copy.deepcopy(base_config)
 
     # Override optimizer parameters
@@ -179,7 +180,7 @@ def create_trial_config(
 
 
 def run_training_trial(
-    config: ClassificationExperimentConfig,
+    config: ClassificationConfig,
     trial: optuna.Trial,
     optimize_task: str = "combined",
 ) -> Dict[str, Any]:
@@ -215,7 +216,11 @@ def run_training_trial(
         # Extract final metrics from training summary
         if summary.history:
             final_epoch = summary.history[-1]
-            val_loss = final_epoch.val_loss if final_epoch.val_loss is not None else float('inf')
+            val_loss = (
+                final_epoch.val_loss
+                if final_epoch.val_loss is not None
+                else float("inf")
+            )
 
             # Build task specs to identify task types (classification vs regression)
             task_specs = build_task_specs(config.dataset.name, config.dataset.tasks)
@@ -276,16 +281,22 @@ def run_training_trial(
         else:
             # No training history (shouldn't happen with proper training)
             combined_objective = 0.0
-            val_loss = float('inf')
+            val_loss = float("inf")
             task_results = {}
 
         # Log trial results with both overall metric and per-task breakdown
-        logger.info(f"Trial {trial.number} completed - Loss: {val_loss:.4f}, Combined Objective: {combined_objective:.4f}")
+        logger.info(
+            f"Trial {trial.number} completed - Loss: {val_loss:.4f}, Combined Objective: {combined_objective:.4f}"
+        )
         for task_name, result in task_results.items():
             if result["type"] == "classification":
-                logger.info(f"  {task_name} (classification): accuracy={result['accuracy']:.4f}")
+                logger.info(
+                    f"  {task_name} (classification): accuracy={result['accuracy']:.4f}"
+                )
             else:
-                logger.info(f"  {task_name} (regression): mse={result['mse']:.4f}, score={result['normalized_score']:.4f}")
+                logger.info(
+                    f"  {task_name} (regression): mse={result['mse']:.4f}, score={result['normalized_score']:.4f}"
+                )
 
         # Explicitly release GPU memory to prevent accumulation across sequential trials
         gc.collect()
@@ -318,13 +329,15 @@ def run_training_trial(
             # Fallback if we can't access intermediate values
             pass
 
-        logger.warning(f"Trial {trial.number} was pruned (last objective: {recent_objective:.4f})")
+        logger.warning(
+            f"Trial {trial.number} was pruned (last objective: {recent_objective:.4f})"
+        )
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return {
             "combined_objective": recent_objective,
-            "val_loss": float('inf'),
+            "val_loss": float("inf"),
             "success": False,
             "pruned": True,
             "pruned_at_step": pruned_step,
@@ -338,13 +351,15 @@ def run_training_trial(
             torch.cuda.empty_cache()
         return {
             "combined_objective": 0.0,
-            "val_loss": float('inf'),
+            "val_loss": float("inf"),
             "success": False,
             "error": str(e),
         }
 
 
-def create_objective(base_config: ClassificationExperimentConfig, optimize_task: str = "combined"):
+def create_objective(
+    base_config: ClassificationConfig, optimize_task: str = "combined"
+):
     """Create closure that returns an Optuna-compatible objective function.
 
     The returned objective function samples hyperparameters from SEARCH_SPACE,
@@ -480,12 +495,17 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
         if "task_results" in results:
             for task_name, task_result in results["task_results"].items():
                 if task_result["type"] == "classification":
-                    trial.set_user_attr(f"task_{task_name}_accuracy", task_result["accuracy"])
+                    trial.set_user_attr(
+                        f"task_{task_name}_accuracy", task_result["accuracy"]
+                    )
                 else:
                     trial.set_user_attr(f"task_{task_name}_mse", task_result["mse"])
                     if task_result.get("mae") is not None:
                         trial.set_user_attr(f"task_{task_name}_mae", task_result["mae"])
-                    trial.set_user_attr(f"task_{task_name}_normalized_score", task_result["normalized_score"])
+                    trial.set_user_attr(
+                        f"task_{task_name}_normalized_score",
+                        task_result["normalized_score"],
+                    )
 
         # Store training metadata
         if "best_metric" in results:
@@ -594,7 +614,9 @@ def main():
     # Override output directory if specified
     if args.output_dir:
         base_config.training.output_dir = Path(args.output_dir).resolve()
-        logger.info(f"Overriding output directory to: {base_config.training.output_dir}")
+        logger.info(
+            f"Overriding output directory to: {base_config.training.output_dir}"
+        )
 
     # Create Optuna study with TPE sampler and Hyperband pruner
     sampler = TPESampler(seed=args.seed)
@@ -616,7 +638,9 @@ def main():
         f"Starting hyperparameter tuning with up to {args.n_trials} trials "
         f"using TPE sampler"
     )
-    logger.info("Pruning will be performed by HyperbandPruner based on intermediate results")
+    logger.info(
+        "Pruning will be performed by HyperbandPruner based on intermediate results"
+    )
 
     # Create objective function with base config and task specification
     objective = create_objective(base_config, args.optimize_task)
@@ -650,7 +674,9 @@ def main():
             logger.info(f"  {task_name} (regression) mse: {attr_value:.4f}")
         elif attr_name.startswith("task_") and attr_name.endswith("_normalized_score"):
             task_name = attr_name.replace("task_", "").replace("_normalized_score", "")
-            logger.info(f"  {task_name} (regression) normalized_score: {attr_value:.4f}")
+            logger.info(
+                f"  {task_name} (regression) normalized_score: {attr_value:.4f}"
+            )
 
     # Save complete HPO results to JSON for further analysis
     results_path = Path("hpo_study_results.json")

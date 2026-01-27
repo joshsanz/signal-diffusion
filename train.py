@@ -49,9 +49,10 @@ def main():
     print(f"Starting training for '{trainer_type}'...")
 
     if trainer_type == "classification":
-        from signal_diffusion.training.classification import load_experiment_config, train_from_config
+        from signal_diffusion.training.classification import train_from_config
+        from signal_diffusion.classification.config import load_classification_config
 
-        experiment_config = load_experiment_config(config_path)
+        experiment_config = load_classification_config(config_path)
         if output_dir:
             experiment_config.training.output_dir = output_dir
         if args.max_steps is not None:

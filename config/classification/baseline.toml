@@ -16,8 +16,8 @@ name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 32
-num_workers = 2
+batch_size = 192
+num_workers = 4
 shuffle = true
 
 [model]
@@ -54,12 +54,13 @@ eval_steps = 100
 checkpoint_strategy = "steps"
 checkpoint_steps = 100
 checkpoint_total_limit = 3
-compile_model = true
+compile_model = false
 compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 swa_enabled = false
 swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
 label_smoothing = 0.1
+seed = 1234
 
 # Focal loss for imbalanced health task (set use_focal_loss_health=true to enable)
 # Focal loss helps address severe class imbalance by down-weighting easy examples

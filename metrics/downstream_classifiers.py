@@ -29,11 +29,11 @@ from signal_diffusion.classification import (
 from signal_diffusion.classification.tasks import available_tasks
 from signal_diffusion.config import load_settings
 from signal_diffusion.log_setup import get_logger
-from signal_diffusion.training.classification import (
-    ClassificationExperimentConfig,
-    load_experiment_config,
-    train_from_config,
+from signal_diffusion.classification.config import (
+    ClassificationConfig,
+    load_classification_config,
 )
+from signal_diffusion.training.classification import train_from_config
 
 
 LOGGER = get_logger(__name__)
@@ -170,7 +170,7 @@ def _resolve_hpo_entry(hpo_path: Path, spec_type: str) -> tuple[str, dict[str, A
     return entry_name, entry, hpo_source
 
 
-def _apply_hpo_params(config: ClassificationExperimentConfig, hpo_params: Mapping[str, Any]) -> None:
+def _apply_hpo_params(config: ClassificationConfig, hpo_params: Mapping[str, Any]) -> None:
     # Apply HPO parameters onto the loaded base config in-place.
     if "learning_rate" in hpo_params:
         config.optimizer.learning_rate = float(hpo_params["learning_rate"])
@@ -191,7 +191,7 @@ def _apply_hpo_params(config: ClassificationExperimentConfig, hpo_params: Mappin
 
 
 def _configure_dataset(
-    config: ClassificationExperimentConfig,
+    config: ClassificationConfig,
     *,
     dataset_path: Path,
     train_split: str,
@@ -205,7 +205,7 @@ def _configure_dataset(
     config.dataset.tasks = tasks
 
 
-def _apply_data_overrides(config: ClassificationExperimentConfig):
+def _apply_data_overrides(config: ClassificationConfig):
     # Mirror the training loop behavior for settings overrides.
     settings = load_settings(config.settings_path)
     if config.data_overrides:
@@ -223,7 +223,7 @@ def _get_cache_dir() -> Path:
     return cache_dir
 
 
-def _get_relevant_config_for_cache(config: ClassificationExperimentConfig) -> dict[str, Any]:
+def _get_relevant_config_for_cache(config: ClassificationConfig) -> dict[str, Any]:
     """Extract config parts relevant for caching, excluding runtime paths."""
     return {
         "dataset": {
@@ -267,14 +267,14 @@ def _get_relevant_config_for_cache(config: ClassificationExperimentConfig) -> di
     }
 
 
-def _get_cache_key(dataset_path: str, config: ClassificationExperimentConfig) -> str:
+def _get_cache_key(dataset_path: str, config: ClassificationConfig) -> str:
     """Generate a hash key based on dataset and config."""
     relevant_config = _get_relevant_config_for_cache(config)
     content = f"{dataset_path}:{json.dumps(relevant_config, sort_keys=True, default=str)}"
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def _get_cached_checkpoint(dataset_path: str, config: ClassificationExperimentConfig) -> Path | None:
+def _get_cached_checkpoint(dataset_path: str, config: ClassificationConfig) -> Path | None:
     """Get the cached checkpoint if it exists."""
     cache_key = _get_cache_key(dataset_path, config)
     checkpoint_path = _get_cache_dir() / f"{cache_key}.pt"
@@ -283,7 +283,7 @@ def _get_cached_checkpoint(dataset_path: str, config: ClassificationExperimentCo
     return None
 
 
-def _cache_checkpoint(src: Path, dataset_path: str, config: ClassificationExperimentConfig) -> Path:
+def _cache_checkpoint(src: Path, dataset_path: str, config: ClassificationConfig) -> Path:
     """Copy checkpoint to cache and return the cache path."""
     cache_key = _get_cache_key(dataset_path, config)
     cache_path = _get_cache_dir() / f"{cache_key}.pt"
@@ -293,7 +293,7 @@ def _cache_checkpoint(src: Path, dataset_path: str, config: ClassificationExperi
 
 
 def _prepare_run_config(
-    base_config: ClassificationExperimentConfig,
+    base_config: ClassificationConfig,
     *,
     dataset_path: Path,
     train_split: str,
@@ -302,7 +302,7 @@ def _prepare_run_config(
     run_label: str,
     runs_root: Path,
     epochs_override: int | None = None,
-) -> ClassificationExperimentConfig:
+) -> ClassificationConfig:
     config = copy.deepcopy(base_config)
     _configure_dataset(
         config,
@@ -324,7 +324,7 @@ def _prepare_run_config(
     return config
 
 
-def _build_classifier_from_config(config: ClassificationExperimentConfig) -> ClassifierConfig:
+def _build_classifier_from_config(config: ClassificationConfig) -> ClassifierConfig:
     task_specs = build_task_specs(config.dataset.name, config.dataset.tasks)
     return ClassifierConfig(
         backbone=config.model.backbone,
@@ -541,7 +541,7 @@ def _save_training_config(
     output_path: Path,
     *,
     template_path: Path,
-    config: ClassificationExperimentConfig,
+    config: ClassificationConfig,
 ) -> None:
     with template_path.open("rb") as handle:
         data = tomllib.load(handle)
@@ -648,7 +648,7 @@ def main(args: argparse.Namespace) -> None:
     hpo_key, hpo_entry, hpo_source = _resolve_hpo_entry(hpo_path, spec_type)
 
     base_config_path = Path(SPEC_TO_CONFIG[spec_type]).expanduser().resolve()
-    base_config = load_experiment_config(base_config_path)
+    base_config = load_classification_config(base_config_path)
     _apply_hpo_params(base_config, hpo_entry.get("best_params", {}))
 
     available = set(available_tasks(str(real_path)))

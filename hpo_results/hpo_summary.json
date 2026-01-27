@@ -1,54 +1,21 @@
 {
-  "timeseries_gender": {
-    "best_trial_num": 15,
-    "best_objective": 0.7047304170905392,
+  "db-only_mixed": {
+    "best_trial_num": 0,
+    "best_objective": 0.0,
     "best_params": {
-      "learning_rate": 0.0040664678931813135,
-      "weight_decay": 3.14399372948979e-05,
-      "scheduler": "linear",
-      "dropout": 0.20425423029095297,
-      "depth": 4,
-      "layer_repeats": 4,
+      "learning_rate": 0.0002805758207667253,
+      "weight_decay": 0.0071144760093434225,
+      "scheduler": "constant",
+      "dropout": 0.20459808211767092,
+      "depth": 2,
+      "layer_repeats": 5,
       "embedding_dim": 256,
-      "batch_size": 192
+      "batch_size": 192,
+      "label_smoothing": 0.32007025121345817,
+      "use_focal_loss_health": true,
+      "focal_alpha": 0.17272998688284025,
+      "focal_gamma": 0.9585112746335845
     },
-    "task_metrics": {
-      "health": {
-        "accuracy": 0.9762207527975585
-      },
-      "gender": {
-        "accuracy": 0.7047304170905392
-      },
-      "age": {
-        "mse": 184.2768565145902,
-        "mae": 10.154483799046684
-      }
-    }
-  },
-  "timeseries_mixed": {
-    "best_trial_num": 3,
-    "best_objective": 0.5517797141099001,
-    "best_params": {
-      "learning_rate": 0.0009717775305059633,
-      "weight_decay": 0.00017654048052495074,
-      "scheduler": "linear",
-      "dropout": 0.778709239435191,
-      "depth": 4,
-      "layer_repeats": 4,
-      "embedding_dim": 256,
-      "batch_size": 192
-    },
-    "task_metrics": {
-      "health": {
-        "accuracy": 0.9663021363173957
-      },
-      "gender": {
-        "accuracy": 0.6836215666327569
-      },
-      "age": {
-        "mse": 183.6572235258768,
-        "mae": 10.018311160020644
-      }
-    }
+    "task_metrics": {}
   }
 }
