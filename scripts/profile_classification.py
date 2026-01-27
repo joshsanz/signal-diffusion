@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
 
 import torch
@@ -28,6 +29,12 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=50,
         help="Maximum training steps to execute.",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=5,
+        help="Optional warmup steps to run before profiling.",
     )
     parser.add_argument(
         "--device",
@@ -101,6 +108,17 @@ def main() -> None:
     activities = [ProfilerActivity.CPU]
     if torch.cuda.is_available() and (args.device is None or "cuda" in args.device):
         activities.append(ProfilerActivity.CUDA)
+
+    if args.warmup_steps > 0:
+        warmup_experiment = copy.deepcopy(experiment)
+        warmup_dir = args.output_dir / "warmup"
+        _apply_profile_overrides(
+            warmup_experiment,
+            output_dir=warmup_dir,
+            max_steps=args.warmup_steps,
+            device=args.device,
+        )
+        train_from_config(warmup_experiment)
 
     with profile(
         activities=activities,
