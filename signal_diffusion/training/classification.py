@@ -263,6 +263,7 @@ def load_experiment_config(path: str | Path) -> ClassificationExperimentConfig:
         swa_enabled=bool(training_section.get("swa_enabled", False)),
         swa_extra_ratio=float(training_section.get("swa_extra_ratio", 0.333)),
         swa_lr_frac=float(training_section.get("swa_lr_frac", 0.25)),
+        label_smoothing=float(training_section.get("label_smoothing", 0.0)),
     )
 
     _validate_eval_config(training)
@@ -298,6 +299,28 @@ def train_from_config(
                If provided, intermediate metrics will be reported and
                pruning will be checked after each validation.
     """
+
+    # Set random seeds for reproducibility
+    if config.training.seed is not None:
+        import random
+        import numpy as np
+
+        seed = config.training.seed
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        # Note: Setting deterministic mode can impact performance
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False
+        LOGGER.info(f"Set random seed to {seed} for reproducibility")
+    else:
+        LOGGER.warning("=" * 80)
+        LOGGER.warning("WARNING: No random seed specified!")
+        LOGGER.warning("Training is non-deterministic and results will vary between runs.")
+        LOGGER.warning("Set [training] seed = 42 in your config for reproducible results.")
+        LOGGER.warning("=" * 80)
 
     settings = load_settings(config.settings_path)
 
@@ -481,7 +504,7 @@ def train_from_config(
     for name in tasks:
         spec = task_lookup[name]
         if spec.task_type == "classification":
-            criteria[name] = nn.CrossEntropyLoss()
+            criteria[name] = nn.CrossEntropyLoss(label_smoothing=training_cfg.label_smoothing)
         else:
             criteria[name] = nn.HuberLoss(delta=2.0)
     task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)

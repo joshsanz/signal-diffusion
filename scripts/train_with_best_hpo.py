@@ -250,6 +250,10 @@ def merge_hpo_params_to_config(
     if "swa_extra_ratio" in user_overrides and user_overrides["swa_extra_ratio"] is not None:
         config["training"]["swa_extra_ratio"] = user_overrides["swa_extra_ratio"]
 
+    # Set a fixed seed for reproducibility if not already set
+    if "seed" not in config["training"] or config["training"]["seed"] is None:
+        config["training"]["seed"] = 42
+
     return config
 
 

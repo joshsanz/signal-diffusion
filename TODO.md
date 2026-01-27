@@ -2,6 +2,7 @@
 
 Tasks for implementing a completed signal diffusion paper
 
+- Apply label smoothing to classifiers <https://arxiv.org/abs/1512.00567>
 - Rename mapping_cond to something more accurate and descriptive
 - Train diff models for each
   - data type

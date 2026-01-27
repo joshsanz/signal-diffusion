@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # - Learning rate: Narrowed from [1e-5, 1e-2] → [5e-5, 5e-3] (removes ineffective extremes)
 # - Weight decay: Narrowed from [1e-5, 1e-1] → [1e-5, 1e-2] (most successful ≤ 1e-2)
 # - Batch size: Removed [64, 128] → [192] (size 64 from failed trials, 128 unsuccessful)
+# - Label smoothing: [0.0, 0.33] (regularization technique to prevent overconfident predictions)
 SEARCH_SPACE = {
     "learning_rate": [5e-5, 5e-3],
     "weight_decay": [1e-5, 1e-2],
@@ -44,6 +45,7 @@ SEARCH_SPACE = {
     "layer_repeats": [2, 5],
     "embedding_dim": [192, 256, 384],
     "batch_size": [192],
+    "label_smoothing": [0.0, 0.33],
 }
 
 
@@ -118,6 +120,9 @@ def create_trial_config(
 
     # Override batch size
     config.dataset.batch_size = trial_params["batch_size"]
+
+    # Override label smoothing
+    config.training.label_smoothing = trial_params["label_smoothing"]
 
     # Ensure we have intermediate validation for pruning
     if config.training.eval_strategy == "epoch":
@@ -369,6 +374,13 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
             "batch_size",
             SEARCH_SPACE["batch_size"],
         )
+        ls_min, ls_max = _get_float_range("label_smoothing")
+        label_smoothing = trial.suggest_float(
+            "label_smoothing",
+            ls_min,
+            ls_max,
+            log=False,
+        )
 
         trial_params = {
             "learning_rate": learning_rate,
@@ -379,6 +391,7 @@ def create_objective(base_config: ClassificationExperimentConfig, optimize_task:
             "layer_repeats": layer_repeats,
             "embedding_dim": embedding_dim,
             "batch_size": batch_size,
+            "label_smoothing": label_smoothing,
             "trial_number": trial.number,
         }
 

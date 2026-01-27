@@ -88,6 +88,8 @@ class TrainingConfig:
     swa_enabled: bool = False
     swa_extra_ratio: float = 0.34
     swa_lr_frac: float = 0.25
+    label_smoothing: float = 0.0
+    seed: int | None = None
 
 
 @dataclass(slots=True)
@@ -261,6 +263,9 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
     eval_strategy = str(section.get("eval_strategy", "epoch")).strip().lower() or "epoch"
     checkpoint_strategy = str(section.get("checkpoint_strategy", "epoch")).strip().lower() or "epoch"
 
+    seed_value = section.get("seed")
+    seed = int(seed_value) if seed_value is not None else None
+
     return TrainingConfig(
         epochs=int(section.get("epochs", 25)),
         max_steps=int(section.get("max_steps", -1)),
@@ -290,6 +295,8 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         swa_enabled=bool(section.get("swa_enabled", False)),
         swa_extra_ratio=float(section.get("swa_extra_ratio", 0.333)),
         swa_lr_frac=float(section.get("swa_lr_frac", 0.25)),
+        label_smoothing=float(section.get("label_smoothing", 0.0)),
+        seed=seed,
     )
 
 

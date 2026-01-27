@@ -55,6 +55,7 @@ checkpoint_total_limit = 3
 swa_enabled = false
 swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
+label_smoothing = 0.1
 
 [training.task_weights]
 health = 1.0
