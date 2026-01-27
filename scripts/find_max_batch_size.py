@@ -14,21 +14,13 @@ import gc
 import importlib
 import sys
 import time
-import tomllib
 import traceback
 from pathlib import Path
 import torch
 
-START_BATCH_SIZE = 8
+from signal_diffusion.config import read_toml, update_config_for_quick_test, write_toml
 
-try:
-    import tomli_w
-except ImportError:
-    print(
-        "ERROR: tomli_w not found. Install with: uv pip install tomli-w",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+START_BATCH_SIZE = 8
 
 
 def build_batch_sizes(max_batch_size: int) -> list[int]:
@@ -69,33 +61,8 @@ def resolve_train_callable(module_path: str):
     return train_fn
 
 
-def update_config_for_test(
-    config: dict,
-    batch_size: int,
-    eval_batch_size: int,
-    max_steps: int,
-) -> None:
-    """Mutate config for a short batch-size test."""
-    # Ensure dataset section exists before setting sizes.
-    config.setdefault("dataset", {})
-    config["dataset"]["batch_size"] = batch_size
-    config["dataset"]["eval_batch_size"] = eval_batch_size
-
-    # Trim training to a quick sanity run.
-    config.setdefault("training", {})
-    config["training"]["max_train_steps"] = max_steps
-    config["training"]["epochs"] = 1
-    config["training"]["checkpoint_interval"] = max_steps + 1
-    config["training"]["eval_strategy"] = "no"
-    config["training"]["eval_batch_size"] = eval_batch_size
-    config["training"]["initial_eval"] = False
-
-    # Disable common logging to reduce overhead in quick tests.
-    logging_cfg = config.get("logging")
-    if isinstance(logging_cfg, dict):
-        logging_cfg["tensorboard"] = False
-        logging_cfg.pop("wandb_project", None)
-        logging_cfg.pop("wandb_entity", None)
+# update_config_for_test moved to signal_diffusion.config.toml_utils
+# as update_config_for_quick_test()
 
 
 def test_batch_size(
@@ -107,10 +74,13 @@ def test_batch_size(
     temp_dir: Path,
 ) -> bool:
     """Test a single batch size against the given config."""
-    with open(base_config_path, "rb") as f:
-        config = tomllib.load(f)
-
-    update_config_for_test(config, batch_size, eval_batch_size, max_steps)
+    config = read_toml(base_config_path)
+    update_config_for_quick_test(
+        config,
+        batch_size=batch_size,
+        eval_batch_size=eval_batch_size,
+        max_steps=max_steps,
+    )
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_config = temp_dir / f"test_batch_{batch_size}.toml"
@@ -118,8 +88,7 @@ def test_batch_size(
     output_dir = temp_dir / f"batch_{batch_size}"
 
     try:
-        with open(temp_config, "wb") as f:
-            tomli_w.dump(config, f)
+        write_toml(config, temp_config)
 
         # Invoke the training function directly to catch CUDA OOM errors.
         train_fn(

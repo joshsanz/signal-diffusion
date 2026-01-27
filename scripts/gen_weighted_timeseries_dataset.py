@@ -19,9 +19,12 @@ from signal_diffusion.log_setup import get_logger
 from weighted_dataset_utils import (
     DatasetStats,
     WeightStats,
+    aggregate_split_statistics,
     assign_copies,
     compute_balanced_weights,
     enrich_metadata,
+    initialize_statistics_tracking,
+    log_completion_summary,
     parse_copy_splits,
     parse_splits,
     prepare_output_dir,
@@ -337,12 +340,14 @@ def main() -> None:
         name: resolve_timeseries_root(settings.dataset(name)) for name in datasets
     }
 
-    dataset_stats_total: dict[str, DatasetStats] = {}
-    dataset_stats_by_split: dict[str, dict[str, DatasetStats]] = {}
-    weight_stats_total: dict[float, WeightStats] = {}
-    weight_stats_by_split: dict[str, dict[float, WeightStats]] = {}
-    plot_paths: dict[str, Path] = {}
-    parquet_paths: dict[str, Path] = {}
+    (
+        dataset_stats_total,
+        dataset_stats_by_split,
+        weight_stats_total,
+        weight_stats_by_split,
+        plot_paths,
+        parquet_paths,
+    ) = initialize_statistics_tracking()
 
     for split in copy_splits:
         logger.info("Processing split '%s'", split)
@@ -381,15 +386,12 @@ def main() -> None:
         dataset_stats_by_split[split] = split_dataset_stats
         weight_stats_by_split[split] = split_weight_stats
 
-        for name, stats in split_dataset_stats.items():
-            aggregate = dataset_stats_total.setdefault(name, DatasetStats(name=name, original_samples=0, generated_samples=0))
-            aggregate.original_samples += stats.original_samples
-            aggregate.generated_samples += stats.generated_samples
-
-        for weight, stats in split_weight_stats.items():
-            aggregate_weight = weight_stats_total.setdefault(weight, WeightStats(weight=weight))
-            aggregate_weight.source_count += stats.source_count
-            aggregate_weight.generated_copies += stats.generated_copies
+        aggregate_split_statistics(
+            split_dataset_stats,
+            split_weight_stats,
+            dataset_stats_total,
+            weight_stats_total,
+        )
 
         generated_split_total = sum(stat.generated_samples for stat in split_dataset_stats.values())
         logger.info(
@@ -421,17 +423,14 @@ def main() -> None:
         preprocessing_fields=preprocessing_fields,
     )
 
-    total_generated = sum(stats.generated_samples for stats in dataset_stats_total.values())
-    logger.info("Generated %d samples into %s", total_generated, output_dir)
-    for split in copy_splits:
-        if split in parquet_paths:
-            logger.info("Saved %s dataset to %s", split, parquet_paths[split])
-        else:
-            logger.info("No parquet dataset saved for split '%s'", split)
-    if plot_paths:
-        for label, path in plot_paths.items():
-            logger.info("Saved weight diagnostics (%s) to %s", label, path)
-    logger.info("Documented run in %s", readme_path)
+    log_completion_summary(
+        dataset_stats_total,
+        output_dir,
+        parquet_paths,
+        plot_paths,
+        copy_splits,
+        readme_path,
+    )
 
 
 if __name__ == "__main__":

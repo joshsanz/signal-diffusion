@@ -25,6 +25,13 @@ from .seed import (
     SEEDTimeSeriesPreprocessor,
 )
 from .longitudinal import LongitudinalTimeSeriesDataset, LongitudinalTimeSeriesPreprocessor
+from .metadata_utils import (
+    DEFAULT_HEALTH,
+    build_caption,
+    normalize_age,
+    normalize_gender,
+    normalize_health,
+)
 
 __all__ = [
     "BaseSpectrogramPreprocessor",
@@ -50,4 +57,9 @@ __all__ = [
     "SEED_CONDITION_CLASSES",
     "LongitudinalTimeSeriesDataset",
     "LongitudinalTimeSeriesPreprocessor",
+    "build_caption",
+    "normalize_age",
+    "normalize_gender",
+    "normalize_health",
+    "DEFAULT_HEALTH",
 ]

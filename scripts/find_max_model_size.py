@@ -15,17 +15,11 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-import sys
 import time
-import tomllib
 from pathlib import Path
 from typing import Iterator
 
-try:
-    import tomli_w
-except ImportError:
-    print("ERROR: tomli_w not found. Install with: uv pip install tomli-w", file=sys.stderr)
-    sys.exit(1)
+from signal_diffusion.config import read_toml, write_toml
 
 
 def generate_localmamba_configs() -> Iterator[dict]:
@@ -113,8 +107,7 @@ class ConfigTester:
             True if training succeeded for at least 10 steps
         """
         # 1. Load base TOML
-        with open(self.base_config_path, "rb") as f:
-            config = tomllib.load(f)
+        config = read_toml(self.base_config_path)
 
         # 2. Apply modifications
         config["dataset"]["batch_size"] = batch_size
@@ -142,8 +135,7 @@ class ConfigTester:
         log_file = self.temp_dir / f"test_log_{hash(str(params))}.txt"
 
         try:
-            with open(temp_config, "wb") as f:
-                tomli_w.dump(config, f)
+            write_toml(config, temp_config)
 
             # 5. Run training
             cmd = [

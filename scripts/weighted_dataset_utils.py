@@ -13,11 +13,16 @@ import numpy as np
 import pandas as pd
 import torch
 
+from signal_diffusion.data.metadata_utils import (
+    DEFAULT_HEALTH,
+    build_caption,
+    normalize_age as _try_int_age,
+    normalize_gender as _normalise_gender,
+    normalize_health as _normalise_health,
+)
 from signal_diffusion.log_setup import get_logger
 
 logger = get_logger(__name__)
-
-DEFAULT_HEALTH = "H"
 
 
 @dataclass(slots=True)
@@ -38,95 +43,8 @@ class WeightStats:
     generated_copies: int = 0
 
 
-def _is_missing(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return not value.strip()
-    try:
-        return bool(pd.isna(value))
-    except TypeError:
-        return False
-
-
-def _normalise_gender(value: Any) -> str | None:
-    if _is_missing(value):
-        return None
-    text = str(value).strip().upper()
-    if text in {"F", "FEMALE", "1", "TRUE"}:
-        return "F"
-    if text in {"M", "MALE", "0", "FALSE"}:
-        return "M"
-    return text
-
-
-def _normalise_health(value: Any) -> str:
-    if _is_missing(value):
-        return DEFAULT_HEALTH
-    text = str(value).strip().upper()
-    if text in {"PD", "PARKINSONS", "1", "TRUE"}:
-        return "PD"
-    if text in {"H", "HEALTHY", "0", "FALSE"}:
-        return "H"
-    return text
-
-
-def _try_int_age(value: Any) -> int | None:
-    if _is_missing(value):
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _gender_description(code: str | None) -> str | None:
-    if _is_missing(code):
-        return None
-    mapping = {"F": "female", "M": "male"}
-    text = str(code).strip().upper()
-    return mapping.get(text, text.lower())
-
-
-def _health_description(code: str | None) -> tuple[str | None, str | None]:
-    if _is_missing(code):
-        return None, None
-    text = str(code).strip().upper()
-    if text == "PD":
-        return None, "with Parkinson's disease"
-    if text == "H":
-        return "healthy", None
-    return text.lower(), None
-
-
-def build_caption(
-    metadata: Mapping[str, Any],
-    *,
-    modality: str = "spectrogram image",
-    subject_noun: str = "subject",
-) -> str:
-    age = _try_int_age(metadata.get("age"))
-    gender_word = _gender_description(metadata.get("gender"))
-    health_code = metadata.get("health", DEFAULT_HEALTH)
-    health_primary, health_clause = _health_description(health_code)
-
-    primary_bits: list[str] = []
-    if age is not None:
-        primary_bits.append(f"{age} year old")
-    if health_primary:
-        primary_bits.append(health_primary)
-    if gender_word:
-        primary_bits.append(gender_word)
-
-    if primary_bits:
-        caption = f"a {modality} of a {', '.join(primary_bits)} {subject_noun}"
-    else:
-        caption = f"a {modality} of a {subject_noun}"
-
-    if health_clause:
-        caption += f" {health_clause}"
-
-    return caption
+# Metadata normalization and caption building functions now imported from
+# signal_diffusion.data.metadata_utils (see imports at top of file)
 
 
 def enrich_metadata(
@@ -387,6 +305,98 @@ def compute_balanced_weights(
         return np.full(len(per_row), 1.0 / max(len(per_row), 1), dtype=np.float64)
 
     return per_row / norm
+
+
+def initialize_statistics_tracking() -> tuple[
+    dict[str, DatasetStats],
+    dict[str, dict[str, DatasetStats]],
+    dict[float, WeightStats],
+    dict[str, dict[float, WeightStats]],
+    dict[str, Path],
+    dict[str, Path],
+]:
+    """Initialize empty dictionaries for tracking dataset statistics.
+
+    Returns:
+        Tuple of (dataset_stats_total, dataset_stats_by_split,
+                 weight_stats_total, weight_stats_by_split,
+                 plot_paths, parquet_paths)
+    """
+    dataset_stats_total: dict[str, DatasetStats] = {}
+    dataset_stats_by_split: dict[str, dict[str, DatasetStats]] = {}
+    weight_stats_total: dict[float, WeightStats] = {}
+    weight_stats_by_split: dict[str, dict[float, WeightStats]] = {}
+    plot_paths: dict[str, Path] = {}
+    parquet_paths: dict[str, Path] = {}
+    return (
+        dataset_stats_total,
+        dataset_stats_by_split,
+        weight_stats_total,
+        weight_stats_by_split,
+        plot_paths,
+        parquet_paths,
+    )
+
+
+def aggregate_split_statistics(
+    split_dataset_stats: dict[str, DatasetStats],
+    split_weight_stats: dict[float, WeightStats],
+    dataset_stats_total: dict[str, DatasetStats],
+    weight_stats_total: dict[float, WeightStats],
+) -> None:
+    """Aggregate statistics from a single split into totals.
+
+    Updates dataset_stats_total and weight_stats_total in-place by merging
+    the statistics from a single split.
+
+    Args:
+        split_dataset_stats: Per-dataset statistics for the current split
+        split_weight_stats: Per-weight statistics for the current split
+        dataset_stats_total: Accumulated dataset statistics across all splits (modified in-place)
+        weight_stats_total: Accumulated weight statistics across all splits (modified in-place)
+    """
+    for name, stats in split_dataset_stats.items():
+        aggregate = dataset_stats_total.setdefault(
+            name, DatasetStats(name=name, original_samples=0, generated_samples=0)
+        )
+        aggregate.original_samples += stats.original_samples
+        aggregate.generated_samples += stats.generated_samples
+
+    for weight, stats in split_weight_stats.items():
+        aggregate_weight = weight_stats_total.setdefault(weight, WeightStats(weight=weight))
+        aggregate_weight.source_count += stats.source_count
+        aggregate_weight.generated_copies += stats.generated_copies
+
+
+def log_completion_summary(
+    dataset_stats_total: dict[str, DatasetStats],
+    output_dir: Path,
+    parquet_paths: dict[str, Path],
+    plot_paths: dict[str, Path],
+    copy_splits: tuple[str, ...],
+    readme_path: Path,
+) -> None:
+    """Log final completion summary with paths and counts.
+
+    Args:
+        dataset_stats_total: Accumulated dataset statistics across all splits
+        output_dir: Output directory where files were written
+        parquet_paths: Dict mapping split name to parquet file path
+        plot_paths: Dict mapping plot label to plot file path
+        copy_splits: Splits that were processed
+        readme_path: Path to generated README file
+    """
+    total_generated = sum(stats.generated_samples for stats in dataset_stats_total.values())
+    logger.info("Generated %d samples into %s", total_generated, output_dir)
+    for split in copy_splits:
+        if split in parquet_paths:
+            logger.info("Saved %s dataset to %s", split, parquet_paths[split])
+        else:
+            logger.info("No parquet dataset saved for split '%s'", split)
+    if plot_paths:
+        for label, path in plot_paths.items():
+            logger.info("Saved weight diagnostics (%s) to %s", label, path)
+    logger.info("Documented run in %s", readme_path)
 
 
 def write_readme(

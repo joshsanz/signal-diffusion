@@ -157,3 +157,6 @@ REFACTOR.md
 
 # Source for package installs
 NATTEN/
+
+# Archives
+*.zip
