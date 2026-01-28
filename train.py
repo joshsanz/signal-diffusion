@@ -18,10 +18,17 @@ def main():
     Main entry point for training.
     """
     parser = argparse.ArgumentParser(description="Run training for classification or diffusion models.")
-    parser.add_argument("--config", type=str, required=True, help="Path to the configuration TOML file.")
-    parser.add_argument("--output_dir", type=str, default=None, help="Optional: Path to the output directory.")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Optional: Path to a checkpoint directory to resume training from.")
+    parser.add_argument("-c", "--config", type=str, required=True, help="Path to the configuration TOML file.")
+    parser.add_argument("-o", "--output_dir", type=str, default=None, help="Optional: Path to the output directory.")
     parser.add_argument(
+        "-r",
+        "--resume_from_checkpoint",
+        type=str,
+        default=None,
+        help="Optional: Path to a checkpoint directory to resume training from.",
+    )
+    parser.add_argument(
+        "-M",
         "--max_steps",
         "--max-train-steps",
         dest="max_steps",
