@@ -84,15 +84,20 @@ class EvaluationManager:
 
 
 class CheckpointManager:
-    """Coordinator for saving checkpoints according to a chosen strategy."""
+    """Coordinator for saving checkpoints according to a chosen strategy.
+
+    Enhanced to handle checkpoint saving, top-k management, and periodic cleanup.
+    """
 
     def __init__(
         self,
         strategy: str,
         checkpoint_steps: int | None,
+        checkpoints_dir: Path,
     ) -> None:
         self.strategy = strategy
         self.checkpoint_steps = checkpoint_steps
+        self.checkpoints_dir = checkpoints_dir
         self._next_step = checkpoint_steps if strategy == "steps" else None
 
     def on_step(self, global_step: int) -> bool:
@@ -108,6 +113,141 @@ class CheckpointManager:
         if self.strategy != "epoch":
             return False
         return True
+
+    @staticmethod
+    def extract_state_dict(model: nn.Module) -> dict:
+        """Extract state_dict from model, handling torch.compile() models.
+
+        Compiled models have state dict under _orig_mod attribute.
+        """
+        if hasattr(model, '_orig_mod'):
+            return model._orig_mod.state_dict()
+        return model.state_dict()
+
+    def save_best_checkpoint(
+        self,
+        model: nn.Module,
+        state: "TrainingState",
+        metric: float,
+        epoch: int,
+        step: int,
+    ) -> CheckpointRecord | None:
+        """Save checkpoint if it makes top-k list.
+
+        Manages sorted list of best checkpoints, keeping only top-k.
+
+        Args:
+            model: Model to save
+            state: Training state with best_records list
+            metric: Validation metric for this checkpoint
+            epoch: Current epoch
+            step: Current global step
+
+        Returns:
+            CheckpointRecord if saved, None otherwise
+        """
+        if state.max_best_checkpoints <= 0:
+            return None
+
+        record = CheckpointRecord(
+            path=self.checkpoints_dir / f"best-epoch{epoch:03d}-step{step:08d}.pt",
+            metric=float(metric),
+            epoch=epoch,
+            global_step=step,
+        )
+
+        # Insert into sorted list (highest metric first)
+        insert_index: int | None = None
+        for idx, existing in enumerate(state.best_records):
+            if record.metric > existing.metric:
+                insert_index = idx
+                break
+        if insert_index is None:
+            state.best_records.append(record)
+        else:
+            state.best_records.insert(insert_index, record)
+
+        # Keep only top-k checkpoints
+        if len(state.best_records) > state.max_best_checkpoints:
+            trimmed = state.best_records[state.max_best_checkpoints:]
+            del state.best_records[state.max_best_checkpoints:]
+        else:
+            trimmed = []
+
+        # Save if it made the list
+        if record in state.best_records:
+            if not record.path.exists():
+                torch.save(self.extract_state_dict(model), record.path)
+        else:
+            record = None
+
+        # Delete trimmed checkpoints
+        for trimmed_record in trimmed:
+            if trimmed_record.path.exists():
+                trimmed_record.path.unlink(missing_ok=True)
+
+        return record
+
+    def update_best_overall(
+        self,
+        model: nn.Module,
+        best_checkpoint_path: Path,
+    ) -> None:
+        """Save the overall best checkpoint.
+
+        Args:
+            model: Model to save
+            best_checkpoint_path: Path to best.pt file
+        """
+        torch.save(self.extract_state_dict(model), best_checkpoint_path)
+
+    def save_periodic_checkpoint(
+        self,
+        model: nn.Module,
+        epoch: int,
+        checkpoint_total_limit: int | None = None,
+    ) -> None:
+        """Save periodic checkpoint and enforce total limit.
+
+        Args:
+            model: Model to save
+            epoch: Current epoch
+            checkpoint_total_limit: Maximum number of periodic checkpoints to keep
+        """
+        checkpoint_path = self.checkpoints_dir / f"epoch-{epoch:03d}.pt"
+        torch.save(self.extract_state_dict(model), checkpoint_path)
+
+        if checkpoint_total_limit is not None and checkpoint_total_limit > 0:
+            periodic_checkpoints = sorted(self.checkpoints_dir.glob("epoch-*.pt"))
+            while len(periodic_checkpoints) > checkpoint_total_limit:
+                oldest_checkpoint = periodic_checkpoints.pop(0)
+                oldest_checkpoint.unlink(missing_ok=True)
+
+    def save_last_checkpoint(self, model: nn.Module) -> Path:
+        """Save the last checkpoint (most recent model state).
+
+        Args:
+            model: Model to save
+
+        Returns:
+            Path to saved checkpoint
+        """
+        last_checkpoint = self.checkpoints_dir / "last.pt"
+        torch.save(self.extract_state_dict(model), last_checkpoint)
+        return last_checkpoint
+
+    def save_swa_checkpoint(self, swa_model: Any) -> Path:
+        """Save SWA model checkpoint.
+
+        Args:
+            swa_model: AveragedModel from torch.optim.swa_utils
+
+        Returns:
+            Path to saved checkpoint
+        """
+        swa_checkpoint = self.checkpoints_dir / "swa.pt"
+        torch.save(self.extract_state_dict(swa_model), swa_checkpoint)
+        return swa_checkpoint
 
 
 def _validate_backbone_data_type(data_type: str, backbone: str) -> None:
@@ -172,6 +312,616 @@ class CheckpointRecord:
     global_step: int
 
 
+@dataclass(slots=True)
+class TrainingContext:
+    """Immutable training configuration and context.
+
+    Encapsulates all configuration, paths, and derived settings that remain
+    constant throughout training.
+    """
+
+    config: ClassificationConfig
+    settings: Any  # Settings from load_settings()
+    device: torch.device
+    task_specs: Mapping[str, TaskSpec]
+    task_weights: Mapping[str, float]
+    run_dir: Path
+    checkpoints_dir: Path
+    trial: Any | None
+    total_epochs: int
+    num_training_steps: int
+
+    @staticmethod
+    def from_config(
+        config: ClassificationConfig,
+        trial: Any | None = None,
+    ) -> "TrainingContext":
+        """Create TrainingContext from configuration.
+
+        Extracts and validates all configuration, sets up directories,
+        and computes derived values like total_epochs and num_training_steps.
+
+        Args:
+            config: Experiment configuration
+            trial: Optional Optuna trial for HPO
+
+        Returns:
+            Initialized TrainingContext
+        """
+        training_cfg = config.training
+
+        # Validate configuration
+        _validate_eval_config(training_cfg)
+        _validate_checkpoint_config(training_cfg)
+        if training_cfg.max_best_checkpoints < 1:
+            raise ValueError("[training] max_best_checkpoints must be >= 1")
+
+        # Set random seeds for reproducibility
+        if config.training.seed is not None:
+            import random
+            import numpy as np
+
+            seed = config.training.seed
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+            LOGGER.info(f"Set random seed to {seed} for reproducibility")
+        else:
+            LOGGER.warning("=" * 80)
+            LOGGER.warning("WARNING: No random seed specified!")
+            LOGGER.warning("Training is non-deterministic and results will vary between runs.")
+            LOGGER.warning("Set [training] seed = 42 in your config for reproducible results.")
+            LOGGER.warning("=" * 80)
+
+        # Load settings and apply overrides
+        settings = load_settings(config.settings_path)
+        if config.data_overrides:
+            if "output_type" in config.data_overrides:
+                settings.output_type = str(config.data_overrides["output_type"])
+            if "data_type" in config.data_overrides:
+                settings.data_type = str(config.data_overrides["data_type"])
+
+        # Validate backbone compatibility
+        dataset_cfg = config.dataset
+        _validate_backbone_data_type(
+            getattr(settings, "data_type", "spectrogram"),
+            config.model.backbone
+        )
+
+        # Build task specifications
+        tasks = dataset_cfg.tasks
+        task_specs = build_task_specs(dataset_cfg.name, tasks)
+        task_lookup = {spec.name: spec for spec in task_specs}
+        task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
+
+        # Determine device
+        if training_cfg.device:
+            device = torch.device(training_cfg.device)
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+
+        # Enable TF32 for faster matmul on Ampere+ GPUs
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            LOGGER.info("TF32 enabled for CUDA matmul and cuDNN operations")
+
+        # Prepare output directories
+        run_dir = _prepare_run_dir(config)
+        checkpoints_dir = run_dir / "checkpoints"
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+        # Compute total epochs and training steps
+        if training_cfg.swa_enabled:
+            swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+            total_epochs = training_cfg.epochs + swa_epoch_count
+            num_training_steps = training_cfg.epochs * 1  # Placeholder, needs train_loader
+        else:
+            total_epochs = training_cfg.epochs
+            num_training_steps = training_cfg.epochs * 1  # Placeholder, needs train_loader
+
+        return TrainingContext(
+            config=config,
+            settings=settings,
+            device=device,
+            task_specs=task_lookup,
+            task_weights=task_weights,
+            run_dir=run_dir,
+            checkpoints_dir=checkpoints_dir,
+            trial=trial,
+            total_epochs=total_epochs,
+            num_training_steps=num_training_steps,  # Will be updated after DataLoader creation
+        )
+
+
+class TrainingState:
+    """Mutable training state.
+
+    Tracks all state that changes during training: steps, metrics,
+    early stopping counters, etc.
+    """
+
+    def __init__(self, max_best_checkpoints: int) -> None:
+        self.global_step: int = 0
+        self.best_metric: float = float("-inf")
+        self.best_epoch: int | None = None
+        self.best_metric_step: int | None = None
+        self.patience_counter: int = 0
+        self.best_metric_for_patience: float = float("-inf")
+        self.in_swa_phase: bool = False
+        self.early_stopped_at_epoch: int | None = None
+        self.history: list[EpochMetrics] = []
+        self.best_records: list[CheckpointRecord] = []
+        self.max_best_checkpoints: int = max_best_checkpoints
+
+    def should_stop_early(self, patience: int) -> bool:
+        """Check if early stopping criteria met."""
+        return self.patience_counter >= patience
+
+    def update_patience(self, current_metric: float) -> None:
+        """Update patience counter based on metric improvement."""
+        if current_metric > self.best_metric_for_patience:
+            self.best_metric_for_patience = current_metric
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+
+
+@dataclass(slots=True)
+class TrainingResources:
+    """PyTorch training objects.
+
+    Groups all PyTorch modules and optimizers used during training.
+    """
+
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler
+    scaler: torch.amp.GradScaler
+    criteria: dict[str, nn.Module]
+    swa_model: Any | None = None  # AveragedModel from torch.optim.swa_utils
+    swa_scheduler: Any | None = None  # SWALR from torch.optim.swa_utils
+    swa_start_epoch: int | None = None
+
+    def get_eval_model(self) -> nn.Module:
+        """Return the model to use for evaluation (SWA model if in SWA phase)."""
+        # Note: in_swa_phase is tracked in TrainingState, not here
+        # Caller must check state.in_swa_phase and pass appropriate flag
+        return self.swa_model if self.swa_model is not None else self.model
+
+    def active_scheduler(self, in_swa_phase: bool) -> torch.optim.lr_scheduler.LRScheduler:
+        """Return the scheduler to use based on training phase."""
+        if in_swa_phase and self.swa_scheduler is not None:
+            return self.swa_scheduler
+        return self.lr_scheduler
+
+
+class EarlyStoppingCoordinator:
+    """Manages early stopping logic based on validation metric improvements.
+
+    Tracks patience counter and determines when to stop training.
+    """
+
+    def __init__(self, enabled: bool, patience: int) -> None:
+        self.enabled = enabled
+        self.patience = patience
+
+    def should_stop(self, state: TrainingState, in_swa_phase: bool) -> bool:
+        """Check if early stopping should trigger.
+
+        Args:
+            state: Training state with patience info
+            in_swa_phase: Whether in SWA phase (early stopping disabled during SWA)
+
+        Returns:
+            True if training should stop
+        """
+        if not self.enabled or in_swa_phase:
+            return False
+        return state.should_stop_early(self.patience)
+
+    def update(self, state: TrainingState, current_metric: float) -> None:
+        """Update patience counter based on metric improvement."""
+        if self.enabled:
+            state.update_patience(current_metric)
+
+
+class CleanupManager:
+    """Context manager ensuring proper resource cleanup on all exit paths.
+
+    Handles cleanup of dataloaders, progress bars, metrics loggers, and CUDA cache.
+    Ensures cleanup happens even on exceptions or KeyboardInterrupt.
+    """
+
+    def __init__(
+        self,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        progress_bar: tqdm,
+        metrics_logger: Any | None,
+    ) -> None:
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.progress_bar = progress_bar
+        self.metrics_logger = metrics_logger
+
+    def __enter__(self) -> "CleanupManager":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Clean up resources in correct order."""
+        # Close metrics logger first
+        if self.metrics_logger is not None:
+            try:
+                self.metrics_logger.close()
+            except Exception:
+                pass  # Ignore cleanup errors
+
+        # Close progress bar
+        if not self.progress_bar.disable:
+            try:
+                self.progress_bar.close()
+            except Exception:
+                pass
+
+        # Release DataLoader resources (critical for HPO with multiple trials)
+        try:
+            del self.train_loader
+            del self.val_loader
+        except Exception:
+            pass
+
+        # Force garbage collection and clear CUDA cache
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+# ============================================================================
+# Helper Functions for train_from_config
+# ============================================================================
+
+
+def _build_training_resources(
+    model: nn.Module,
+    context: TrainingContext,
+    config: ClassificationConfig,
+    train_loader: DataLoader,
+    tasks: list[str],
+    task_lookup: Mapping[str, TaskSpec],
+) -> TrainingResources:
+    """Build all training resources: optimizer, scheduler, criteria, SWA.
+
+    Args:
+        model: The classifier model
+        context: Training context with configuration
+        config: Full classification config
+        train_loader: Training dataloader (needed for SWA scheduler steps)
+        tasks: List of task names
+        task_lookup: Mapping of task names to TaskSpec
+
+    Returns:
+        TrainingResources with all components initialized
+    """
+    training_cfg = config.training
+
+    # Build optimizer
+    optimizer = _build_optimizer(model, config.optimizer)
+
+    # Build learning rate scheduler
+    scheduler_type = cast(SchedulerType, config.scheduler.name)
+    lr_scheduler = create_scheduler(
+        optimizer,
+        scheduler_type=scheduler_type,
+        num_warmup_steps=config.scheduler.warmup_steps,
+        num_training_steps=context.num_training_steps,
+        **config.scheduler.kwargs,
+    )
+
+    # Build gradient scaler for mixed precision
+    scaler = torch.amp.GradScaler(
+        enabled=training_cfg.use_amp and context.device.type == "cuda"
+    )
+
+    # Build loss criteria for each task
+    criteria: dict[str, nn.Module] = {}
+    for name in tasks:
+        spec = task_lookup[name]
+        if spec.task_type == "classification":
+            if name == "health" and training_cfg.use_focal_loss_health:
+                criteria[name] = FocalLoss(
+                    alpha=training_cfg.focal_alpha,
+                    gamma=training_cfg.focal_gamma,
+                    reduction="mean",
+                )
+                LOGGER.info(
+                    "Using focal loss for health task (alpha=%.3f, gamma=%.3f)",
+                    training_cfg.focal_alpha,
+                    training_cfg.focal_gamma,
+                )
+            else:
+                criteria[name] = nn.CrossEntropyLoss(
+                    label_smoothing=training_cfg.label_smoothing
+                )
+        else:
+            criteria[name] = nn.HuberLoss(delta=2.0)
+
+    # Initialize SWA components if enabled
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = None
+
+    if training_cfg.swa_enabled:
+        if training_cfg.swa_extra_ratio <= 0.0:
+            raise ValueError(
+                f"swa_extra_ratio must be > 0, got {training_cfg.swa_extra_ratio}"
+            )
+
+        from torch.optim.swa_utils import AveragedModel, SWALR
+
+        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
+        swa_start_epoch = training_cfg.epochs + 1
+        swa_model = AveragedModel(model)
+
+        swa_lr = config.optimizer.learning_rate * training_cfg.swa_lr_frac
+        anneal_epochs = max(1, int(0.9 * len(train_loader)))
+        swa_scheduler = SWALR(
+            optimizer,
+            swa_lr=swa_lr,
+            anneal_epochs=anneal_epochs,
+            anneal_strategy='linear',
+        )
+
+        LOGGER.info(
+            "SWA enabled: %s base epochs + %s SWA epochs = %s total. "
+            "SWA LR = %.6f (%sx base LR) with linear anneal over %s steps.",
+            training_cfg.epochs,
+            swa_epoch_count,
+            context.total_epochs,
+            swa_lr,
+            training_cfg.swa_lr_frac,
+            anneal_epochs,
+        )
+
+    return TrainingResources(
+        model=model,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        scaler=scaler,
+        criteria=criteria,
+        swa_model=swa_model,
+        swa_scheduler=swa_scheduler,
+        swa_start_epoch=swa_start_epoch,
+    )
+
+
+def _finalize_swa(
+    swa_model: Any,
+    train_loader: DataLoader,
+    device: torch.device,
+    checkpoint_manager: CheckpointManager,
+) -> Path:
+    """Finalize SWA model: update batch norm statistics and save checkpoint.
+
+    Args:
+        swa_model: AveragedModel from torch.optim.swa_utils
+        train_loader: Training dataloader for BN statistics
+        device: Device to use
+        checkpoint_manager: Manager for saving checkpoint
+
+    Returns:
+        Path to saved SWA checkpoint
+    """
+    LOGGER.info("Updating batch normalization statistics for SWA model...")
+    from torch.optim.swa_utils import update_bn
+
+    try:
+        update_bn(train_loader, swa_model, device=device)
+        LOGGER.info("Batch normalization statistics updated successfully")
+    except Exception as e:
+        LOGGER.warning(f"Failed to update BN statistics: {e}")
+
+    swa_checkpoint_path = checkpoint_manager.save_swa_checkpoint(swa_model)
+    LOGGER.info(f"SWA model checkpoint saved to {swa_checkpoint_path}")
+    return swa_checkpoint_path
+
+
+def _print_epoch_metrics(
+    tasks: list[str],
+    task_lookup: Mapping[str, TaskSpec],
+    train_result: dict,
+    latest_val: dict | None,
+    train_accuracy: dict[str, float | None],
+    val_accuracy: dict[str, float | None],
+    train_losses: dict[str, float],
+    val_losses: dict[str, float | None],
+) -> None:
+    """Print per-task metrics for the epoch.
+
+    Args:
+        tasks: List of task names
+        task_lookup: Mapping of task names to TaskSpec
+        train_result: Training results dict
+        latest_val: Latest validation results (or None)
+        train_accuracy: Training accuracy per task
+        val_accuracy: Validation accuracy per task
+        train_losses: Training losses per task
+        val_losses: Validation losses per task
+    """
+    for task_name in tasks:
+        spec = task_lookup[task_name]
+        train_value = train_accuracy[task_name]
+        train_display = f"{train_value:.4f}" if train_value is not None else "n/a"
+        val_value = val_accuracy[task_name]
+        val_display = f"{val_value:.4f}" if val_value is not None else "n/a"
+
+        if spec.task_type == "regression":
+            # For regression, show both MAE and MSE
+            metric_label = "mae"
+            print(
+                f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
+            )
+            # Also show MSE if available
+            train_mse = train_result.get("mse", {}).get(task_name)
+            train_mse_display = f"{train_mse:.4f}" if train_mse is not None else "n/a"
+            val_mse_value = latest_val.get("mse", {}).get(task_name) if latest_val else None
+            val_mse_display = f"{val_mse_value:.4f}" if val_mse_value is not None else "n/a"
+            print(f"         train_mse={train_mse_display} val_mse={val_mse_display}")
+        else:
+            metric_label = "acc"
+            print(
+                f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
+            )
+
+    train_loss_line = ", ".join(f"{name}: {train_losses[name]:.4f}" for name in tasks)
+    val_loss_entries = []
+    for name in tasks:
+        loss_value = val_losses[name]
+        val_loss_entries.append(
+            f"{name}: {loss_value:.4f}" if loss_value is not None else f"{name}: n/a"
+        )
+    val_loss_line = ", ".join(val_loss_entries)
+    print(f"    train_losses: {train_loss_line}")
+    print(f"    val_losses: {val_loss_line}")
+
+
+def _update_progress_display(
+    progress_bar: tqdm,
+    train_result: dict,
+    train_accuracy: dict[str, float | None],
+    val_loss: float | None,
+    val_accuracy: dict[str, float | None],
+) -> None:
+    """Update progress bar display with current metrics.
+
+    Args:
+        progress_bar: tqdm progress bar
+        train_result: Training results dict
+        train_accuracy: Training accuracy per task
+        val_loss: Validation loss (or None)
+        val_accuracy: Validation accuracy per task
+    """
+    postfix_payload: dict[str, str] = {
+        "train_loss": f"{train_result['loss']:.4f}",
+    }
+    valid_acc = [acc for acc in train_accuracy.values() if acc is not None]
+    if valid_acc:
+        mean_train_acc = sum(valid_acc) / len(valid_acc)
+        postfix_payload["train_acc"] = f"{mean_train_acc:.4f}"
+    if val_loss is not None:
+        postfix_payload["val_loss"] = f"{val_loss:.4f}"
+
+    valid_val_acc = [acc for acc in val_accuracy.values() if acc is not None]
+    if valid_val_acc:
+        mean_val_acc = sum(valid_val_acc) / len(valid_val_acc)
+        postfix_payload["val_acc"] = f"{mean_val_acc:.4f}"
+
+    progress_bar.set_postfix(**postfix_payload)
+    progress_bar.update(1)
+
+
+def _build_epoch_metrics(
+    epoch: int,
+    tasks: list[str],
+    train_result: dict,
+    eval_outputs: list[dict],
+    eval_manager: EvaluationManager | None,
+    resources: TrainingResources,
+    config: ClassificationConfig,
+) -> tuple[EpochMetrics, dict, dict[str, float | None], float | None, dict[str, float | None]]:
+    """Build EpochMetrics from training and validation results.
+
+    Args:
+        epoch: Current epoch number
+        tasks: List of task names
+        train_result: Training results dict
+        eval_outputs: List of validation outputs
+        eval_manager: Evaluation manager
+        resources: Training resources
+        config: Classification config
+
+    Returns:
+        Tuple of (epoch_metrics, latest_val, train_accuracy, val_loss, val_accuracy)
+    """
+    # Get latest validation result
+    if eval_outputs:
+        latest_val = eval_outputs[-1]
+    else:
+        latest_val = eval_manager.latest_result if eval_manager else None
+
+    # Extract training metrics
+    train_losses = {name: float(train_result["losses"][name]) for name in tasks}
+    train_accuracy: dict[str, float | None] = {}
+    train_f1: dict[str, float | None] = {}
+    train_mse: dict[str, float | None] = {}
+    train_mae: dict[str, float | None] = {}
+    for name in tasks:
+        value = train_result["accuracy"].get(name)
+        train_accuracy[name] = float(value) if value is not None else None
+        f1_value = train_result.get("f1", {}).get(name)
+        train_f1[name] = float(f1_value) if f1_value is not None else None
+        mse_value = train_result.get("mse", {}).get(name)
+        train_mse[name] = float(mse_value) if mse_value is not None else None
+        mae_value = train_result.get("mae", {}).get(name)
+        train_mae[name] = float(mae_value) if mae_value is not None else None
+
+    # Extract validation metrics
+    if latest_val is not None:
+        val_loss: float | None = float(latest_val["loss"])
+        val_losses: dict[str, float | None] = {
+            name: float(latest_val["losses"][name]) for name in tasks
+        }
+        val_accuracy: dict[str, float | None] = {}
+        val_f1: dict[str, float | None] = {}
+        val_mse: dict[str, float | None] = {}
+        val_mae: dict[str, float | None] = {}
+        for name in tasks:
+            value = latest_val["accuracy"].get(name)
+            val_accuracy[name] = float(value) if value is not None else None
+            f1_value = latest_val.get("f1", {}).get(name)
+            val_f1[name] = float(f1_value) if f1_value is not None else None
+            mse_value = latest_val.get("mse", {}).get(name)
+            val_mse[name] = float(mse_value) if mse_value is not None else None
+            mae_value = latest_val.get("mae", {}).get(name)
+            val_mae[name] = float(mae_value) if mae_value is not None else None
+    else:
+        val_loss = None
+        val_losses = {name: None for name in tasks}
+        val_accuracy = {name: None for name in tasks}
+        val_f1 = {name: None for name in tasks}
+        val_mse = {name: None for name in tasks}
+        val_mae = {name: None for name in tasks}
+
+    # Get current learning rate
+    lr = resources.optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
+
+    # Build epoch metrics
+    epoch_metrics = EpochMetrics(
+        epoch=epoch,
+        train_loss=train_result["loss"],
+        train_losses=train_losses,
+        val_loss=val_loss,
+        val_losses=val_losses,
+        train_accuracy=train_accuracy,
+        val_accuracy=val_accuracy,
+        train_f1=train_f1,
+        val_f1=val_f1,
+        train_mse=train_mse,
+        val_mse=val_mse,
+        lr=lr,
+        train_mae=train_mae,
+        val_mae=val_mae,
+    )
+
+    return epoch_metrics, latest_val, train_accuracy, val_loss, val_accuracy
+
+
 def train_from_config(
     config: ClassificationConfig,
     trial: Any | None = None,
@@ -184,55 +934,21 @@ def train_from_config(
                If provided, intermediate metrics will be reported and
                pruning will be checked after each validation.
     """
-
+    # Phase 1: Initialize context (immutable configuration)
+    context = TrainingContext.from_config(config, trial)
     training_cfg = config.training
-
-    _validate_eval_config(training_cfg)
-    _validate_checkpoint_config(training_cfg)
-    if training_cfg.max_best_checkpoints < 1:
-        raise ValueError("[training] max_best_checkpoints must be >= 1")
-
-    # Set random seeds for reproducibility
-    if config.training.seed is not None:
-        import random
-        import numpy as np
-
-        seed = config.training.seed
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-        # Note: Setting deterministic mode can impact performance
-        # torch.backends.cudnn.deterministic = True
-        # torch.backends.cudnn.benchmark = False
-        LOGGER.info(f"Set random seed to {seed} for reproducibility")
-    else:
-        LOGGER.warning("=" * 80)
-        LOGGER.warning("WARNING: No random seed specified!")
-        LOGGER.warning("Training is non-deterministic and results will vary between runs.")
-        LOGGER.warning("Set [training] seed = 42 in your config for reproducible results.")
-        LOGGER.warning("=" * 80)
-
-    settings = load_settings(config.settings_path)
-
-    # Apply [data] section overrides from classification config
-    if config.data_overrides:
-        if "output_type" in config.data_overrides:
-            settings.output_type = str(config.data_overrides["output_type"])
-        if "data_type" in config.data_overrides:
-            settings.data_type = str(config.data_overrides["data_type"])
-
+    settings = context.settings
+    device = context.device
+    task_lookup = context.task_specs
+    tasks = config.dataset.tasks
     dataset_cfg = config.dataset
-    _validate_backbone_data_type(getattr(settings, "data_type", "spectrogram"), config.model.backbone)
 
-    tasks = dataset_cfg.tasks
-    task_specs = build_task_specs(dataset_cfg.name, tasks)
-    task_lookup = {spec.name: spec for spec in task_specs}
+    # Phase 2: Build model
+    task_specs_list = list(task_lookup.values())
     classifier_config = ClassifierConfig(
         backbone=config.model.backbone,
         input_channels=config.model.input_channels,
-        tasks=task_specs,
+        tasks=task_specs_list,
         embedding_dim=config.model.embedding_dim,
         dropout=config.model.dropout,
         activation=config.model.activation,
@@ -241,22 +957,6 @@ def train_from_config(
         extras=config.model.extras,
     )
     model: nn.Module = build_classifier(classifier_config)
-
-    if training_cfg.device:
-        device = torch.device(training_cfg.device)
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-
-    # Enable TF32 for faster matmul on Ampere+ GPUs with minimal accuracy impact
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        LOGGER.info("TF32 enabled for CUDA matmul and cuDNN operations")
-
     model.to(device)
 
     # Compile model if requested
@@ -265,10 +965,8 @@ def train_from_config(
         model = cast(nn.Module, torch.compile(model, mode=training_cfg.compile_mode))
         LOGGER.info("Model compilation successful")
 
-    # Initialize extras dict from dataset config for time-series metadata
+    # Phase 3: Build datasets and dataloaders
     extras = dict(dataset_cfg.extras) if hasattr(dataset_cfg, 'extras') and dataset_cfg.extras else {}
-
-    # For time-series datasets, add resolution as expected_length for signal validation
     if "_timeseries" in dataset_cfg.name or "timeseries" in dataset_cfg.name.lower():
         if "expected_length" not in extras and hasattr(dataset_cfg, 'resolution'):
             extras["expected_length"] = dataset_cfg.resolution
@@ -281,8 +979,6 @@ def train_from_config(
         target_format="dict",
         extras=extras,
     )
-
-    # Propagate populated extras back to dataset_cfg for backbone initialization
     if extras:
         if not hasattr(dataset_cfg, 'extras'):
             dataset_cfg.extras = {}
@@ -298,10 +994,6 @@ def train_from_config(
         extras=extras,
     )
 
-    # Configure DataLoader settings for optimal training performance.
-    # Note: When using HPO with multiple trials, file handle accumulation can occur
-    # with persistent_workers and pin_memory across sequential DataLoader creation.
-    # Current strategy: Use config defaults and rely on explicit cleanup (del + gc.collect)
     use_pin_memory = dataset_cfg.pin_memory and torch.cuda.is_available()
     use_persistent_workers = dataset_cfg.num_workers > 0
 
@@ -324,135 +1016,62 @@ def train_from_config(
         prefetch_factor=2 if dataset_cfg.num_workers > 0 else None,
     )
 
-    run_dir = _prepare_run_dir(config)
-    checkpoints_dir = run_dir / "checkpoints"
-    checkpoints_dir.mkdir(parents=True, exist_ok=True)
-
-    optimizer = _build_optimizer(model, config.optimizer)
-
-    # Create learning rate scheduler (always configured, defaults to constant with 0 warmup)
+    # Update context with actual num_training_steps now that we have train_loader
     if training_cfg.swa_enabled:
-        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
-        total_epochs = training_cfg.epochs + swa_epoch_count
-        num_training_steps = training_cfg.epochs * len(train_loader)
+        context.num_training_steps = training_cfg.epochs * len(train_loader)
     else:
-        total_epochs = training_cfg.epochs
-        num_training_steps = training_cfg.epochs * len(train_loader)
+        context.num_training_steps = training_cfg.epochs * len(train_loader)
     if training_cfg.max_steps > 0:
-        num_training_steps = min(num_training_steps, training_cfg.max_steps)
-    scheduler_type = cast(SchedulerType, config.scheduler.name)
-    lr_scheduler = create_scheduler(
-        optimizer,
-        scheduler_type=scheduler_type,
-        num_warmup_steps=config.scheduler.warmup_steps,
-        num_training_steps=num_training_steps,
-        **config.scheduler.kwargs,
+        context.num_training_steps = min(context.num_training_steps, training_cfg.max_steps)
+
+    # Phase 4: Build training resources (optimizer, scheduler, criteria, SWA)
+    resources = _build_training_resources(
+        model, context, config, train_loader, tasks, task_lookup
     )
 
-    # Initialize SWA components if enabled
-    swa_model = None
-    swa_scheduler = None
-    swa_start_epoch = None
-    swa_epoch_count = 0
+    # Phase 5: Initialize training state
+    state = TrainingState(max_best_checkpoints=training_cfg.max_best_checkpoints)
 
-    if training_cfg.swa_enabled:
-        if training_cfg.swa_extra_ratio <= 0.0:
-            raise ValueError(f"swa_extra_ratio must be > 0, got {training_cfg.swa_extra_ratio}")
-
-        from torch.optim.swa_utils import AveragedModel, SWALR
-
-        # Append SWA epochs after base training completes.
-        swa_epoch_count = max(1, int(training_cfg.epochs * training_cfg.swa_extra_ratio))
-        swa_start_epoch = training_cfg.epochs + 1
-
-        # Create averaged model wrapper
-        swa_model = AveragedModel(model)
-
-        # Create SWA learning rate scheduler
-        swa_lr = config.optimizer.learning_rate * training_cfg.swa_lr_frac
-        # We step per batch, so anneal_epochs represents step count for ~90% of one epoch.
-        anneal_epochs = max(1, int(0.9 * len(train_loader)))
-        swa_scheduler = SWALR(
-            optimizer,
-            swa_lr=swa_lr,
-            anneal_epochs=anneal_epochs,
-            anneal_strategy='linear',
-        )
-
-        LOGGER.info(
-            "SWA enabled: %s base epochs + %s SWA epochs = %s total. "
-            "SWA LR = %.6f (%sx base LR) with linear anneal over %s steps.",
-            training_cfg.epochs,
-            swa_epoch_count,
-            total_epochs,
-            swa_lr,
-            training_cfg.swa_lr_frac,
-            anneal_epochs,
-        )
-
-    scaler = torch.amp.GradScaler(enabled=training_cfg.use_amp and device.type == "cuda")
-    criteria: dict[str, nn.Module] = {}
-    for name in tasks:
-        spec = task_lookup[name]
-        if spec.task_type == "classification":
-            if name == "health" and training_cfg.use_focal_loss_health:
-                criteria[name] = FocalLoss(
-                    alpha=training_cfg.focal_alpha,
-                    gamma=training_cfg.focal_gamma,
-                    reduction="mean",
-                )
-                LOGGER.info(
-                    "Using focal loss for health task (alpha=%.3f, gamma=%.3f)",
-                    training_cfg.focal_alpha,
-                    training_cfg.focal_gamma,
-                )
-            else:
-                criteria[name] = nn.CrossEntropyLoss(label_smoothing=training_cfg.label_smoothing)
-        else:
-            criteria[name] = nn.HuberLoss(delta=2.0)
-    task_weights = _resolve_task_weights(tasks, training_cfg.task_weights)
-
+    # Define validation function (closure over context, resources, state)
     def _get_eval_model() -> nn.Module:
-        if in_swa_phase and swa_model is not None:
-            return swa_model
-        return model
+        if state.in_swa_phase and resources.swa_model is not None:
+            return resources.swa_model
+        return resources.model
 
     def run_validation(val_loader=val_loader) -> dict[str, Any]:
         result, _ = _run_epoch(
             _get_eval_model(),
             data_loader=val_loader,
-            criteria=criteria,
-            task_weights=task_weights,
-            task_specs=task_lookup,
-            device=device,
+            criteria=resources.criteria,
+            task_weights=context.task_weights,
+            task_specs=context.task_specs,
+            device=context.device,
             optimizer=None,
             scaler=None,
             clip_grad=None,
             log_every=0,
             train=False,
-            trial=trial,
+            trial=context.trial,
         )
         return result
 
     eval_manager = _create_evaluation_manager(training_cfg, run_validation)
-    metrics_logger = create_metrics_logger(training_cfg, settings, tasks, run_dir)
+    metrics_logger = create_metrics_logger(training_cfg, settings, tasks, context.run_dir)
 
-    # Initialize early stopping (disabled if trial is not None)
+    # Initialize early stopping coordinator (disabled if trial is not None)
     early_stopping_enabled = training_cfg.early_stopping and trial is None
     if training_cfg.early_stopping and trial is not None:
         LOGGER.warning("Early stopping disabled during HPO trials (using Optuna pruning instead)")
-    early_stopping_patience = training_cfg.early_stopping_patience
-    patience_counter = 0
-    best_metric_for_patience = float("-inf")
-    early_stopped_at_epoch: int | None = None
-
-    # Track whether we're in SWA phase
-    in_swa_phase = False
+    early_stopping = EarlyStoppingCoordinator(
+        enabled=early_stopping_enabled,
+        patience=training_cfg.early_stopping_patience,
+    )
 
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(
         strategy=training_cfg.checkpoint_strategy,
         checkpoint_steps=training_cfg.checkpoint_steps,
+        checkpoints_dir=context.checkpoints_dir,
     )
 
     # Override checkpoint settings if early stopping enabled (with warnings)
@@ -473,64 +1092,56 @@ def train_from_config(
                 training_cfg.eval_steps,
             )
 
-    history: list[EpochMetrics] = []
-    best_metric = float("-inf")
-    best_checkpoint = checkpoints_dir / "best.pt"
-    best_epoch: int | None = None
-    best_metric_step: int | None = None
-    best_records: list[CheckpointRecord] = []
-    max_best_checkpoints = training_cfg.max_best_checkpoints
-    global_step = 0
+    best_checkpoint = context.checkpoints_dir / "best.pt"
 
     progress_bar = tqdm(
-        total=total_epochs,
+        total=context.total_epochs,
         desc="Training",
         dynamic_ncols=True,
     )
 
     try:
-        for epoch in range(1, total_epochs + 1):
-            if training_cfg.max_steps > 0 and global_step >= training_cfg.max_steps:
+        for epoch in range(1, context.total_epochs + 1):
+            if training_cfg.max_steps > 0 and state.global_step >= training_cfg.max_steps:
                 break
 
             # Check if we're entering SWA phase
-            if training_cfg.swa_enabled and swa_start_epoch is not None and epoch == swa_start_epoch:
-                LOGGER.info("Entering SWA phase at epoch %s/%s", epoch, total_epochs)
-                in_swa_phase = True
+            if training_cfg.swa_enabled and resources.swa_start_epoch is not None and epoch == resources.swa_start_epoch:
+                LOGGER.info("Entering SWA phase at epoch %s/%s", epoch, context.total_epochs)
+                state.in_swa_phase = True
                 # Disable early stopping during SWA
                 if early_stopping_enabled:
                     LOGGER.info("Early stopping disabled during SWA phase")
 
-            progress_bar.set_description(f"Epoch {epoch}/{total_epochs}")
+            progress_bar.set_description(f"Epoch {epoch}/{context.total_epochs}")
 
             # Train one epoch. If using Optuna HPO, the trial may be pruned during validation
             # (when _run_epoch calls _report_and_check_pruning). Ensure proper cleanup by
             # catching exceptions and explicitly releasing DataLoader resources.
             try:
-                # Select appropriate scheduler based on SWA phase
-                active_lr_scheduler = swa_scheduler if (in_swa_phase and swa_scheduler is not None) else lr_scheduler
+                active_lr_scheduler = resources.active_scheduler(state.in_swa_phase)
 
-                train_result, global_step = _run_epoch(
-                    model,
+                train_result, state.global_step = _run_epoch(
+                    resources.model,
                     data_loader=train_loader,
-                    criteria=criteria,
-                    task_weights=task_weights,
+                    criteria=resources.criteria,
+                    task_weights=context.task_weights,
                     task_specs=task_lookup,
                     device=device,
-                    optimizer=optimizer,
+                    optimizer=resources.optimizer,
                     lr_scheduler=active_lr_scheduler,
                     scheduler_step_per_batch=True,
-                    scaler=scaler,
+                    scaler=resources.scaler,
                     clip_grad=training_cfg.clip_grad_norm,
                     log_every=training_cfg.log_every_batches,
                     train=True,
-                    global_step=global_step,
+                    global_step=state.global_step,
                     eval_manager=eval_manager,
                     max_steps=training_cfg.max_steps,
                     trial=trial,
                     metrics_logger=metrics_logger,
                 )
-                if global_step is None:
+                if state.global_step is None:
                     raise RuntimeError("Expected global_step during training.")
             except Exception as e:
                 # Clean up DataLoader resources (especially important for HPO trials)
@@ -543,7 +1154,7 @@ def train_from_config(
                 raise e
 
             if metrics_logger is not None:
-                metrics_logger.log("train", global_step, train_result, epoch=epoch)
+                metrics_logger.log("train", state.global_step, train_result, epoch=epoch)
 
             # Process any validation outputs that occurred during epoch
             # (either via eval_strategy="steps" or end-of-epoch validation)
@@ -552,7 +1163,7 @@ def train_from_config(
                 # Compute weighted mean validation accuracy across all tasks
                 mean_eval_acc = _compute_weighted_mean_accuracy(
                     eval_output["accuracy"],
-                    task_weights,
+                    context.task_weights,
                 )
                 if mean_eval_acc > 0.0:
                     mean_eval_display = f"{mean_eval_acc:.4f}"
@@ -561,7 +1172,7 @@ def train_from_config(
                     mean_eval_acc = -eval_output["loss"]
                     mean_eval_display = "n/a"
                 step_info = eval_output.get("_global_step")
-                step_for_log = int(step_info) if step_info is not None else global_step
+                step_for_log = int(step_info) if step_info is not None else state.global_step
                 print(
                     f"[eval] step={step_info} val_loss={eval_output['loss']:.4f} "
                     f"val_acc_mean={mean_eval_display}"
@@ -570,231 +1181,74 @@ def train_from_config(
                     metrics_logger.log("val", step_for_log, eval_output, epoch=epoch)
 
                 # Manage best checkpoints: keep top-k checkpoints based on validation metric
-                # This allows recovery of any high-performing checkpoint, not just the single best
-                state_dict: dict[str, torch.Tensor] | None = None
                 eval_model = _get_eval_model()
-                if max_best_checkpoints > 0:
-                    # Create checkpoint record for this validation result
-                    record = CheckpointRecord(
-                        path=checkpoints_dir / f"best-epoch{epoch:03d}-step{step_for_log:08d}.pt",
-                        metric=float(mean_eval_acc),
-                        epoch=epoch,
-                        global_step=step_for_log,
-                    )
 
-                    # Insert record into sorted list (highest metric first)
-                    insert_index: int | None = None
-                    for idx, existing in enumerate(best_records):
-                        if record.metric > existing.metric:
-                            insert_index = idx
-                            break
-                    if insert_index is None:
-                        best_records.append(record)
-                    else:
-                        best_records.insert(insert_index, record)
-
-                    # Keep only top-k checkpoints; remove oldest/worst ones
-                    if len(best_records) > max_best_checkpoints:
-                        trimmed = best_records[max_best_checkpoints:]
-                        del best_records[max_best_checkpoints:]
-                    else:
-                        trimmed = []
-
-                    # Save checkpoint if it made the top-k list
-                    if record in best_records:
-                        if not record.path.exists():
-                            state_dict = eval_model.state_dict()
-                            torch.save(state_dict, record.path)
-                    else:
-                        record = None
-
-                    # Delete checkpoints that are no longer in top-k
-                    for trimmed_record in trimmed:
-                        if trimmed_record.path.exists():
-                            trimmed_record.path.unlink(missing_ok=True)
-                else:
-                    record = None
+                # Save to top-k list if checkpoint qualifies
+                checkpoint_manager.save_best_checkpoint(
+                    eval_model, state, mean_eval_acc, epoch, step_for_log
+                )
 
                 # Always save overall best checkpoint (highest validation metric seen)
-                if mean_eval_acc > best_metric:
-                    best_metric = mean_eval_acc
-                    best_epoch = epoch
-                    best_metric_step = step_for_log
-                    if state_dict is None:
-                        # Extract state_dict, handling compiled models
-                        if hasattr(eval_model, '_orig_mod'):
-                            state_dict = eval_model._orig_mod.state_dict()
-                        else:
-                            state_dict = eval_model.state_dict()
-                    torch.save(state_dict, best_checkpoint)
+                if mean_eval_acc > state.best_metric:
+                    state.best_metric = mean_eval_acc
+                    state.best_epoch = epoch
+                    state.best_metric_step = step_for_log
+                    checkpoint_manager.update_best_overall(eval_model, best_checkpoint)
 
                 # Check early stopping: update patience counter based on metric improvement
                 # Note: Early stopping is disabled during SWA phase to ensure full averaging period
-                if early_stopping_enabled and not in_swa_phase:
-                    if mean_eval_acc > best_metric_for_patience:
-                        # Metric improved: reset patience counter
-                        best_metric_for_patience = mean_eval_acc
-                        patience_counter = 0
-                    else:
-                        # Metric did not improve: increment patience counter
-                        patience_counter += 1
-                        if patience_counter >= early_stopping_patience:
-                            early_stopped_at_epoch = epoch
-                            LOGGER.info(
-                                "Early stopping triggered at epoch %d: "
-                                "No improvement for %d validation checks. Best metric: %.4f",
-                                epoch,
-                                early_stopping_patience,
-                                best_metric_for_patience,
-                            )
-                            break  # Exit eval_output loop to stop training
+                early_stopping.update(state, mean_eval_acc)
+                if early_stopping.should_stop(state, state.in_swa_phase):
+                    state.early_stopped_at_epoch = epoch
+                    LOGGER.info(
+                        "Early stopping triggered at epoch %d: "
+                        "No improvement for %d validation checks. Best metric: %.4f",
+                        epoch,
+                        early_stopping.patience,
+                        state.best_metric_for_patience,
+                    )
+                    break  # Exit eval_output loop to stop training
 
             # If early stopping was triggered, exit the epoch loop
-            if early_stopped_at_epoch is not None:
+            if state.early_stopped_at_epoch is not None:
                 break
 
-            if eval_outputs:
-                latest_val = eval_outputs[-1]
-            else:
-                latest_val = eval_manager.latest_result if eval_manager else None
-            train_losses = {name: float(train_result["losses"][name]) for name in tasks}
-            train_accuracy: dict[str, float | None] = {}
-            train_f1: dict[str, float | None] = {}
-            train_mse: dict[str, float | None] = {}
-            train_mae: dict[str, float | None] = {}
-            for name in tasks:
-                value = train_result["accuracy"].get(name)
-                train_accuracy[name] = float(value) if value is not None else None
-                f1_value = train_result.get("f1", {}).get(name)
-                train_f1[name] = float(f1_value) if f1_value is not None else None
-                mse_value = train_result.get("mse", {}).get(name)
-                train_mse[name] = float(mse_value) if mse_value is not None else None
-                mae_value = train_result.get("mae", {}).get(name)
-                train_mae[name] = float(mae_value) if mae_value is not None else None
-
-            if latest_val is not None:
-                val_loss: float | None = float(latest_val["loss"])
-                val_losses: dict[str, float | None] = {
-                    name: float(latest_val["losses"][name]) for name in tasks
-                }
-                val_accuracy: dict[str, float | None] = {}
-                val_f1: dict[str, float | None] = {}
-                val_mse: dict[str, float | None] = {}
-                val_mae: dict[str, float | None] = {}
-                for name in tasks:
-                    value = latest_val["accuracy"].get(name)
-                    val_accuracy[name] = float(value) if value is not None else None
-                    f1_value = latest_val.get("f1", {}).get(name)
-                    val_f1[name] = float(f1_value) if f1_value is not None else None
-                    mse_value = latest_val.get("mse", {}).get(name)
-                    val_mse[name] = float(mse_value) if mse_value is not None else None
-                    mae_value = latest_val.get("mae", {}).get(name)
-                    val_mae[name] = float(mae_value) if mae_value is not None else None
-            else:
-                val_loss = None
-                val_losses = {name: None for name in tasks}
-                val_accuracy = {name: None for name in tasks}
-                val_f1 = {name: None for name in tasks}
-                val_mse = {name: None for name in tasks}
-                val_mae = {name: None for name in tasks}
-
-            lr = optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
-            epoch_metrics = EpochMetrics(
-                epoch=epoch,
-                train_loss=train_result["loss"],
-                train_losses=train_losses,
-                val_loss=val_loss,
-                val_losses=val_losses,
-                train_accuracy=train_accuracy,
-                val_accuracy=val_accuracy,
-                train_f1=train_f1,
-                val_f1=val_f1,
-                train_mse=train_mse,
-                val_mse=val_mse,
-                lr=lr,
-                train_mae=train_mae,
-                val_mae=val_mae,
+            # Build and store epoch metrics
+            epoch_metrics, latest_val, train_accuracy, val_loss, val_accuracy = _build_epoch_metrics(
+                epoch, tasks, train_result, eval_outputs, eval_manager, resources, config
             )
-            history.append(epoch_metrics)
+            state.history.append(epoch_metrics)
+            train_losses = epoch_metrics.train_losses
+            val_losses = epoch_metrics.val_losses
 
-            valid_acc = [acc for acc in val_accuracy.values() if acc is not None]
-            mean_val_acc = (sum(valid_acc) / len(valid_acc)) if valid_acc else None
-
-            for task_name in tasks:
-                spec = task_lookup[task_name]
-                train_value = train_accuracy[task_name]
-                train_display = f"{train_value:.4f}" if train_value is not None else "n/a"
-                val_value = val_accuracy[task_name]
-                val_display = f"{val_value:.4f}" if val_value is not None else "n/a"
-
-                if spec.task_type == "regression":
-                    # For regression, show both MAE and MSE
-                    metric_label = "mae"
-                    print(
-                        f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
-                    )
-                    # Also show MSE if available
-                    train_mse = train_result.get("mse", {}).get(task_name)
-                    train_mse_display = f"{train_mse:.4f}" if train_mse is not None else "n/a"
-                    val_mse_value = latest_val.get("mse", {}).get(task_name) if latest_val else None
-                    val_mse_display = f"{val_mse_value:.4f}" if val_mse_value is not None else "n/a"
-                    print(
-                        f"         train_mse={train_mse_display} val_mse={val_mse_display}"
-                    )
-                else:
-                    metric_label = "acc"
-                    print(
-                        f"  - {task_name}: train_{metric_label}={train_display} val_{metric_label}={val_display}"
-                    )
-
-            train_loss_line = ", ".join(f"{name}: {train_losses[name]:.4f}" for name in tasks)
-            val_loss_entries = []
-            for name in tasks:
-                loss_value = val_losses[name]
-                val_loss_entries.append(f"{name}: {loss_value:.4f}" if loss_value is not None else f"{name}: n/a")
-            val_loss_line = ", ".join(val_loss_entries)
-            print(f"    train_losses: {train_loss_line}")
-            print(f"    val_losses: {val_loss_line}")
-
-            postfix_payload: dict[str, str] = {
-                "train_loss": f"{train_result['loss']:.4f}",
-            }
-            valid_acc = [acc for acc in train_accuracy.values() if acc is not None]
-            if valid_acc:
-                mean_train_acc = sum(valid_acc) / len(valid_acc)
-                postfix_payload["train_acc"] = f"{mean_train_acc:.4f}"
-            if val_loss is not None:
-                postfix_payload["val_loss"] = f"{val_loss:.4f}"
-            if mean_val_acc is not None:
-                postfix_payload["val_acc"] = f"{mean_val_acc:.4f}"
-            progress_bar.set_postfix(**postfix_payload)
-            progress_bar.update(1)
+            # Print and display epoch metrics
+            _print_epoch_metrics(
+                tasks, task_lookup, train_result, latest_val,
+                train_accuracy, val_accuracy, train_losses, val_losses
+            )
+            _update_progress_display(
+                progress_bar, train_result, train_accuracy, val_loss, val_accuracy
+            )
 
             # Handle periodic checkpointing based on checkpoint_strategy
             should_save_checkpoint = False
             if checkpoint_manager.strategy == "epoch":
                 should_save_checkpoint = checkpoint_manager.on_epoch_end(epoch)
             elif checkpoint_manager.strategy == "steps":
-                should_save_checkpoint = checkpoint_manager.on_step(global_step)
+                should_save_checkpoint = checkpoint_manager.on_step(state.global_step)
 
             if should_save_checkpoint:
-                # Extract state_dict, handling compiled models
-                if hasattr(model, '_orig_mod'):
-                    epoch_state_dict = model._orig_mod.state_dict()
-                else:
-                    epoch_state_dict = model.state_dict()
-                torch.save(epoch_state_dict, checkpoints_dir / f"epoch-{epoch:03d}.pt")
-                if training_cfg.checkpoint_total_limit is not None and training_cfg.checkpoint_total_limit > 0:
-                    periodic_checkpoints = sorted(checkpoints_dir.glob("epoch-*.pt"))
-                    while len(periodic_checkpoints) > training_cfg.checkpoint_total_limit:
-                        oldest_checkpoint = periodic_checkpoints.pop(0)
-                        oldest_checkpoint.unlink(missing_ok=True)
+                checkpoint_manager.save_periodic_checkpoint(
+                    resources.model,
+                    epoch,
+                    training_cfg.checkpoint_total_limit,
+                )
 
             # Update SWA model and scheduler (if in SWA phase)
-            if in_swa_phase:
+            if state.in_swa_phase:
                 # Update SWA averaged model weights
-                if swa_model is not None:
-                    swa_model.update_parameters(cast(nn.Module, model))
+                if resources.swa_model is not None:
+                    resources.swa_model.update_parameters(cast(nn.Module, resources.model))
                     LOGGER.debug(f"Updated SWA model weights at epoch {epoch}")
 
     except KeyboardInterrupt:
@@ -822,45 +1276,22 @@ def train_from_config(
             except Exception:
                 pass  # Ignore errors during progress bar cleanup
 
-    # Update batch normalization statistics for SWA model
-    if training_cfg.swa_enabled and swa_model is not None:
-        LOGGER.info("Updating batch normalization statistics for SWA model...")
-        from torch.optim.swa_utils import update_bn
-
-        # Use the existing train_loader
-        try:
-            update_bn(train_loader, swa_model, device=device)
-            LOGGER.info("Batch normalization statistics updated successfully")
-        except Exception as e:
-            LOGGER.warning(f"Failed to update BN statistics: {e}")
-
-    # Save SWA checkpoint if enabled
+    # Finalize SWA model if enabled
     swa_checkpoint_path = None
-    if training_cfg.swa_enabled and swa_model is not None:
-        swa_checkpoint_path = checkpoints_dir / "swa.pt"
-        # Extract state_dict, handling compiled models
-        if hasattr(swa_model, '_orig_mod'):
-            swa_state_dict = swa_model._orig_mod.state_dict()
-        else:
-            swa_state_dict = swa_model.state_dict()
-        torch.save(swa_state_dict, swa_checkpoint_path)
-        LOGGER.info(f"SWA model checkpoint saved to {swa_checkpoint_path}")
+    if training_cfg.swa_enabled and resources.swa_model is not None:
+        swa_checkpoint_path = _finalize_swa(
+            resources.swa_model, train_loader, device, checkpoint_manager
+        )
 
     # Save final checkpoint for recovery if needed
-    last_checkpoint = checkpoints_dir / "last.pt"
-    # Extract state_dict, handling compiled models
-    if hasattr(model, '_orig_mod'):
-        last_state_dict = model._orig_mod.state_dict()
-    else:
-        last_state_dict = model.state_dict()
-    torch.save(last_state_dict, last_checkpoint)
+    last_checkpoint = checkpoint_manager.save_last_checkpoint(resources.model)
 
     # Save epoch-level metrics history
-    history_path = run_dir / "history.json"
-    _save_history(history, history_path)
+    history_path = context.run_dir / "history.json"
+    _save_history(state.history, history_path)
 
     # If no best checkpoint was found during training, use last checkpoint
-    if best_metric == float("-inf") or not best_checkpoint.exists():
+    if state.best_metric == float("-inf") or not best_checkpoint.exists():
         best_checkpoint = last_checkpoint
 
     # Log checkpoints as MLflow artifacts
@@ -873,24 +1304,24 @@ def train_from_config(
             metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
 
     # Report early stopping status
-    if early_stopping_enabled and early_stopped_at_epoch is not None:
-        LOGGER.info("Training stopped early at epoch %d", early_stopped_at_epoch)
-        LOGGER.info("Best validation metric achieved: %.4f", best_metric_for_patience)
+    if early_stopping_enabled and state.early_stopped_at_epoch is not None:
+        LOGGER.info("Training stopped early at epoch %d", state.early_stopped_at_epoch)
+        LOGGER.info("Best validation metric achieved: %.4f", state.best_metric_for_patience)
         LOGGER.info("Best model checkpoint: %s", best_checkpoint)
 
     # Build final training summary with checkpoint paths and metrics
-    resolved_best_metric = None if best_metric == float("-inf") else float(best_metric)
+    resolved_best_metric = None if state.best_metric == float("-inf") else float(state.best_metric)
     summary = TrainingSummary(
-        run_dir=run_dir,
+        run_dir=context.run_dir,
         best_checkpoint=best_checkpoint,
-        history=history,
+        history=state.history,
         best_metric=resolved_best_metric,
-        best_epoch=best_epoch,
-        best_global_step=best_metric_step,
-        top_checkpoints=list(best_records),
+        best_epoch=state.best_epoch,
+        best_global_step=state.best_metric_step,
+        top_checkpoints=list(state.best_records),
         swa_checkpoint=swa_checkpoint_path,
     )
-    _write_summary(summary, run_dir / "summary.json")
+    _write_summary(summary, context.run_dir / "summary.json")
     if training_cfg.metrics_summary_path is not None:
         _export_metrics_summary(summary, training_cfg.metrics_summary_path)
 
