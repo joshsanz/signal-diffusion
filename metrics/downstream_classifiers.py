@@ -97,7 +97,10 @@ def _summarize_hpo_result(hpo_result: Mapping[str, Any]) -> dict[str, Any]:
     task_metrics: dict[str, dict[str, Any]] = {}
     if isinstance(best_user_attrs, Mapping):
         for attr_name, attr_value in best_user_attrs.items():
-            if attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
+            if attr_name.startswith("task_") and attr_name.endswith("_f1"):
+                task_name = attr_name.replace("task_", "").replace("_f1", "")
+                task_metrics.setdefault(task_name, {})["f1"] = attr_value
+            elif attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
                 task_name = attr_name.replace("task_", "").replace("_accuracy", "")
                 task_metrics.setdefault(task_name, {})["accuracy"] = attr_value
             elif attr_name.startswith("task_") and attr_name.endswith("_mse"):
@@ -136,25 +139,29 @@ def _load_hpo_results_from_dir(hpo_dir: Path, spec_type: str) -> dict[str, dict[
 
 
 def _select_hpo_entry(summary: Mapping[str, Any], spec_type: str) -> tuple[str, dict[str, Any]]:
-    # Prefer the run with the best gender accuracy when multiple task objectives exist.
+    # Prefer the run with the best gender F1 score when multiple task objectives exist.
+    # Falls back to accuracy if F1 is not available (for backwards compatibility).
     candidates = {
         name: value for name, value in summary.items() if name.startswith(f"{spec_type}_")
     }
     if not candidates:
         raise ValueError(f"No HPO entries found for spec_type '{spec_type}'")
 
-    def _gender_accuracy(entry: Mapping[str, Any]) -> float:
+    def _gender_score(entry: Mapping[str, Any]) -> float:
         metrics = entry.get("task_metrics", {})
         gender = metrics.get("gender", {}) if isinstance(metrics, Mapping) else {}
-        value = gender.get("accuracy") if isinstance(gender, Mapping) else None
+        # Prefer F1 score, fall back to accuracy
+        value = gender.get("f1") if isinstance(gender, Mapping) else None
+        if value is None:
+            value = gender.get("accuracy") if isinstance(gender, Mapping) else None
         return float(value) if value is not None else float("-inf")
 
-    best_name = max(candidates.keys(), key=lambda name: _gender_accuracy(candidates[name]))
+    best_name = max(candidates.keys(), key=lambda name: _gender_score(candidates[name]))
     best_entry = candidates[best_name]
-    best_acc = _gender_accuracy(best_entry)
-    if best_acc == float("-inf"):
+    best_score = _gender_score(best_entry)
+    if best_score == float("-inf"):
         LOGGER.warning(
-            "Gender accuracy missing for all HPO entries in %s; using %s based on ordering",
+            "Gender F1/accuracy missing for all HPO entries in %s; using %s based on ordering",
             spec_type,
             best_name,
         )

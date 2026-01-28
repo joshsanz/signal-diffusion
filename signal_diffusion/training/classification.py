@@ -14,7 +14,9 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+import numpy as np
 import typer
+from sklearn.metrics import f1_score
 
 from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig, TaskSpec
 from signal_diffusion.config import load_settings
@@ -142,6 +144,8 @@ class EpochMetrics:
     lr: float
     train_mae: dict[str, float | None] = field(default_factory=dict)
     val_mae: dict[str, float | None] = field(default_factory=dict)
+    train_f1: dict[str, float | None] = field(default_factory=dict)
+    val_f1: dict[str, float | None] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -431,7 +435,7 @@ def train_from_config(
         return result
 
     eval_manager = _create_evaluation_manager(training_cfg, run_validation)
-    metrics_logger = create_metrics_logger(training_cfg, tasks, run_dir)
+    metrics_logger = create_metrics_logger(training_cfg, settings, tasks, run_dir)
 
     # Initialize early stopping (disabled if trial is not None)
     early_stopping_enabled = training_cfg.early_stopping and trial is None
@@ -524,6 +528,7 @@ def train_from_config(
                     eval_manager=eval_manager,
                     max_steps=training_cfg.max_steps,
                     trial=trial,
+                    metrics_logger=metrics_logger,
                 )
                 if global_step is None:
                     raise RuntimeError("Expected global_step during training.")
@@ -654,11 +659,14 @@ def train_from_config(
                 latest_val = eval_manager.latest_result if eval_manager else None
             train_losses = {name: float(train_result["losses"][name]) for name in tasks}
             train_accuracy: dict[str, float | None] = {}
+            train_f1: dict[str, float | None] = {}
             train_mse: dict[str, float | None] = {}
             train_mae: dict[str, float | None] = {}
             for name in tasks:
                 value = train_result["accuracy"].get(name)
                 train_accuracy[name] = float(value) if value is not None else None
+                f1_value = train_result.get("f1", {}).get(name)
+                train_f1[name] = float(f1_value) if f1_value is not None else None
                 mse_value = train_result.get("mse", {}).get(name)
                 train_mse[name] = float(mse_value) if mse_value is not None else None
                 mae_value = train_result.get("mae", {}).get(name)
@@ -670,11 +678,14 @@ def train_from_config(
                     name: float(latest_val["losses"][name]) for name in tasks
                 }
                 val_accuracy: dict[str, float | None] = {}
+                val_f1: dict[str, float | None] = {}
                 val_mse: dict[str, float | None] = {}
                 val_mae: dict[str, float | None] = {}
                 for name in tasks:
                     value = latest_val["accuracy"].get(name)
                     val_accuracy[name] = float(value) if value is not None else None
+                    f1_value = latest_val.get("f1", {}).get(name)
+                    val_f1[name] = float(f1_value) if f1_value is not None else None
                     mse_value = latest_val.get("mse", {}).get(name)
                     val_mse[name] = float(mse_value) if mse_value is not None else None
                     mae_value = latest_val.get("mae", {}).get(name)
@@ -683,6 +694,7 @@ def train_from_config(
                 val_loss = None
                 val_losses = {name: None for name in tasks}
                 val_accuracy = {name: None for name in tasks}
+                val_f1 = {name: None for name in tasks}
                 val_mse = {name: None for name in tasks}
                 val_mae = {name: None for name in tasks}
 
@@ -695,6 +707,8 @@ def train_from_config(
                 val_losses=val_losses,
                 train_accuracy=train_accuracy,
                 val_accuracy=val_accuracy,
+                train_f1=train_f1,
+                val_f1=val_f1,
                 train_mse=train_mse,
                 val_mse=val_mse,
                 lr=lr,
@@ -789,6 +803,16 @@ def train_from_config(
         progress_bar.close()
         raise
 
+    except Exception as e:
+        # On training exception (e.g., CUDA OOM), close MLflow run immediately
+        # so that subsequent HPO trials can start fresh runs
+        if metrics_logger is not None:
+            try:
+                metrics_logger.close()
+            except Exception:
+                pass  # Ignore errors during logger cleanup
+        raise
+
     finally:
         # Ensure cleanup always happens (even if exception was raised)
         # This guarantees progress_bar.close() is called to prevent signal handler issues
@@ -848,10 +872,6 @@ def train_from_config(
         if swa_checkpoint_path is not None and Path(swa_checkpoint_path).exists():
             metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
 
-    # Close logging backends
-    if metrics_logger is not None:
-        metrics_logger.close()
-
     # Report early stopping status
     if early_stopping_enabled and early_stopped_at_epoch is not None:
         LOGGER.info("Training stopped early at epoch %d", early_stopped_at_epoch)
@@ -876,9 +896,14 @@ def train_from_config(
 
     # Explicitly release DataLoader resources to prevent file handle accumulation
     # (critical when running multiple trials in HPO with sequential DataLoaders)
-    del train_loader
-    del val_loader
+    try:
+        del train_loader
+        del val_loader
+    except Exception:
+        pass
     gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return summary
 
@@ -1017,6 +1042,7 @@ def _run_epoch(
     eval_manager: EvaluationManager | None = None,
     max_steps: int = -1,
     trial: Any | None = None,
+    metrics_logger: Any = None,
 ) -> tuple[dict[str, Any], int | None]:
     if global_step is None:
         global_step = 0
@@ -1033,7 +1059,7 @@ def _run_epoch(
     task_loss_sums = {name: 0.0 for name in task_weights}
     task_counts = {name: 0 for name in task_weights}
     classification_stats = {
-        name: {"correct": 0, "total": 0}
+        name: {"correct": 0, "total": 0, "targets": [], "predictions": []}
         for name, spec in task_specs.items()
         if spec.task_type == "classification"
     }
@@ -1156,6 +1182,9 @@ def _run_epoch(
                 stats = classification_stats[name]
                 stats["correct"] += correct
                 stats["total"] += batch_size
+                # Store predictions and targets for F1 computation
+                stats["targets"].append(targets[name].detach().cpu().numpy())
+                stats["predictions"].append(preds.detach().cpu().numpy())
             elif spec.task_type == "regression":
                 # Regression: compute absolute and squared errors for MAE/MSE
                 error = logits.squeeze() - targets[name].squeeze()
@@ -1170,6 +1199,35 @@ def _run_epoch(
         for name, task_loss_tensor in per_task_batch.items():
             loss_value = float(task_loss_tensor.detach().item())
             task_loss_sums[name] += loss_value * batch_size
+
+        # Log batch-level metrics at regular intervals during training
+        if train and log_every > 0 and (batch_idx % log_every == 0 or batch_idx == len(data_loader)):
+            if metrics_logger is not None:
+                # Compute current batch-level metrics
+                batch_metrics: dict[str, Any] = {
+                    "loss": total_loss / total_examples if total_examples else 0.0,
+                    "accuracy": {},
+                    "f1": {},
+                    "losses": {},
+                }
+                for name in task_weights:
+                    spec = task_specs[name]
+                    if spec.task_type == "classification":
+                        stats = classification_stats[name]
+                        batch_metrics["accuracy"][name] = stats["correct"] / max(stats["total"], 1)
+                        # Compute macro F1 for batch-level logging
+                        all_targets = np.concatenate(stats["targets"]) if stats["targets"] else np.array([])
+                        all_predictions = np.concatenate(stats["predictions"]) if stats["predictions"] else np.array([])
+                        macro_f1 = f1_score(all_targets, all_predictions, average="macro", zero_division=0) if len(all_targets) > 0 else None
+                        batch_metrics["f1"][name] = macro_f1
+                    elif spec.task_type == "regression":
+                        stats = regression_stats[name]
+                        num_examples = max(stats["total"], 1)
+                        batch_metrics["accuracy"][name] = stats["abs_error_sum"] / num_examples
+                    batch_metrics["losses"][name] = (task_loss_sums[name] / max(task_counts[name], 1)) if task_counts[name] else 0.0
+                if train and grad_norm_count > 0:
+                    batch_metrics["grad_norm"] = grad_norm_sum / grad_norm_count
+                metrics_logger.log("train", global_step, batch_metrics)
 
         if batch_progress_bar is not None:
             mean_loss = total_loss / total_examples if total_examples else 0.0
@@ -1208,6 +1266,7 @@ def _run_epoch(
     # Compute final epoch-level metrics from accumulated statistics
     mean_loss = total_loss / max(total_examples, 1)
     accuracy: dict[str, float | None] = {}
+    f1_metrics: dict[str, float | None] = {}
     mae_metrics: dict[str, float | None] = {}
     mse_metrics: dict[str, float | None] = {}
     for name in task_weights:
@@ -1216,6 +1275,11 @@ def _run_epoch(
             # Classification accuracy: correct predictions / total examples
             stats = classification_stats[name]
             accuracy[name] = stats["correct"] / max(stats["total"], 1)
+            # Compute macro F1 score
+            all_targets = np.concatenate(stats["targets"]) if stats["targets"] else np.array([])
+            all_predictions = np.concatenate(stats["predictions"]) if stats["predictions"] else np.array([])
+            macro_f1 = f1_score(all_targets, all_predictions, average="macro", zero_division=0) if len(all_targets) > 0 else None
+            f1_metrics[name] = macro_f1
         elif spec.task_type == "regression":
             # Regression metrics: compute both MAE and MSE
             stats = regression_stats[name]
@@ -1235,6 +1299,8 @@ def _run_epoch(
 
     # Build final metrics dict with all available metrics
     metrics = {"loss": mean_loss, "accuracy": accuracy, "losses": per_task_mean}
+    if f1_metrics:
+        metrics["f1"] = f1_metrics
     if mae_metrics:
         metrics["mae"] = mae_metrics
     if mse_metrics:
@@ -1437,6 +1503,8 @@ def _save_history(history: list[EpochMetrics], path: Path) -> None:
             "val_losses": item.val_losses,
             "train_accuracy": item.train_accuracy,
             "val_accuracy": item.val_accuracy,
+            "train_f1": item.train_f1,
+            "val_f1": item.val_f1,
             "train_mse": item.train_mse,
             "val_mse": item.val_mse,
             "train_mae": item.train_mae,
@@ -1483,6 +1551,7 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
     history = summary.history
     per_task_best_loss: dict[str, dict[str, float | int]] = {}
     per_task_best_accuracy: dict[str, dict[str, float | int]] = {}
+    per_task_best_f1: dict[str, dict[str, float | int]] = {}
     per_task_best_mae: dict[str, dict[str, float | int]] = {}
     per_task_best_mse: dict[str, dict[str, float | int]] = {}
 
@@ -1500,6 +1569,15 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
             if best_entry is None or accuracy > best_entry["accuracy"]:
                 per_task_best_accuracy[task_name] = {
                     "accuracy": float(accuracy),
+                    "epoch": epoch_metrics.epoch,
+                }
+        for task_name, f1 in epoch_metrics.val_f1.items():
+            if f1 is None:
+                continue
+            best_entry = per_task_best_f1.get(task_name)
+            if best_entry is None or f1 > best_entry["f1"]:
+                per_task_best_f1[task_name] = {
+                    "f1": float(f1),
                     "epoch": epoch_metrics.epoch,
                 }
         # Track best MAE and MSE for regression tasks (MAE should be minimized, as should MSE)
@@ -1537,6 +1615,7 @@ def _build_metrics_summary(summary: TrainingSummary) -> dict[str, Any]:
         ],
         "per_task_best": {
             "accuracy": per_task_best_accuracy,
+            "f1": per_task_best_f1,
             "loss": per_task_best_loss,
             "mae": per_task_best_mae,
             "mse": per_task_best_mse,

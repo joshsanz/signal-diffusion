@@ -10,9 +10,16 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from signal_diffusion.log_setup import get_logger
-from signal_diffusion.classification.config import TrainingConfig
+from signal_diffusion.classification.config import ClassificationConfig, TrainingConfig, TrainingConfig
+from signal_diffusion.config import Settings
 
 LOGGER = get_logger(__name__)
+
+# Optional imports
+try:
+    import mlflow
+except ImportError:
+    mlflow = None  # type: ignore
 
 
 def _load_dotenv() -> None:
@@ -56,6 +63,7 @@ class MetricsLogger:
         *,
         tasks: Iterable[str],
         training_cfg: TrainingConfig,
+        settings: Settings,
         run_dir: Path,
     ) -> None:
         self.tasks = tuple(tasks)
@@ -65,7 +73,14 @@ class MetricsLogger:
         self._mlflow_run_id: str | None = None
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_name = f"{training_cfg.run_name}-{timestamp}" if training_cfg.run_name else None
+        if training_cfg.run_name:
+            run_name = f"{training_cfg.run_name}-{timestamp}"
+        else:
+            if settings.data_type == "spectrogram":
+                data_str = "spec-" + settings.output_type
+            else:
+                data_str = settings.data_type
+            run_name = f"{data_str}-{timestamp}"
 
         if training_cfg.tensorboard:
             try:
@@ -101,9 +116,7 @@ class MetricsLogger:
         # Initialize MLflow if tracking URI is configured
         mlflow_tracking_uri = get_mlflow_tracking_uri()
         if mlflow_tracking_uri:
-            try:
-                import mlflow
-            except ImportError:  # pragma: no cover - optional dependency
+            if mlflow is None:  # pragma: no cover - optional dependency
                 LOGGER.warning("MLflow tracking URI configured but 'mlflow' is not installed")
             else:
                 mlflow.set_tracking_uri(mlflow_tracking_uri)
@@ -128,18 +141,29 @@ class MetricsLogger:
             if value is None:
                 continue
             scalars[f"{phase}/loss/{name}"] = float(value)
+
+        # Log accuracy for classification tasks
         for name, value in metrics.get("accuracy", {}).items():
             if value is None:
                 continue
             scalars[f"{phase}/accuracy/{name}"] = float(value)
+
+        # Log F1 scores for classification tasks
+        for name, value in metrics.get("f1", {}).items():
+            if value is None:
+                continue
+            scalars[f"{phase}/f1/{name}"] = float(value)
+
+        # Log MAE and MSE as accuracy/{task_name}_{metric_type} for clarity
         for name, value in metrics.get("mae", {}).items():
             if value is None:
                 continue
-            scalars[f"{phase}/mae/{name}"] = float(value)
+            scalars[f"{phase}/accuracy/{name}_mae"] = float(value)
         for name, value in metrics.get("mse", {}).items():
             if value is None:
                 continue
-            scalars[f"{phase}/mse/{name}"] = float(value)
+            scalars[f"{phase}/accuracy/{name}_mse"] = float(value)
+
         if epoch is not None:
             scalars[f"{phase}/epoch"] = float(epoch)
 
@@ -160,7 +184,6 @@ class MetricsLogger:
         # Log to MLflow
         if self._mlflow_run is not None:
             try:
-                import mlflow
                 mlflow.log_metrics(scalars, step=step)
             except Exception:
                 LOGGER.warning("Failed to log metrics to MLflow")
@@ -169,7 +192,6 @@ class MetricsLogger:
         """Log parameters to MLflow."""
         if self._mlflow_run is not None:
             try:
-                import mlflow
                 # Flatten nested dicts for MLflow
                 flat_params: dict[str, Any] = {}
                 for key, value in params.items():
@@ -186,7 +208,6 @@ class MetricsLogger:
         """Log an artifact to MLflow."""
         if self._mlflow_run is not None:
             try:
-                import mlflow
                 mlflow.log_artifact(str(path), artifact_path=artifact_path)
             except Exception:
                 LOGGER.warning(f"Failed to log artifact {path} to MLflow")
@@ -202,7 +223,6 @@ class MetricsLogger:
                 pass
         if self._mlflow_run is not None:
             try:
-                import mlflow
                 mlflow.end_run()
             except Exception:
                 LOGGER.warning("Failed to end MLflow run")
@@ -210,6 +230,7 @@ class MetricsLogger:
 
 def create_metrics_logger(
     training_cfg: TrainingConfig,
+    settings: Settings,
     tasks: Iterable[str],
     run_dir: Path,
 ) -> MetricsLogger | None:
@@ -227,4 +248,5 @@ def create_metrics_logger(
     # (MLflow is controlled by environment variables, not training config)
     if not training_cfg.tensorboard and not training_cfg.wandb_project and not get_mlflow_tracking_uri():
         return None
-    return MetricsLogger(tasks=tasks, training_cfg=training_cfg, run_dir=run_dir)
+    return MetricsLogger(tasks=tasks, training_cfg=training_cfg,
+                         settings=settings, run_dir=run_dir)

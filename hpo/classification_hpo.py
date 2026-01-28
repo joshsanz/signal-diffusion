@@ -187,18 +187,18 @@ def run_training_trial(
     """Run a single training trial with given configuration.
 
     Executes a full training run with the trial's hyperparameters, computes task-weighted
-    accuracy, and handles resource cleanup. Captures both the final weighted metric and
-    individual per-task accuracies for analysis.
+    F1 scores (for classification) and normalized MSE (for regression), and handles resource
+    cleanup. Captures both the final weighted metric and individual per-task scores for analysis.
 
     Args:
         config: Configuration for this trial's training run
         trial: Optuna Trial object for reporting metrics and pruning
         optimize_task: Task to optimize for. 'combined' (default) optimizes the mean of all
-                      task scores. Specify a task name (e.g., 'gender') to optimize only
+                      task scores. Specify a task name (e.g., 'health') to optimize only
                       that task's metric.
 
     Returns:
-        Dictionary with trial results including weighted accuracy, loss, and per-task scores
+        Dictionary with trial results including weighted F1/MSE score, loss, and per-task metrics
     """
     try:
         logger.info(f"Starting trial {trial.number} with in-process training")
@@ -226,8 +226,9 @@ def run_training_trial(
             task_specs = build_task_specs(config.dataset.name, config.dataset.tasks)
             task_spec_dict = {spec.name: spec for spec in task_specs}
 
-            # Compute combined objective (accuracy for classification, 1/(1+mse) for regression)
+            # Compute combined objective (F1 for classification, 1/(1+mse) for regression)
             # No task weighting applied - all tasks contribute equally to the objective
+            # Special case: health task uses F1 score for better handling of imbalanced classes
             scores = []
             task_results = {}
 
@@ -237,13 +238,16 @@ def run_training_trial(
                     continue
 
                 if spec.task_type == "classification":
-                    # Classification: use validation accuracy directly
+                    # Classification: use validation F1 score for better handling of class imbalance
+                    # Health task specifically benefits from F1 over accuracy
+                    f1 = final_epoch.val_f1.get(task_name)
                     accuracy = final_epoch.val_accuracy.get(task_name)
-                    if accuracy is not None:
-                        scores.append(float(accuracy))
+                    if f1 is not None:
+                        scores.append(float(f1))
                         task_results[task_name] = {
                             "type": "classification",
-                            "accuracy": float(accuracy),
+                            "f1": float(f1),
+                            "accuracy": float(accuracy) if accuracy is not None else None,
                         }
                 else:
                     # Regression: normalize MSE to [0, 1] scale using 1/(1+mse)
@@ -262,10 +266,10 @@ def run_training_trial(
 
             # Select objective based on optimization target
             if optimize_task == "combined":
-                # Current behavior: mean of all task scores
+                # Mean of all task F1 scores (for classification) and normalized MSE (for regression)
                 combined_objective = sum(scores) / len(scores) if scores else 0.0
             else:
-                # Specific task: use only that task's score
+                # Specific task: use only that task's score (F1 for classification, normalized MSE for regression)
                 if optimize_task not in task_results:
                     logger.warning(
                         f"Task '{optimize_task}' not found in trial results. "
@@ -275,7 +279,7 @@ def run_training_trial(
                 else:
                     result = task_results[optimize_task]
                     if result["type"] == "classification":
-                        combined_objective = result["accuracy"]
+                        combined_objective = result["f1"]
                     else:
                         combined_objective = result["normalized_score"]
         else:
@@ -290,8 +294,10 @@ def run_training_trial(
         )
         for task_name, result in task_results.items():
             if result["type"] == "classification":
+                f1_val = result.get("f1")
+                acc_val = result.get("accuracy")
                 logger.info(
-                    f"  {task_name} (classification): accuracy={result['accuracy']:.4f}"
+                    f"  {task_name} (classification): f1={f1_val:.4f}, accuracy={acc_val:.4f if acc_val is not None else 'n/a'}"
                 )
             else:
                 logger.info(
@@ -369,7 +375,7 @@ def create_objective(
     Args:
         base_config: Base configuration to clone and modify per trial
         optimize_task: Task to optimize for. 'combined' (default) optimizes the mean of all
-                      task scores. Specify a task name (e.g., 'gender') to optimize only
+                      task F1/MSE scores. Specify a task name (e.g., 'health') to optimize only
                       that task's metric.
 
     Returns:
@@ -381,7 +387,7 @@ def create_objective(
 
         Samples hyperparameters, runs training, and returns the objective score:
         - If optimize_task == 'combined': unweighted mean of all task scores
-          - For classification tasks: uses validation accuracy directly
+          - For classification tasks: uses validation F1 score (macro) for better handling of imbalance
           - For regression tasks: uses 1/(1+mse) to normalize MSE to [0, 1]
         - If optimize_task is a specific task name: uses only that task's metric
 
@@ -496,8 +502,12 @@ def create_objective(
             for task_name, task_result in results["task_results"].items():
                 if task_result["type"] == "classification":
                     trial.set_user_attr(
-                        f"task_{task_name}_accuracy", task_result["accuracy"]
+                        f"task_{task_name}_f1", task_result["f1"]
                     )
+                    if task_result.get("accuracy") is not None:
+                        trial.set_user_attr(
+                            f"task_{task_name}_accuracy", task_result["accuracy"]
+                        )
                 else:
                     trial.set_user_attr(f"task_{task_name}_mse", task_result["mse"])
                     if task_result.get("mae") is not None:
@@ -627,7 +637,7 @@ def main():
     )
 
     study = optuna.create_study(
-        direction="maximize",  # Maximize accuracy
+        direction="maximize",  # Maximize F1 scores (classification) and normalized MSE scores (regression)
         sampler=sampler,
         pruner=pruner,
         study_name=args.study_name,
@@ -666,7 +676,10 @@ def main():
     best_attrs = study.best_trial.user_attrs
     for attr_name in sorted(best_attrs.keys()):
         attr_value = best_attrs[attr_name]
-        if attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
+        if attr_name.startswith("task_") and attr_name.endswith("_f1"):
+            task_name = attr_name.replace("task_", "").replace("_f1", "")
+            logger.info(f"  {task_name} (classification) F1: {attr_value:.4f}")
+        elif attr_name.startswith("task_") and attr_name.endswith("_accuracy"):
             task_name = attr_name.replace("task_", "").replace("_accuracy", "")
             logger.info(f"  {task_name} (classification) accuracy: {attr_value:.4f}")
         elif attr_name.startswith("task_") and attr_name.endswith("_mse"):

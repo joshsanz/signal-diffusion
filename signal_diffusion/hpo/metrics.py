@@ -10,6 +10,7 @@ from typing import Any
 class TaskMetrics:
     """Metrics for a single task."""
 
+    f1: float | None = None
     accuracy: float | None = None
     mse: float | None = None
     mae: float | None = None
@@ -27,6 +28,8 @@ class TrialSummary:
     def __repr__(self) -> str:
         parts = [f"trial_{self.trial_num}: obj={self.objective:.4f}"]
         for task_name, metrics in self.task_metrics.items():
+            if metrics.f1 is not None:
+                parts.append(f"{task_name}_f1={metrics.f1:.4f}")
             if metrics.accuracy is not None:
                 parts.append(f"{task_name}_acc={metrics.accuracy:.4f}")
             if metrics.mae is not None:
@@ -41,6 +44,7 @@ def extract_task_metrics(user_attrs: dict[str, Any]) -> dict[str, TaskMetrics]:
     Extract task-specific metrics from user attributes.
 
     Parses attributes with patterns like:
+    - task_{name}_f1
     - task_{name}_accuracy
     - task_{name}_mse
     - task_{name}_mae
@@ -58,7 +62,13 @@ def extract_task_metrics(user_attrs: dict[str, Any]) -> dict[str, TaskMetrics]:
             continue
 
         # Parse task_<name>_<metric> pattern
-        if attr_name.endswith("_accuracy"):
+        if attr_name.endswith("_f1"):
+            task_name = attr_name.replace("task_", "").replace("_f1", "")
+            if task_name not in task_metrics:
+                task_metrics[task_name] = TaskMetrics()
+            task_metrics[task_name].f1 = attr_value
+
+        elif attr_name.endswith("_accuracy"):
             task_name = attr_name.replace("task_", "").replace("_accuracy", "")
             if task_name not in task_metrics:
                 task_metrics[task_name] = TaskMetrics()
