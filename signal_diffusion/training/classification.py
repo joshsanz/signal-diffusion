@@ -1276,67 +1276,74 @@ def train_from_config(
             except Exception:
                 pass  # Ignore errors during progress bar cleanup
 
-    # Finalize SWA model if enabled
-    swa_checkpoint_path = None
-    if training_cfg.swa_enabled and resources.swa_model is not None:
-        swa_checkpoint_path = _finalize_swa(
-            resources.swa_model, train_loader, device, checkpoint_manager
-        )
-
-    # Save final checkpoint for recovery if needed
-    last_checkpoint = checkpoint_manager.save_last_checkpoint(resources.model)
-
-    # Save epoch-level metrics history
-    history_path = context.run_dir / "history.json"
-    _save_history(state.history, history_path)
-
-    # If no best checkpoint was found during training, use last checkpoint
-    if state.best_metric == float("-inf") or not best_checkpoint.exists():
-        best_checkpoint = last_checkpoint
-
-    # Log checkpoints as MLflow artifacts
-    if metrics_logger is not None:
-        # Log best checkpoint
-        if best_checkpoint.exists():
-            metrics_logger.log_artifact(best_checkpoint, artifact_path="checkpoints")
-        # Log SWA checkpoint if available
-        if swa_checkpoint_path is not None and Path(swa_checkpoint_path).exists():
-            metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
-
-    # Report early stopping status
-    if early_stopping_enabled and state.early_stopped_at_epoch is not None:
-        LOGGER.info("Training stopped early at epoch %d", state.early_stopped_at_epoch)
-        LOGGER.info("Best validation metric achieved: %.4f", state.best_metric_for_patience)
-        LOGGER.info("Best model checkpoint: %s", best_checkpoint)
-
-    # Build final training summary with checkpoint paths and metrics
-    resolved_best_metric = None if state.best_metric == float("-inf") else float(state.best_metric)
-    summary = TrainingSummary(
-        run_dir=context.run_dir,
-        best_checkpoint=best_checkpoint,
-        history=state.history,
-        best_metric=resolved_best_metric,
-        best_epoch=state.best_epoch,
-        best_global_step=state.best_metric_step,
-        top_checkpoints=list(state.best_records),
-        swa_checkpoint=swa_checkpoint_path,
-    )
-    _write_summary(summary, context.run_dir / "summary.json")
-    if training_cfg.metrics_summary_path is not None:
-        _export_metrics_summary(summary, training_cfg.metrics_summary_path)
-
-    # Explicitly release DataLoader resources to prevent file handle accumulation
-    # (critical when running multiple trials in HPO with sequential DataLoaders)
     try:
-        del train_loader
-        del val_loader
-    except Exception:
-        pass
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        # Finalize SWA model if enabled
+        swa_checkpoint_path = None
+        if training_cfg.swa_enabled and resources.swa_model is not None:
+            swa_checkpoint_path = _finalize_swa(
+                resources.swa_model, train_loader, device, checkpoint_manager
+            )
 
-    return summary
+        # Save final checkpoint for recovery if needed
+        last_checkpoint = checkpoint_manager.save_last_checkpoint(resources.model)
+
+        # Save epoch-level metrics history
+        history_path = context.run_dir / "history.json"
+        _save_history(state.history, history_path)
+
+        # If no best checkpoint was found during training, use last checkpoint
+        if state.best_metric == float("-inf") or not best_checkpoint.exists():
+            best_checkpoint = last_checkpoint
+
+        # Log checkpoints as MLflow artifacts
+        if metrics_logger is not None:
+            # Log best checkpoint
+            if best_checkpoint.exists():
+                metrics_logger.log_artifact(best_checkpoint, artifact_path="checkpoints")
+            # Log SWA checkpoint if available
+            if swa_checkpoint_path is not None and Path(swa_checkpoint_path).exists():
+                metrics_logger.log_artifact(swa_checkpoint_path, artifact_path="checkpoints")
+
+        # Report early stopping status
+        if early_stopping_enabled and state.early_stopped_at_epoch is not None:
+            LOGGER.info("Training stopped early at epoch %d", state.early_stopped_at_epoch)
+            LOGGER.info("Best validation metric achieved: %.4f", state.best_metric_for_patience)
+            LOGGER.info("Best model checkpoint: %s", best_checkpoint)
+
+        # Build final training summary with checkpoint paths and metrics
+        resolved_best_metric = None if state.best_metric == float("-inf") else float(state.best_metric)
+        summary = TrainingSummary(
+            run_dir=context.run_dir,
+            best_checkpoint=best_checkpoint,
+            history=state.history,
+            best_metric=resolved_best_metric,
+            best_epoch=state.best_epoch,
+            best_global_step=state.best_metric_step,
+            top_checkpoints=list(state.best_records),
+            swa_checkpoint=swa_checkpoint_path,
+        )
+        _write_summary(summary, context.run_dir / "summary.json")
+        if training_cfg.metrics_summary_path is not None:
+            _export_metrics_summary(summary, training_cfg.metrics_summary_path)
+
+        # Explicitly release DataLoader resources to prevent file handle accumulation
+        # (critical when running multiple trials in HPO with sequential DataLoaders)
+        try:
+            del train_loader
+            del val_loader
+        except Exception:
+            pass
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return summary
+    finally:
+        if metrics_logger is not None:
+            try:
+                metrics_logger.close()
+            except Exception:
+                pass
 
 
 def _create_evaluation_manager(
