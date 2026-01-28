@@ -296,8 +296,9 @@ def run_training_trial(
             if result["type"] == "classification":
                 f1_val = result.get("f1")
                 acc_val = result.get("accuracy")
+                acc_text = f"{acc_val:.4f}" if acc_val is not None else "n/a"
                 logger.info(
-                    f"  {task_name} (classification): f1={f1_val:.4f}, accuracy={acc_val:.4f if acc_val is not None else 'n/a'}"
+                    f"  {task_name} (classification): f1={f1_val:.4f}, accuracy={acc_text}"
                 )
             else:
                 logger.info(
