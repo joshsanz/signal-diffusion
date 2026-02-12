@@ -2,26 +2,26 @@
 
 Tasks for implementing a completed signal diffusion paper
 
-- Apply label smoothing to classifiers <https://arxiv.org/abs/1512.00567>
 - Rename mapping_cond to something more accurate and descriptive
-- Train diff models for each
+- Train diff models for each remaining
   - data type
   - conditioning
-
-# Completed
 
 - SOTA diffusion operations
   - stochastic sampling for flow matching?
   - Adjusted initial noise to avoid memorization <https://arxiv.org/pdf/2510.08625>
   - Chamfer guidance for class adherence? <https://arxiv.org/pdf/2508.10631>
-  - [x] based on deep research results
   - [x] careful conditioning with text embeddings and cross-attention
   - [x] Rectified CFG++ <https://arxiv.org/pdf/2510.07631>
 - Metrics
+  - [ ] Memorization metrics for generated data
   - MMD overall against test set and per-class
   - "Improved Precision and Recall" to get at accuracy and diversity
   - [x] Eval for MMD during training
   - [x] save images to tb, wandb
+
+# Completed
+
 - Utilities
   - Batch size finder based on model config settings
     - Max batch size possible
