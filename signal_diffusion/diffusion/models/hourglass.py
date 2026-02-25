@@ -15,6 +15,7 @@ from tqdm import tqdm
 from signal_diffusion.diffusion.config import DiffusionConfig
 from signal_diffusion.diffusion.data import DiffusionBatch
 from signal_diffusion.diffusion.guidance import apply_cfg_guidance
+from signal_diffusion.diffusion.memorization import adjust_initial_latent_per_sample
 from signal_diffusion.diffusion.models.base import (
     DiffusionModules,
     create_noise_tensor,
@@ -885,6 +886,50 @@ class HourglassAdapter:
             cond_vector = cond_dict
             null_cond_vector = null_cond_dict
 
+        def model_eval_fn(model_input_inner, timestep_inner, conditioning):
+            """Evaluate denoiser, routing conditioning dict to model parameters."""
+            if isinstance(timestep_inner, torch.Tensor):
+                timesteps_inner = timestep_inner
+            else:
+                timesteps_inner = torch.full(
+                    (model_input_inner.size(0),), timestep_inner, device=device
+                )
+            sigmas_inner = get_sigmas_from_timesteps(scheduler, timesteps_inner, device=device)
+            class_cond_inner = conditioning.get("class")
+            mapping_cond_inner = conditioning.get("mapping")
+            with self._checkpoint_context():
+                return modules.denoiser(
+                    model_input_inner,
+                    sigma=sigmas_inner,
+                    class_cond=class_cond_inner,
+                    mapping_cond=mapping_cond_inner,
+                )
+
+        inf = cfg.inference
+        if (
+            classifier_free
+            and getattr(inf, "memorization_mitigation_enabled", False)
+        ):
+            first_timestep = scheduler.timesteps[0]
+
+            def scaled_model_eval_fn(latent_in, timestep_in, conditioning):
+                scaled = (
+                    scheduler.scale_model_input(latent_in, timestep_in)
+                    if hasattr(scheduler, "scale_model_input")
+                    else latent_in
+                )
+                return model_eval_fn(scaled, timestep_in, conditioning)
+
+            sample = adjust_initial_latent_per_sample(
+                sample,
+                first_timestep,
+                model_eval_fn=scaled_model_eval_fn,
+                cond_vector=cond_vector,
+                null_cond_vector=null_cond_vector,
+                target_loss=inf.memorization_target_loss,
+                lr=inf.memorization_lr,
+            )
+
         with torch.no_grad():
             for i, timestep in tqdm(enumerate(scheduler.timesteps), desc="Denoising", leave=False):
                 model_input = sample
@@ -908,33 +953,6 @@ class HourglassAdapter:
                     dT = -schedule_timesteps[i]
 
                 if classifier_free:
-                    # Define model evaluation callback for CFG guidance
-                    def model_eval_fn(model_input_inner, timestep_inner, conditioning):
-                        """Evaluate denoiser, routing conditioning dict to model parameters.
-
-                        conditioning is a dict with keys like 'class' and 'mapping'.
-                        apply_cfg_guidance has already concatenated null+cond for each dict entry.
-                        """
-                        # Extract timesteps for sigma computation
-                        if isinstance(timestep_inner, torch.Tensor):
-                            timesteps_inner = timestep_inner
-                        else:
-                            timesteps_inner = torch.full(
-                                (model_input_inner.size(0),), timestep_inner, device=device
-                            )
-                        sigmas_inner = get_sigmas_from_timesteps(scheduler, timesteps_inner, device=device)
-
-                        class_cond_inner = conditioning.get("class")  # May be None
-                        mapping_cond_inner = conditioning.get("mapping")  # May be None
-
-                        with self._checkpoint_context():
-                            return modules.denoiser(
-                                model_input_inner,
-                                sigma=sigmas_inner,
-                                class_cond=class_cond_inner,
-                                mapping_cond=mapping_cond_inner,
-                            )
-
                     # Apply CFG guidance (handles batching/concatenation internally)
                     model_output = apply_cfg_guidance(
                         x_t=model_input,

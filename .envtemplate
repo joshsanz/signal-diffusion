@@ -1,0 +1,4 @@
+CUDA_HOME=/usr/local/cuda-12.8
+CUDACXX=/usr/local/cuda-12.8/bin/nvcc
+LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64
+PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
