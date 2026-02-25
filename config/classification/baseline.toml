@@ -16,7 +16,7 @@ name = "/data/data/signal-diffusion/processed/reweighted_meta_dataset_log_n2048_
 train_split = "train"
 val_split = "validation"
 tasks = ["gender", "health", "age"]
-batch_size = 192
+batch_size = 128
 num_workers = 4
 shuffle = true
 
@@ -24,13 +24,13 @@ shuffle = true
 backbone = "cnn_light"
 input_channels = 1
 embedding_dim = 384
-dropout = 0.43
-depth = 3
-layer_repeats = 3
+dropout = 0.13
+depth = 2
+layer_repeats = 2
 
 [optimizer]
 name = "adamw"
-learning_rate = 0.0002
+learning_rate = 0.002
 weight_decay = 0.009
 betas = [0.9, 0.995]
 
@@ -62,14 +62,19 @@ swa_lr_frac = 0.25
 label_smoothing = 0.1
 seed = 1234
 
-# Focal loss for imbalanced health task (set use_focal_loss_health=true to enable)
+# Focal loss for health task
 # Focal loss helps address severe class imbalance by down-weighting easy examples
 # and focusing learning on hard examples
-# use_focal_loss_health = true
-# focal_alpha = 0.25  # Weight for minority class (lower = more weight)
-# focal_gamma = 2.0   # Focusing parameter (higher = more focus on hard examples)
+use_focal_loss_health = true
+focal_alpha_health = 0.25  # Weight for minority class (lower = more weight)
+focal_gamma_health = 2.0   # Focusing parameter (higher = more focus on hard examples)
+
+# Focal loss for gender task (enabled by default for class imbalance)
+use_focal_loss_gender = true
+focal_alpha_gender = 0.25
+focal_gamma_gender = 2.0
 
 [training.task_weights]
-gender = 2.0
+gender = 1.0
 health = 1.0
 age = 0.05  # Reduced to ~1/20 to balance with classification losses (~0.1-0.8) vs age MSE (~20-180)

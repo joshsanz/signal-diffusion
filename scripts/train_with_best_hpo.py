@@ -52,6 +52,7 @@ HPOResult = HPOStudyResult
 @dataclass(slots=True)
 class TrainingJob:
     """Configuration for a single training run."""
+
     spec_type: str
     task_type: str
     base_config_path: Path
@@ -127,6 +128,7 @@ def merge_hpo_params_to_config(
 
     # Set tasks: use all available tasks for the dataset
     from signal_diffusion.classification.tasks import available_tasks
+
     dataset_name = config["dataset"].get("name")
     if dataset_name:
         all_tasks = available_tasks(dataset_name)
@@ -135,7 +137,9 @@ def merge_hpo_params_to_config(
     else:
         # Fallback to TASK_TYPE_TO_TASKS if dataset name not found
         config["dataset"]["tasks"] = TASK_TYPE_TO_TASKS[task_type]
-        LOGGER.warning(f"Dataset name not found in config, using task_type mapping: {TASK_TYPE_TO_TASKS[task_type]}")
+        LOGGER.warning(
+            f"Dataset name not found in config, using task_type mapping: {TASK_TYPE_TO_TASKS[task_type]}"
+        )
 
     # Apply user overrides
     if "epochs" in user_overrides and user_overrides["epochs"] is not None:
@@ -150,7 +154,10 @@ def merge_hpo_params_to_config(
 
     if "swa_enabled" in user_overrides:
         config["training"]["swa_enabled"] = user_overrides["swa_enabled"]
-    if "swa_extra_ratio" in user_overrides and user_overrides["swa_extra_ratio"] is not None:
+    if (
+        "swa_extra_ratio" in user_overrides
+        and user_overrides["swa_extra_ratio"] is not None
+    ):
         config["training"]["swa_extra_ratio"] = user_overrides["swa_extra_ratio"]
 
     # Set a fixed seed for reproducibility if not already set
@@ -176,7 +183,7 @@ def evaluate_checkpoint(
     Returns:
         Dictionary with structure:
         {
-            "val": {"task_name": accuracy, ...},
+            "validation": {"task_name": accuracy, ...},
             "test": {"task_name": accuracy, ...}
         }
     """
@@ -184,25 +191,42 @@ def evaluate_checkpoint(
     config_path = run_dir / "config_resolved.json"
     if not config_path.exists():
         LOGGER.warning(f"Config not found at {config_path}, skipping evaluation")
-        return {"val": {}, "test": {}}
+        return {"validation": {}, "test": {}}
 
     with config_path.open("r") as f:
         config_data = json.load(f)
 
     # Load settings
     from signal_diffusion.config import load_settings
-    from signal_diffusion.classification import build_classifier, build_dataset, build_task_specs, ClassifierConfig
+    from signal_diffusion.classification import (
+        build_classifier,
+        build_dataset,
+        build_task_specs,
+        ClassifierConfig,
+    )
 
     settings_path = config_data.get("settings_path")
     if not settings_path:
         LOGGER.warning("settings_path not found in config, skipping evaluation")
-        return {"val": {}, "test": {}}
+        return {"validation": {}, "test": {}}
 
     settings = load_settings(settings_path)
 
-    # Apply data overrides if present
-    if "output_type" in config_data.get("dataset", {}).get("extras", {}):
+    # Apply data overrides: prefer explicit data_overrides, fall back to
+    # inferring output_type from model.input_channels for older resolved configs
+    data_overrides = config_data.get("data_overrides", {})
+    if "output_type" in data_overrides:
+        settings.output_type = data_overrides["output_type"]
+    elif "output_type" in config_data.get("dataset", {}).get("extras", {}):
         settings.output_type = config_data["dataset"]["extras"]["output_type"]
+    else:
+        # Infer from input_channels: 1 → db-only, 3 → db-iq (RGB)
+        input_channels = config_data.get("model", {}).get("input_channels", 1)
+        if input_channels != 1:
+            settings.output_type = "db-iq"
+            LOGGER.debug(
+                "Inferred output_type='db-iq' from input_channels=%d", input_channels
+            )
 
     # Extract configuration
     dataset_cfg = config_data["dataset"]
@@ -242,12 +266,20 @@ def evaluate_checkpoint(
     # Load checkpoint state
     try:
         state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        # Handle checkpoints saved from AveragedModel wrapping a compiled model:
+        # keys may be prefixed with "module._orig_mod." and include "n_averaged"
+        if any(k.startswith("module._orig_mod.") for k in state_dict):
+            state_dict = {
+                k.removeprefix("module._orig_mod."): v
+                for k, v in state_dict.items()
+                if k != "n_averaged"
+            }
         model.load_state_dict(state_dict)
         model.to(device)
         model.eval()
     except Exception as e:
         LOGGER.error(f"Failed to load checkpoint {checkpoint_path}: {e}")
-        return {"val": {}, "test": {}}
+        return {"validation": {}, "test": {}}
 
     # Build datasets
     batch_size = dataset_cfg.get("batch_size", 32)
@@ -255,7 +287,7 @@ def evaluate_checkpoint(
 
     results = {}
 
-    for split in ["val", "test"]:
+    for split in ["validation", "test"]:
         try:
             # Build dataset for this split
             dataset = build_dataset(
@@ -325,7 +357,9 @@ def evaluate_checkpoint(
     return results
 
 
-def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[TrainingSummary], Optional[str]]:
+def execute_training_job(
+    job: TrainingJob, cwd: Path
+) -> Tuple[bool, Optional[TrainingSummary], Optional[str]]:
     """
     Execute a single training job.
 
@@ -336,11 +370,11 @@ def execute_training_job(job: TrainingJob, cwd: Path) -> Tuple[bool, Optional[Tr
     Returns:
         Tuple of (success: bool, checkpoint_path: Optional[Path], error_msg: Optional[str])
     """
-    LOGGER.info(f"\n{'='*80}")
+    LOGGER.info(f"\n{'=' * 80}")
     LOGGER.info(f"Training: {job.spec_type} × {job.task_type}")
     LOGGER.info(f"Output: {job.output_dir}")
     LOGGER.info(f"HPO params: {job.hpo_result.best_params}")
-    LOGGER.info(f"{'='*80}\n")
+    LOGGER.info(f"{'=' * 80}\n")
 
     try:
         # Create output directory
@@ -401,8 +435,6 @@ def execute_training_job_with_swa_comparison(
     return base_result, swa_result
 
 
-
-
 def create_training_jobs(
     hpo_results: Dict[Tuple[str, str], HPOResult],
     output_dir: Path,
@@ -421,7 +453,9 @@ def create_training_jobs(
             continue
 
         if not base_config_path.exists():
-            LOGGER.warning(f"Base config not found: {base_config_path}. Skipping {spec_type}_{task_type}")
+            LOGGER.warning(
+                f"Base config not found: {base_config_path}. Skipping {spec_type}_{task_type}"
+            )
             continue
 
         # Create output directory for this job
@@ -443,13 +477,13 @@ def create_training_jobs(
 
 def print_summary(results: List[dict], compare_swa: bool = False) -> None:
     """Print summary table of training results."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TRAINING SUMMARY")
-    print("="*80)
+    print("=" * 80)
 
     if compare_swa:
         print(f"{'Config':<35} {'Base Status':<12} {'SWA Status':<12}")
-        print("-"*80)
+        print("-" * 80)
         for result in results:
             config_name = f"{result['spec_type']}_{result['task_type']}_optimized"
             base_status = "✓ SUCCESS" if result["base"]["success"] else "✗ FAILED"
@@ -457,7 +491,7 @@ def print_summary(results: List[dict], compare_swa: bool = False) -> None:
             print(f"{config_name:<35} {base_status:<12} {swa_status:<12}")
     else:
         print(f"{'Config':<35} {'Spec Type':<15} {'Task Type':<10} {'Status':<10}")
-        print("-"*80)
+        print("-" * 80)
         for result in results:
             config_name = f"{result['spec_type']}_{result['task_type']}_optimized"
             status = "✓ SUCCESS" if result["success"] else "✗ FAILED"
@@ -468,16 +502,18 @@ def print_summary(results: List[dict], compare_swa: bool = False) -> None:
                 f"{status:<10}"
             )
 
-    print("="*80)
+    print("=" * 80)
 
 
 def print_swa_comparison_summary(comparisons: List[dict]) -> None:
     """Print per-target accuracy comparison for SWA vs non-SWA runs on val and test sets."""
-    print("\n" + "="*105)
+    print("\n" + "=" * 105)
     print("SWA VS NON-SWA ACCURACY COMPARISON")
-    print("="*105)
-    print(f"{'Config':<25} {'Split':<6} {'Task':<15} {'Base Acc':<12} {'SWA Acc':<12} {'Delta':<12} {'% Change':<10}")
-    print("-"*105)
+    print("=" * 105)
+    print(
+        f"{'Config':<25} {'Split':<6} {'Task':<15} {'Base Acc':<12} {'SWA Acc':<12} {'Delta':<12} {'% Change':<10}"
+    )
+    print("-" * 105)
 
     for comp in comparisons:
         config_name = f"{comp['spec_type']}_{comp['task_type']}"
@@ -485,22 +521,28 @@ def print_swa_comparison_summary(comparisons: List[dict]) -> None:
         swa_eval = comp.get("swa_eval", {})
 
         # Process both val and test splits
-        for split in ["val", "test"]:
+        for split in ["validation", "test"]:
             base_split_metrics = base_eval.get(split, {})
             swa_split_metrics = swa_eval.get(split, {})
 
             # Get all tasks from both base and SWA
-            all_tasks = sorted(set(base_split_metrics.keys()) | set(swa_split_metrics.keys()))
+            all_tasks = sorted(
+                set(base_split_metrics.keys()) | set(swa_split_metrics.keys())
+            )
 
             if not all_tasks:
-                print(f"{config_name:<25} {split:<6} {'n/a':<15} {'FAILED':<12} {'FAILED':<12} {'N/A':<12} {'N/A':<10}")
+                print(
+                    f"{config_name:<25} {split:<6} {'n/a':<15} {'FAILED':<12} {'FAILED':<12} {'N/A':<12} {'N/A':<10}"
+                )
                 continue
 
             for task_name in all_tasks:
                 base_value = base_split_metrics.get(task_name)
                 swa_value = swa_split_metrics.get(task_name)
 
-                base_display = f"{base_value:.4f}" if base_value is not None else "FAILED"
+                base_display = (
+                    f"{base_value:.4f}" if base_value is not None else "FAILED"
+                )
                 swa_display = f"{swa_value:.4f}" if swa_value is not None else "FAILED"
 
                 if base_value is not None and swa_value is not None:
@@ -521,7 +563,7 @@ def print_swa_comparison_summary(comparisons: List[dict]) -> None:
                     f"{swa_display:<12} {delta_display:<12} {pct_display:<10}"
                 )
 
-    print("="*105)
+    print("=" * 105)
 
 
 app = typer.Typer(help="Train classifiers using HPO-optimized hyperparameters")
@@ -529,7 +571,9 @@ app = typer.Typer(help="Train classifiers using HPO-optimized hyperparameters")
 
 @app.command()
 def main(
-    output_dir: Path = typer.Argument(..., help="Base directory to save trained models"),
+    output_dir: Path = typer.Argument(
+        ..., help="Base directory to save trained models"
+    ),
     hpo_results_dir: Path = typer.Option(
         "hpo_results",
         "--hpo-results-dir",
@@ -546,8 +590,12 @@ def main(
         help="Task types to train (default: all). Options: gender, mixed",
     ),
     epochs: Optional[int] = typer.Option(None, "--epochs", help="Override epochs"),
-    early_stopping: bool = typer.Option(False, "--early-stopping", help="Enable early stopping"),
-    early_stopping_patience: int = typer.Option(5, "--early-stopping-patience", help="Early stopping patience"),
+    early_stopping: bool = typer.Option(
+        False, "--early-stopping", help="Enable early stopping"
+    ),
+    early_stopping_patience: int = typer.Option(
+        5, "--early-stopping-patience", help="Early stopping patience"
+    ),
     compare_swa: bool = typer.Option(
         True,
         "--compare-swa/--no-compare-swa",
@@ -645,7 +693,9 @@ def main(
     results = []
     comparisons = []
     for i, job in enumerate(jobs, 1):
-        LOGGER.info(f"\n[{i}/{len(jobs)}] Starting training job: {job.spec_type} × {job.task_type}")
+        LOGGER.info(
+            f"\n[{i}/{len(jobs)}] Starting training job: {job.spec_type} × {job.task_type}"
+        )
         if compare_swa:
             base_result, swa_result = execute_training_job_with_swa_comparison(job, cwd)
             base_success, base_summary, base_error = base_result
@@ -658,52 +708,83 @@ def main(
             swa_eval_results = {}
 
             if base_run_dir and base_summary and base_summary.best_checkpoint.exists():
-                LOGGER.info(f"Evaluating base model checkpoint: {base_summary.best_checkpoint}")
-                base_eval_results = evaluate_checkpoint(base_summary.best_checkpoint, base_run_dir, cwd)
+                LOGGER.info(
+                    f"Evaluating base model checkpoint: {base_summary.best_checkpoint}"
+                )
+                base_eval_results = evaluate_checkpoint(
+                    base_summary.best_checkpoint, base_run_dir, cwd
+                )
 
-            if swa_run_dir and swa_summary and swa_summary.swa_checkpoint and swa_summary.swa_checkpoint.exists():
-                LOGGER.info(f"Evaluating SWA model checkpoint: {swa_summary.swa_checkpoint}")
-                swa_eval_results = evaluate_checkpoint(swa_summary.swa_checkpoint, swa_run_dir, cwd)
+            if (
+                swa_run_dir
+                and swa_summary
+                and swa_summary.swa_checkpoint
+                and swa_summary.swa_checkpoint.exists()
+            ):
+                LOGGER.info(
+                    f"Evaluating SWA model checkpoint: {swa_summary.swa_checkpoint}"
+                )
+                swa_eval_results = evaluate_checkpoint(
+                    swa_summary.swa_checkpoint, swa_run_dir, cwd
+                )
             elif swa_run_dir and swa_summary and swa_summary.best_checkpoint.exists():
                 # Fallback to best checkpoint if SWA checkpoint not available
-                LOGGER.info(f"Evaluating SWA model checkpoint (best): {swa_summary.best_checkpoint}")
-                swa_eval_results = evaluate_checkpoint(swa_summary.best_checkpoint, swa_run_dir, cwd)
+                LOGGER.info(
+                    f"Evaluating SWA model checkpoint (best): {swa_summary.best_checkpoint}"
+                )
+                swa_eval_results = evaluate_checkpoint(
+                    swa_summary.best_checkpoint, swa_run_dir, cwd
+                )
 
-            results.append({
-                "spec_type": job.spec_type,
-                "task_type": job.task_type,
-                "base": {
-                    "success": base_success,
-                    "run_dir": str(base_run_dir) if base_run_dir else None,
-                    "best_checkpoint": str(base_summary.best_checkpoint) if base_summary else None,
-                    "error": base_error,
-                },
-                "swa": {
-                    "success": swa_success,
-                    "run_dir": str(swa_run_dir) if swa_run_dir else None,
-                    "best_checkpoint": str(swa_summary.best_checkpoint) if swa_summary else None,
-                    "swa_checkpoint": str(swa_summary.swa_checkpoint) if swa_summary and swa_summary.swa_checkpoint else None,
-                    "error": swa_error,
-                },
-                "base_eval": base_eval_results,
-                "swa_eval": swa_eval_results,
-            })
-            comparisons.append({
-                "spec_type": job.spec_type,
-                "task_type": job.task_type,
-                "base_eval": base_eval_results,
-                "swa_eval": swa_eval_results,
-            })
+            results.append(
+                {
+                    "spec_type": job.spec_type,
+                    "task_type": job.task_type,
+                    "base": {
+                        "success": base_success,
+                        "run_dir": str(base_run_dir) if base_run_dir else None,
+                        "best_checkpoint": str(base_summary.best_checkpoint)
+                        if base_summary
+                        else None,
+                        "error": base_error,
+                    },
+                    "swa": {
+                        "success": swa_success,
+                        "run_dir": str(swa_run_dir) if swa_run_dir else None,
+                        "best_checkpoint": str(swa_summary.best_checkpoint)
+                        if swa_summary
+                        else None,
+                        "swa_checkpoint": str(swa_summary.swa_checkpoint)
+                        if swa_summary and swa_summary.swa_checkpoint
+                        else None,
+                        "error": swa_error,
+                    },
+                    "base_eval": base_eval_results,
+                    "swa_eval": swa_eval_results,
+                }
+            )
+            comparisons.append(
+                {
+                    "spec_type": job.spec_type,
+                    "task_type": job.task_type,
+                    "base_eval": base_eval_results,
+                    "swa_eval": swa_eval_results,
+                }
+            )
         else:
             success, summary, error_msg = execute_training_job(job, cwd)
-            results.append({
-                "spec_type": job.spec_type,
-                "task_type": job.task_type,
-                "success": success,
-                "run_dir": str(summary.run_dir) if summary else None,
-                "checkpoint_path": str(summary.best_checkpoint) if summary else None,
-                "error": error_msg,
-            })
+            results.append(
+                {
+                    "spec_type": job.spec_type,
+                    "task_type": job.task_type,
+                    "success": success,
+                    "run_dir": str(summary.run_dir) if summary else None,
+                    "checkpoint_path": str(summary.best_checkpoint)
+                    if summary
+                    else None,
+                    "error": error_msg,
+                }
+            )
 
     # Generate summary
     print_summary(results, compare_swa=compare_swa)
@@ -714,7 +795,11 @@ def main(
     summary_path = output_dir / "training_summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     with summary_path.open("w") as f:
-        payload = {"results": results, "comparisons": comparisons} if compare_swa else {"results": results}
+        payload = (
+            {"results": results, "comparisons": comparisons}
+            if compare_swa
+            else {"results": results}
+        )
         json.dump(payload, f, indent=2)
 
     LOGGER.info(f"\nTraining summary saved to: {summary_path}")
@@ -722,9 +807,7 @@ def main(
     # Exit with error code if any jobs failed
     if compare_swa:
         failures = sum(
-            1
-            for r in results
-            if not r["base"]["success"] or not r["swa"]["success"]
+            1 for r in results if not r["base"]["success"] or not r["swa"]["success"]
         )
     else:
         failures = sum(1 for r in results if not r["success"])

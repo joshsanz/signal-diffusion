@@ -1,0 +1,1477 @@
+{
+  "best_trial": 49,
+  "best_combined_objective": 0.55957064378117,
+  "best_params": {
+    "learning_rate": 0.00036035590948523937,
+    "weight_decay": 0.01936682086822916,
+    "scheduler": "linear",
+    "dropout": 0.21637659017028604,
+    "depth": 3,
+    "layer_repeats": 2,
+    "embedding_dim": 256,
+    "batch_size": 160,
+    "label_smoothing": 0.0,
+    "use_focal_loss_health": true,
+    "focal_alpha_health": 0.30893255797136304,
+    "focal_gamma_health": 1.7744929484411505,
+    "use_focal_loss_gender": true,
+    "focal_alpha_gender": 0.376943843856244,
+    "focal_gamma_gender": 2.2751520576474737
+  },
+  "best_user_attrs": {
+    "combined_objective": 0.55957064378117,
+    "val_loss": 1.0014244250720934,
+    "success": true,
+    "task_gender_f1": 0.55957064378117,
+    "task_gender_accuracy": 0.6638066638066638,
+    "task_health_f1": 0.8024000756113461,
+    "task_health_accuracy": 0.9668239668239669,
+    "task_age_mse": 287.7339135094567,
+    "task_age_mae": 10.280707666022607,
+    "task_age_normalized_score": 0.0034633964117528147,
+    "best_metric": 1.1192335553271415,
+    "best_epoch": 3
+  },
+  "all_trials": [
+    {
+      "trial": 0,
+      "value": 0.514815779742495,
+      "params": {
+        "learning_rate": 0.0037965564112903234,
+        "weight_decay": 0.00214645166628625,
+        "scheduler": "cosine",
+        "dropout": 0.3382178811917006,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3612708387486284,
+        "focal_gamma_health": 2.3722665938347793,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.36142794834069414,
+        "focal_gamma_gender": 2.3692870231781846
+      },
+      "user_attrs": {
+        "combined_objective": 0.514815779742495,
+        "val_loss": 0.7576228527083991,
+        "success": true,
+        "task_gender_f1": 0.514815779742495,
+        "task_gender_accuracy": 0.575003575003575,
+        "task_health_f1": 0.810114834223755,
+        "task_health_accuracy": 0.9665379665379665,
+        "task_age_mse": 101.56647464807293,
+        "task_age_mae": 7.338033838434382,
+        "task_age_normalized_score": 0.009749774508982683,
+        "best_metric": 1.1932420991733395,
+        "best_epoch": 1
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 1,
+      "value": 0.43985185149062855,
+      "params": {
+        "learning_rate": 0.004297652630661894,
+        "weight_decay": 0.0005196926805964437,
+        "scheduler": "cosine",
+        "dropout": 0.42392502101637397,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.48585903894877214,
+        "focal_gamma_health": 2.3092133672998836,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.35699013115833655,
+        "focal_gamma_gender": 2.2936340520310345
+      },
+      "user_attrs": {
+        "combined_objective": 0.43985185149062855,
+        "val_loss": 1.096197341472213,
+        "success": true,
+        "task_gender_f1": 0.43985185149062855,
+        "task_gender_accuracy": 0.6194766194766195,
+        "task_health_f1": 0.8105681577273691,
+        "task_health_accuracy": 0.9671099671099671,
+        "task_age_mse": 198.62910355380143,
+        "task_age_mae": 10.00604339036651,
+        "task_age_normalized_score": 0.005009289638624726,
+        "best_metric": 1.351485823138715,
+        "best_epoch": 1
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 2,
+      "value": 0.2766859743483657,
+      "params": {
+        "learning_rate": 0.0006229263288483977,
+        "weight_decay": 0.002239439630150255,
+        "scheduler": "cosine",
+        "dropout": 0.37074948470950797,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.16836570311697377,
+        "focal_gamma_health": 0.567123189474839,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.42014809757018434,
+        "focal_gamma_gender": 2.7593063455425004
+      },
+      "user_attrs": {
+        "combined_objective": 0.2766859743483657,
+        "val_loss": NaN,
+        "success": true,
+        "task_gender_f1": 0.2766859743483657,
+        "task_gender_accuracy": 0.38252538252538254,
+        "task_health_f1": 0.49127018769096464,
+        "task_health_accuracy": 0.9656799656799657,
+        "task_age_mse": 0.0,
+        "task_age_mae": NaN,
+        "task_age_normalized_score": 1.0,
+        "best_metric": null,
+        "best_epoch": null
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 3,
+      "value": 0.5286396023293374,
+      "params": {
+        "learning_rate": 0.00011013469193499864,
+        "weight_decay": 0.004813540622023573,
+        "scheduler": "linear",
+        "dropout": 0.45803581122156845,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.42734000455596577,
+        "focal_gamma_health": 1.7505568820861206,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.42407576352130194,
+        "focal_gamma_gender": 0.7399213143614165
+      },
+      "user_attrs": {
+        "combined_objective": 0.5286396023293374,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 4,
+      "value": 0.5103077704867048,
+      "params": {
+        "learning_rate": 0.00023549926539447212,
+        "weight_decay": 0.0016459177452243692,
+        "scheduler": "cosine",
+        "dropout": 0.17122120235341526,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.16709689151459428,
+        "focal_gamma_health": 2.4220347960145254,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.4712682196461291,
+        "focal_gamma_gender": 2.023734144983759
+      },
+      "user_attrs": {
+        "combined_objective": 0.5103077704867048,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 5,
+      "value": 0.47082087680681645,
+      "params": {
+        "learning_rate": 0.00017995223816783294,
+        "weight_decay": 0.0047667613763050475,
+        "scheduler": "cosine",
+        "dropout": 0.2535394884629154,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.32735766111816966,
+        "focal_gamma_health": 0.9695450875609994,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.1503366175309481,
+        "focal_gamma_gender": 2.2189895126112296
+      },
+      "user_attrs": {
+        "combined_objective": 0.47082087680681645,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 6,
+      "value": 0.49540443578668214,
+      "params": {
+        "learning_rate": 0.00228301008029696,
+        "weight_decay": 0.007015249713979193,
+        "scheduler": "constant",
+        "dropout": 0.2981659035029858,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3856921474178082,
+        "focal_gamma_health": 1.7598227911197888,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.1902550426082558,
+        "focal_gamma_gender": 1.1124361006046604
+      },
+      "user_attrs": {
+        "combined_objective": 0.49540443578668214,
+        "val_loss": 0.9258877959362891,
+        "success": true,
+        "task_gender_f1": 0.49540443578668214,
+        "task_gender_accuracy": 0.626912626912627,
+        "task_health_f1": 0.7017453352489545,
+        "task_health_accuracy": 0.9253539253539254,
+        "task_age_mse": 141.47944574889308,
+        "task_age_mae": 8.207883960577137,
+        "task_age_normalized_score": 0.007018556218715281,
+        "best_metric": 1.1289480998685697,
+        "best_epoch": 2
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 7,
+      "value": 0.5277845364309074,
+      "params": {
+        "learning_rate": 0.0022230263412331753,
+        "weight_decay": 0.004890067268206193,
+        "scheduler": "linear",
+        "dropout": 0.20099703782297068,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.24697550551783093,
+        "focal_gamma_health": 1.7466211072776332,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.19063001898498233,
+        "focal_gamma_gender": 1.3839141168651174
+      },
+      "user_attrs": {
+        "combined_objective": 0.5277845364309074,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 8,
+      "value": 0.5086667053389066,
+      "params": {
+        "learning_rate": 0.0012757855026237707,
+        "weight_decay": 0.0021126900889043496,
+        "scheduler": "cosine",
+        "dropout": 0.4799622960607949,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.46429014238616106,
+        "focal_gamma_health": 1.3401379047812154,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.43055217072585783,
+        "focal_gamma_gender": 2.745251587799617
+      },
+      "user_attrs": {
+        "combined_objective": 0.5086667053389066,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 9,
+      "value": 0.5296023833472668,
+      "params": {
+        "learning_rate": 0.00011818762915738163,
+        "weight_decay": 0.001231856168328532,
+        "scheduler": "linear",
+        "dropout": 0.15717800792488387,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.37573653186331923,
+        "focal_gamma_health": 2.641564526974722,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.3589446733288445,
+        "focal_gamma_gender": 1.9540466888268497
+      },
+      "user_attrs": {
+        "combined_objective": 0.5296023833472668,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 10,
+      "value": 0.52146621955372,
+      "params": {
+        "learning_rate": 0.00044934956827045216,
+        "weight_decay": 0.03903067560774681,
+        "scheduler": "linear",
+        "dropout": 0.10004666179110633,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.26906346667065,
+        "focal_gamma_health": 2.9612722615039186,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.29115027637877144,
+        "focal_gamma_gender": 1.6258740854614633
+      },
+      "user_attrs": {
+        "combined_objective": 0.52146621955372,
+        "val_loss": 0.7285449753652464,
+        "success": true,
+        "task_gender_f1": 0.52146621955372,
+        "task_gender_accuracy": 0.62004862004862,
+        "task_health_f1": 0.8137618544684437,
+        "task_health_accuracy": 0.9686829686829687,
+        "task_age_mse": 102.99034227425493,
+        "task_age_mae": 7.334905672666598,
+        "task_age_normalized_score": 0.00961627760934461,
+        "best_metric": 1.1724640788904857,
+        "best_epoch": 2
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 11,
+      "value": 0.5096664269132242,
+      "params": {
+        "learning_rate": 0.00010014762811119716,
+        "weight_decay": 0.0176141398951057,
+        "scheduler": "linear",
+        "dropout": 0.49645185597669916,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4313578474186593,
+        "focal_gamma_health": 2.933436900982098,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.2918845334903282,
+        "focal_gamma_gender": 0.5077444436517821
+      },
+      "user_attrs": {
+        "combined_objective": 0.5096664269132242,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 12,
+      "value": 0.5480318317677344,
+      "params": {
+        "learning_rate": 0.00011012549075557881,
+        "weight_decay": 0.0005171847051073994,
+        "scheduler": "linear",
+        "dropout": 0.11397659756373632,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4081819405491726,
+        "focal_gamma_health": 2.0559970232518765,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.37021287164368355,
+        "focal_gamma_gender": 0.7536900764035189
+      },
+      "user_attrs": {
+        "combined_objective": 0.5480318317677344,
+        "val_loss": 1.01514741351987,
+        "success": true,
+        "task_gender_f1": 0.5480318317677344,
+        "task_gender_accuracy": 0.6600886600886601,
+        "task_health_f1": 0.8297254357000551,
+        "task_health_accuracy": 0.9679679679679679,
+        "task_age_mse": 188.47801589747618,
+        "task_age_mae": 9.446211642638033,
+        "task_age_normalized_score": 0.005277657121663579,
+        "best_metric": 1.105337687468678,
+        "best_epoch": 1
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 13,
+      "value": 0.5284666538946459,
+      "params": {
+        "learning_rate": 0.0003024134404320651,
+        "weight_decay": 0.0005015183894307664,
+        "scheduler": "linear",
+        "dropout": 0.1025316694701993,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.33592243366000335,
+        "focal_gamma_health": 2.1112088232283757,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.34691475088468926,
+        "focal_gamma_gender": 1.1163256361209077
+      },
+      "user_attrs": {
+        "combined_objective": 0.5284666538946459,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 14,
+      "value": 0.48080298854994413,
+      "params": {
+        "learning_rate": 0.00014753597619401434,
+        "weight_decay": 0.000871373094330094,
+        "scheduler": "constant",
+        "dropout": 0.17181214792123173,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.39475369435078084,
+        "focal_gamma_health": 2.685374488102508,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.2648050137069249,
+        "focal_gamma_gender": 1.8097796503676036
+      },
+      "user_attrs": {
+        "combined_objective": 0.48080298854994413,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 15,
+      "value": 0.5291454124821574,
+      "params": {
+        "learning_rate": 0.00038416900900324093,
+        "weight_decay": 0.0010463570592216863,
+        "scheduler": "linear",
+        "dropout": 0.22763398949361957,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.2896971014414682,
+        "focal_gamma_health": 2.043015990058686,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.24397778338584153,
+        "focal_gamma_gender": 1.431058386426963
+      },
+      "user_attrs": {
+        "combined_objective": 0.5291454124821574,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 16,
+      "value": 0.5096860394360545,
+      "params": {
+        "learning_rate": 0.00018739908395684748,
+        "weight_decay": 0.0009707412883586101,
+        "scheduler": "linear",
+        "dropout": 0.14062103406231324,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.2355632600368597,
+        "focal_gamma_health": 2.574555905192069,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.3760721226828421,
+        "focal_gamma_gender": 0.958346948172027
+      },
+      "user_attrs": {
+        "combined_objective": 0.5096860394360545,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 17,
+      "value": 0.5089100748156522,
+      "params": {
+        "learning_rate": 0.0009312439721595451,
+        "weight_decay": 0.0007507473677076152,
+        "scheduler": "linear",
+        "dropout": 0.2753984440224664,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.42385337583353355,
+        "focal_gamma_health": 1.4569922848991057,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.48847469353089656,
+        "focal_gamma_gender": 1.756775938797157
+      },
+      "user_attrs": {
+        "combined_objective": 0.5089100748156522,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 18,
+      "value": 0.5286864607488488,
+      "params": {
+        "learning_rate": 0.0002677493381017282,
+        "weight_decay": 0.00145506796001783,
+        "scheduler": "constant",
+        "dropout": 0.14144459653353084,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.10792286544302329,
+        "focal_gamma_health": 2.1247214062002207,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.31452105041062656,
+        "focal_gamma_gender": 1.9784088370704362
+      },
+      "user_attrs": {
+        "combined_objective": 0.5286864607488488,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 19,
+      "value": 0.4920708365242215,
+      "params": {
+        "learning_rate": 0.00014447180097452335,
+        "weight_decay": 0.0032020780511594,
+        "scheduler": "linear",
+        "dropout": 0.22961031913511568,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3251789023578716,
+        "focal_gamma_health": 2.802329578514146,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.4005015699889235,
+        "focal_gamma_gender": 2.9845894096040695
+      },
+      "user_attrs": {
+        "combined_objective": 0.4920708365242215,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 20,
+      "value": 0.5286624969544006,
+      "params": {
+        "learning_rate": 0.0005123885098604396,
+        "weight_decay": 0.010080137194760365,
+        "scheduler": "linear",
+        "dropout": 0.14894283640891753,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4940137388974436,
+        "focal_gamma_health": 2.5662346888372776,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.31861866230265157,
+        "focal_gamma_gender": 1.417792595444733
+      },
+      "user_attrs": {
+        "combined_objective": 0.5286624969544006,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 21,
+      "value": 0.5501725384347732,
+      "params": {
+        "learning_rate": 0.00036722112551813786,
+        "weight_decay": 0.0011452311935243125,
+        "scheduler": "linear",
+        "dropout": 0.22013114625050756,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.2959611527759418,
+        "focal_gamma_health": 2.06239735100435,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.24156395160481595,
+        "focal_gamma_gender": 1.4233481539023254
+      },
+      "user_attrs": {
+        "combined_objective": 0.5501725384347732,
+        "val_loss": 0.8465374799248965,
+        "success": true,
+        "task_gender_f1": 0.5501725384347732,
+        "task_gender_accuracy": 0.6078936078936079,
+        "task_health_f1": 0.8442410848448658,
+        "task_health_accuracy": 0.9715429715429715,
+        "task_age_mse": 157.47923223167365,
+        "task_age_mae": 8.64582935225788,
+        "task_age_normalized_score": 0.006309975041639179,
+        "best_metric": 1.1377600615420382,
+        "best_epoch": 1
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 22,
+      "value": 0.5356580039013265,
+      "params": {
+        "learning_rate": 0.00012887217325725857,
+        "weight_decay": 0.000662930126855399,
+        "scheduler": "linear",
+        "dropout": 0.19865663695351904,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.373372428164586,
+        "focal_gamma_health": 1.9460826089482754,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.22072459588881327,
+        "focal_gamma_gender": 0.7353829534275969
+      },
+      "user_attrs": {
+        "combined_objective": 0.5356580039013265,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 23,
+      "value": 0.5085345657283583,
+      "params": {
+        "learning_rate": 0.00018130381090733527,
+        "weight_decay": 0.0006698156017584509,
+        "scheduler": "linear",
+        "dropout": 0.21799536784152562,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3025066936871733,
+        "focal_gamma_health": 1.9572460076582687,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.23477107104192427,
+        "focal_gamma_gender": 0.5122679226432449
+      },
+      "user_attrs": {
+        "combined_objective": 0.5085345657283583,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 24,
+      "value": 0.5284143915397949,
+      "params": {
+        "learning_rate": 0.0003220100379400499,
+        "weight_decay": 0.0006725252530137381,
+        "scheduler": "linear",
+        "dropout": 0.1915195623777973,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.34838999317111574,
+        "focal_gamma_health": 1.4822288961175745,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.19598588841516273,
+        "focal_gamma_gender": 0.820711960491741
+      },
+      "user_attrs": {
+        "combined_objective": 0.5284143915397949,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 25,
+      "value": 0.49000351456266494,
+      "params": {
+        "learning_rate": 0.0008166014241612491,
+        "weight_decay": 0.0005331051417153926,
+        "scheduler": "constant",
+        "dropout": 0.25325591978846684,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.40723088319823886,
+        "focal_gamma_health": 1.8914437090610647,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.1144560351517595,
+        "focal_gamma_gender": 0.7726912820990797
+      },
+      "user_attrs": {
+        "combined_objective": 0.49000351456266494,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 26,
+      "value": 0.5286281436266861,
+      "params": {
+        "learning_rate": 0.00023152409607389695,
+        "weight_decay": 0.0029332516500105393,
+        "scheduler": "linear",
+        "dropout": 0.1205736593025559,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4560042620181691,
+        "focal_gamma_health": 2.2517477065245153,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.22854362817392984,
+        "focal_gamma_gender": 1.1804437969776367
+      },
+      "user_attrs": {
+        "combined_objective": 0.5286281436266861,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 27,
+      "value": 0.4902510509051767,
+      "params": {
+        "learning_rate": 0.00014196020421233143,
+        "weight_decay": 0.001341032125176004,
+        "scheduler": "linear",
+        "dropout": 0.3295307894496511,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.20694441057809942,
+        "focal_gamma_health": 1.5671228727313418,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.2733954782908767,
+        "focal_gamma_gender": 0.943954722623742
+      },
+      "user_attrs": {
+        "combined_objective": 0.4902510509051767,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 28,
+      "value": 0.5287882572517172,
+      "params": {
+        "learning_rate": 0.00037368500241427447,
+        "weight_decay": 0.0009171623643082011,
+        "scheduler": "linear",
+        "dropout": 0.19706960073408641,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.31569748414880616,
+        "focal_gamma_health": 1.0844865601079827,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.15756502563794103,
+        "focal_gamma_gender": 0.6495842529120106
+      },
+      "user_attrs": {
+        "combined_objective": 0.5287882572517172,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 29,
+      "value": 0.4816900682269953,
+      "params": {
+        "learning_rate": 0.0014298953656177284,
+        "weight_decay": 0.0018545818709241404,
+        "scheduler": "constant",
+        "dropout": 0.33320729520056047,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.358759618423008,
+        "focal_gamma_health": 2.410544971658692,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.3288178220951306,
+        "focal_gamma_gender": 1.3048795832034263
+      },
+      "user_attrs": {
+        "combined_objective": 0.4816900682269953,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 30,
+      "value": 0.5085147660779311,
+      "params": {
+        "learning_rate": 0.00020412146310805495,
+        "weight_decay": 0.0032410329673805385,
+        "scheduler": "linear",
+        "dropout": 0.2613954716841487,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.28116826625354835,
+        "focal_gamma_health": 2.2068686491216867,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.26018791064699887,
+        "focal_gamma_gender": 1.5827551477145607
+      },
+      "user_attrs": {
+        "combined_objective": 0.5085147660779311,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 31,
+      "value": 0.4912463805575827,
+      "params": {
+        "learning_rate": 0.00011868912818825031,
+        "weight_decay": 0.0011938313285464125,
+        "scheduler": "linear",
+        "dropout": 0.16746277323052983,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3733853593786865,
+        "focal_gamma_health": 1.8450059098046154,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.3653148787633272,
+        "focal_gamma_gender": 1.9919215014054041
+      },
+      "user_attrs": {
+        "combined_objective": 0.4912463805575827,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 32,
+      "value": 0.5114078060061843,
+      "params": {
+        "learning_rate": 0.0001342268176690351,
+        "weight_decay": 0.0006646913000114373,
+        "scheduler": "linear",
+        "dropout": 0.1286255712240054,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.36374195907059104,
+        "focal_gamma_health": 2.411272768181684,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.39184720561056585,
+        "focal_gamma_gender": 0.9639532105769683
+      },
+      "user_attrs": {
+        "combined_objective": 0.5114078060061843,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 33,
+      "value": 0.5285837763950323,
+      "params": {
+        "learning_rate": 0.0001051162237708862,
+        "weight_decay": 0.0011583103412596467,
+        "scheduler": "linear",
+        "dropout": 0.16197070401936037,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.40535320411852227,
+        "focal_gamma_health": 1.965746515705452,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.4515051951482466,
+        "focal_gamma_gender": 2.538554077987972
+      },
+      "user_attrs": {
+        "combined_objective": 0.5285837763950323,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 34,
+      "value": 0.5330519653776294,
+      "params": {
+        "learning_rate": 0.00016141734611597476,
+        "weight_decay": 0.0005098639466400401,
+        "scheduler": "linear",
+        "dropout": 0.3844731873309114,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.465463490863147,
+        "focal_gamma_health": 1.6695440344045807,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.3383549628913049,
+        "focal_gamma_gender": 2.1944328815170384
+      },
+      "user_attrs": {
+        "combined_objective": 0.5330519653776294,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 35,
+      "value": 0.5348238922372365,
+      "params": {
+        "learning_rate": 0.00016532662707830596,
+        "weight_decay": 0.0005044483534964512,
+        "scheduler": "cosine",
+        "dropout": 0.3928969738118503,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4550381697134135,
+        "focal_gamma_health": 1.630720536541259,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.21426532848169014,
+        "focal_gamma_gender": 2.2431250406825245
+      },
+      "user_attrs": {
+        "combined_objective": 0.5348238922372365,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 36,
+      "value": 0.49353882679623023,
+      "params": {
+        "learning_rate": 0.0006557586620773474,
+        "weight_decay": 0.0007838909409618828,
+        "scheduler": "cosine",
+        "dropout": 0.38666703675903474,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4402410837597965,
+        "focal_gamma_health": 1.2151907974969767,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.21139680217594073,
+        "focal_gamma_gender": 2.4000780962719324
+      },
+      "user_attrs": {
+        "combined_objective": 0.49353882679623023,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 37,
+      "value": 0.528420223706796,
+      "params": {
+        "learning_rate": 0.00021773193540394075,
+        "weight_decay": 0.0006290265143383608,
+        "scheduler": "cosine",
+        "dropout": 0.44390873510135276,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4799957550562196,
+        "focal_gamma_health": 1.6195829806344308,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.15667675017589772,
+        "focal_gamma_gender": 0.7003654902620158
+      },
+      "user_attrs": {
+        "combined_objective": 0.528420223706796,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 38,
+      "value": 0.5284916059925855,
+      "params": {
+        "learning_rate": 0.0005160912204348163,
+        "weight_decay": 0.0008940685984537161,
+        "scheduler": "cosine",
+        "dropout": 0.3002956341104539,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4155797563826106,
+        "focal_gamma_health": 1.810815918726718,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.209160020968866,
+        "focal_gamma_gender": 1.2245432138715633
+      },
+      "user_attrs": {
+        "combined_objective": 0.5284916059925855,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 39,
+      "value": 0.5284786810767405,
+      "params": {
+        "learning_rate": 0.0002769583642608526,
+        "weight_decay": 0.002506386625357195,
+        "scheduler": "cosine",
+        "dropout": 0.365172017441257,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4454462023771746,
+        "focal_gamma_health": 2.074390689872186,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.17148620754208566,
+        "focal_gamma_gender": 1.6146076985783306
+      },
+      "user_attrs": {
+        "combined_objective": 0.5284786810767405,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 40,
+      "value": 0.5096510786918447,
+      "params": {
+        "learning_rate": 0.0001697147622462573,
+        "weight_decay": 0.0016587409861071052,
+        "scheduler": "cosine",
+        "dropout": 0.2952203681955029,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.3885769961743506,
+        "focal_gamma_health": 2.295749139394519,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.12528645356611737,
+        "focal_gamma_gender": 2.464349321351996
+      },
+      "user_attrs": {
+        "combined_objective": 0.5096510786918447,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 41,
+      "value": 0.5091972042752885,
+      "params": {
+        "learning_rate": 0.00015865537546463812,
+        "weight_decay": 0.0005018292980696557,
+        "scheduler": "cosine",
+        "dropout": 0.40679248240404164,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4737514910951606,
+        "focal_gamma_health": 1.676127264196166,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.34147913205833336,
+        "focal_gamma_gender": 2.1634740740133815
+      },
+      "user_attrs": {
+        "combined_objective": 0.5091972042752885,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 42,
+      "value": 0.5286958446763618,
+      "params": {
+        "learning_rate": 0.00012773421684365803,
+        "weight_decay": 0.0005739065861826682,
+        "scheduler": "linear",
+        "dropout": 0.42810772006075026,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.49768488840657205,
+        "focal_gamma_health": 1.387862431471072,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.24762551171040392,
+        "focal_gamma_gender": 2.3067012967085345
+      },
+      "user_attrs": {
+        "combined_objective": 0.5286958446763618,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 43,
+      "value": 0.2766859743483657,
+      "params": {
+        "learning_rate": 0.004616466371951657,
+        "weight_decay": 0.0006800905033962848,
+        "scheduler": "cosine",
+        "dropout": 0.35108559551656615,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.45503511564010435,
+        "focal_gamma_health": 0.8076780485826827,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.22193056908725192,
+        "focal_gamma_gender": 2.5243106694038646
+      },
+      "user_attrs": {
+        "combined_objective": 0.2766859743483657,
+        "val_loss": NaN,
+        "success": true,
+        "task_gender_f1": 0.2766859743483657,
+        "task_gender_accuracy": 0.38252538252538254,
+        "task_health_f1": 0.49127018769096464,
+        "task_health_accuracy": 0.9656799656799657,
+        "task_age_mse": 0.0,
+        "task_age_mae": NaN,
+        "task_age_normalized_score": 1.0,
+        "best_metric": null,
+        "best_epoch": null
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 44,
+      "value": 0.5151805510885575,
+      "params": {
+        "learning_rate": 0.0002227035047305078,
+        "weight_decay": 0.0005023834884413406,
+        "scheduler": "linear",
+        "dropout": 0.39129387199970117,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4745178981138352,
+        "focal_gamma_health": 1.700405524914586,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.27856608078306444,
+        "focal_gamma_gender": 2.154504362978367
+      },
+      "user_attrs": {
+        "combined_objective": 0.5151805510885575,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 45,
+      "value": 0.4906956734791917,
+      "params": {
+        "learning_rate": 0.00010683394355209796,
+        "weight_decay": 0.000764532649340299,
+        "scheduler": "linear",
+        "dropout": 0.3230602554852374,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.4290475529769786,
+        "focal_gamma_health": 1.5628582399575495,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.2989852102225752,
+        "focal_gamma_gender": 2.704844822604474
+      },
+      "user_attrs": {
+        "combined_objective": 0.4906956734791917,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 46,
+      "value": 0.5179723613716806,
+      "params": {
+        "learning_rate": 0.00015995319725660404,
+        "weight_decay": 0.04693929792621158,
+        "scheduler": "linear",
+        "dropout": 0.18442354717854634,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.34587008069207587,
+        "focal_gamma_health": 1.951781287265983,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.4114541370725897,
+        "focal_gamma_gender": 1.8423808731449243
+      },
+      "user_attrs": {
+        "combined_objective": 0.5179723613716806,
+        "val_loss": 0.9101704654435513,
+        "success": true,
+        "task_gender_f1": 0.5179723613716806,
+        "task_gender_accuracy": 0.6330616330616331,
+        "task_health_f1": 0.8307820593313451,
+        "task_health_accuracy": 0.9682539682539683,
+        "task_age_mse": 162.67388112381704,
+        "task_age_mae": 9.083109211550068,
+        "task_age_normalized_score": 0.006109710316232519,
+        "best_metric": 1.1436484008490608,
+        "best_epoch": 1
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 47,
+      "value": 0.5287618464136179,
+      "params": {
+        "learning_rate": 0.0002585801341651572,
+        "weight_decay": 0.001021427054338828,
+        "scheduler": "constant",
+        "dropout": 0.4128056196329303,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.2521789502243607,
+        "focal_gamma_health": 1.2644857183716138,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.17902552370680375,
+        "focal_gamma_gender": 2.122165487001145
+      },
+      "user_attrs": {
+        "combined_objective": 0.5287618464136179,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 48,
+      "value": 0.5071841863536837,
+      "params": {
+        "learning_rate": 0.0033519768947530473,
+        "weight_decay": 0.006278748527699566,
+        "scheduler": "cosine",
+        "dropout": 0.47308053930090005,
+        "depth": 3,
+        "layer_repeats": 3,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.40071850277019483,
+        "focal_gamma_health": 2.1585489497206214,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.24623114616863118,
+        "focal_gamma_gender": 1.0258043645837727
+      },
+      "user_attrs": {
+        "combined_objective": 0.5071841863536837,
+        "val_loss": Infinity,
+        "success": false
+      },
+      "state": "TrialState.COMPLETE"
+    },
+    {
+      "trial": 49,
+      "value": 0.55957064378117,
+      "params": {
+        "learning_rate": 0.00036035590948523937,
+        "weight_decay": 0.01936682086822916,
+        "scheduler": "linear",
+        "dropout": 0.21637659017028604,
+        "depth": 3,
+        "layer_repeats": 2,
+        "embedding_dim": 256,
+        "batch_size": 160,
+        "label_smoothing": 0.0,
+        "use_focal_loss_health": true,
+        "focal_alpha_health": 0.30893255797136304,
+        "focal_gamma_health": 1.7744929484411505,
+        "use_focal_loss_gender": true,
+        "focal_alpha_gender": 0.376943843856244,
+        "focal_gamma_gender": 2.2751520576474737
+      },
+      "user_attrs": {
+        "combined_objective": 0.55957064378117,
+        "val_loss": 1.0014244250720934,
+        "success": true,
+        "task_gender_f1": 0.55957064378117,
+        "task_gender_accuracy": 0.6638066638066638,
+        "task_health_f1": 0.8024000756113461,
+        "task_health_accuracy": 0.9668239668239669,
+        "task_age_mse": 287.7339135094567,
+        "task_age_mae": 10.280707666022607,
+        "task_age_normalized_score": 0.0034633964117528147,
+        "best_metric": 1.1192335553271415,
+        "best_epoch": 3
+      },
+      "state": "TrialState.COMPLETE"
+    }
+  ]
+}

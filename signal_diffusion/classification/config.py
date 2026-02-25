@@ -89,9 +89,21 @@ class TrainingConfig:
     swa_extra_ratio: float = 0.34
     swa_lr_frac: float = 0.25
     label_smoothing: float = 0.0
+
+    # Focal loss for health task
     use_focal_loss_health: bool = False
+    focal_alpha_health: float = 0.25
+    focal_gamma_health: float = 2.0
+
+    # Focal loss for gender task (enabled by default per user preference)
+    use_focal_loss_gender: bool = True
+    focal_alpha_gender: float = 0.25
+    focal_gamma_gender: float = 2.0
+
+    # Deprecated: use task-specific parameters instead
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
+
     seed: int | None = None
 
 
@@ -299,6 +311,17 @@ def _load_training(section: Mapping[str, Any]) -> TrainingConfig:
         swa_extra_ratio=float(section.get("swa_extra_ratio", 0.333)),
         swa_lr_frac=float(section.get("swa_lr_frac", 0.25)),
         label_smoothing=float(section.get("label_smoothing", 0.0)),
+        # Focal loss for health task
+        use_focal_loss_health=bool(section.get("use_focal_loss_health", False)),
+        focal_alpha_health=float(section.get("focal_alpha_health", 0.25)),
+        focal_gamma_health=float(section.get("focal_gamma_health", 2.0)),
+        # Focal loss for gender task
+        use_focal_loss_gender=bool(section.get("use_focal_loss_gender", True)),
+        focal_alpha_gender=float(section.get("focal_alpha_gender", 0.25)),
+        focal_gamma_gender=float(section.get("focal_gamma_gender", 2.0)),
+        # Deprecated parameters (for backward compatibility)
+        focal_alpha=float(section.get("focal_alpha", 0.25)),
+        focal_gamma=float(section.get("focal_gamma", 2.0)),
         seed=seed,
     )
 

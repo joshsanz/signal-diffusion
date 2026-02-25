@@ -4,6 +4,7 @@ Supports logging to TensorBoard, Weights & Biases, and MLflow.
 """
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -163,6 +164,17 @@ class MetricsLogger:
             if value is None:
                 continue
             scalars[f"{phase}/accuracy/{name}_mse"] = float(value)
+
+        # Log confidence metrics
+        confidence_metrics = metrics.get("confidence", {})
+        for task_name, categories in confidence_metrics.items():
+            for category, stats in categories.items():
+                mean = stats.get('mean')
+                std = stats.get('std')
+                if mean is not None and not math.isnan(mean):
+                    scalars[f"{phase}/confidence/{task_name}/{category}_mean"] = float(mean)
+                if std is not None and not math.isnan(std):
+                    scalars[f"{phase}/confidence/{task_name}/{category}_std"] = float(std)
 
         if epoch is not None:
             scalars[f"{phase}/epoch"] = float(epoch)

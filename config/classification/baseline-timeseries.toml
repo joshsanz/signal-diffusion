@@ -52,11 +52,23 @@ eval_strategy = "steps"
 eval_steps = 100
 checkpoint_strategy = "epoch"
 checkpoint_total_limit = 3
+compile_model = true
+compile_mode = "default"  # Options: "default", "reduce-overhead", "max-autotune"
 swa_enabled = false
 swa_extra_ratio = 0.34
 swa_lr_frac = 0.25
 label_smoothing = 0.1
 seed = 1234
+
+# Focal loss for health task
+use_focal_loss_health = true
+focal_alpha_health = 0.25
+focal_gamma_health = 2.0
+
+# Focal loss for gender task (enabled by default for class imbalance)
+use_focal_loss_gender = true
+focal_alpha_gender = 0.25
+focal_gamma_gender = 2.0
 
 [training.task_weights]
 health = 1.0

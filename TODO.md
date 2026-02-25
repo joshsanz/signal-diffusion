@@ -6,6 +6,7 @@ Tasks for implementing a completed signal diffusion paper
 - Train diff models for each remaining
   - data type
   - conditioning
+- Track confidence in labels for classifiers
 
 - SOTA diffusion operations
   - stochastic sampling for flow matching?

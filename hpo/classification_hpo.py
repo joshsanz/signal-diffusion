@@ -39,20 +39,26 @@ logger = logging.getLogger(__name__)
 # - Weight decay: Narrowed from [1e-5, 1e-1] → [1e-5, 1e-2] (most successful ≤ 1e-2)
 # - Batch size: Removed [64, 128] → [192] (size 64 from failed trials, 128 unsuccessful)
 # - Label smoothing: [0.0, 0.33] (regularization technique to prevent overconfident predictions)
-# - Focal loss parameters for health task: use_focal_loss_health, focal_alpha, focal_gamma
+# - Focal loss parameters for health task: use_focal_loss_health, focal_alpha_health, focal_gamma_health
+# - Focal loss parameters for gender task: use_focal_loss_gender, focal_alpha_gender, focal_gamma_gender
 SEARCH_SPACE = {
-    "learning_rate": [5e-5, 5e-3],
-    "weight_decay": [1e-4, 1e-2],
+    "learning_rate": [1e-4, 5e-3],
+    "weight_decay": [5e-4, 5e-2],
     "scheduler": ["constant", "linear", "cosine"],
     "dropout": [0.10, 0.50],
-    "depth": [2, 3],
-    "layer_repeats": [2, 4],
-    "embedding_dim": [192, 256, 384],
-    "batch_size": [192],
-    "label_smoothing": [0.0, 0.33],
-    "use_focal_loss_health": [True, False],
-    "focal_alpha": [0.1, 0.5],
-    "focal_gamma": [0.5, 3.0],
+    "depth": [3, 3],  # [2, 3],
+    "layer_repeats": [2, 3],  # [2, 4],
+    "embedding_dim": [256],  # [192, 256, 384],
+    "batch_size": [160],
+    "label_smoothing": [0.0, 0.0],
+    # Health focal loss
+    "use_focal_loss_health": [True],  # [True, False],
+    "focal_alpha_health": [0.1, 0.5],
+    "focal_gamma_health": [0.5, 3.0],
+    # Gender focal loss
+    "use_focal_loss_gender": [True],  # [True, False],
+    "focal_alpha_gender": [0.1, 0.5],
+    "focal_gamma_gender": [0.5, 3.0],
 }
 
 
@@ -158,10 +164,15 @@ def create_trial_config(
     # Override label smoothing
     config.training.label_smoothing = trial_params["label_smoothing"]
 
-    # Override focal loss parameters
+    # Override health focal loss parameters
     config.training.use_focal_loss_health = trial_params["use_focal_loss_health"]
-    config.training.focal_alpha = trial_params["focal_alpha"]
-    config.training.focal_gamma = trial_params["focal_gamma"]
+    config.training.focal_alpha_health = trial_params["focal_alpha_health"]
+    config.training.focal_gamma_health = trial_params["focal_gamma_health"]
+
+    # Override gender focal loss parameters
+    config.training.use_focal_loss_gender = trial_params["use_focal_loss_gender"]
+    config.training.focal_alpha_gender = trial_params["focal_alpha_gender"]
+    config.training.focal_gamma_gender = trial_params["focal_gamma_gender"]
 
     # Ensure we have intermediate validation for pruning
     if config.training.eval_strategy == "epoch":
@@ -247,7 +258,9 @@ def run_training_trial(
                         task_results[task_name] = {
                             "type": "classification",
                             "f1": float(f1),
-                            "accuracy": float(accuracy) if accuracy is not None else None,
+                            "accuracy": float(accuracy)
+                            if accuracy is not None
+                            else None,
                         }
                 else:
                     # Regression: normalize MSE to [0, 1] scale using 1/(1+mse)
@@ -454,18 +467,46 @@ def create_objective(
             "use_focal_loss_health",
             SEARCH_SPACE["use_focal_loss_health"],
         )
-        focal_alpha_min, focal_alpha_max = _get_float_range("focal_alpha")
-        focal_alpha = trial.suggest_float(
-            "focal_alpha",
-            focal_alpha_min,
-            focal_alpha_max,
+        focal_alpha_health_min, focal_alpha_health_max = _get_float_range(
+            "focal_alpha_health"
+        )
+        focal_alpha_health = trial.suggest_float(
+            "focal_alpha_health",
+            focal_alpha_health_min,
+            focal_alpha_health_max,
             log=False,
         )
-        focal_gamma_min, focal_gamma_max = _get_float_range("focal_gamma")
-        focal_gamma = trial.suggest_float(
-            "focal_gamma",
-            focal_gamma_min,
-            focal_gamma_max,
+        focal_gamma_health_min, focal_gamma_health_max = _get_float_range(
+            "focal_gamma_health"
+        )
+        focal_gamma_health = trial.suggest_float(
+            "focal_gamma_health",
+            focal_gamma_health_min,
+            focal_gamma_health_max,
+            log=False,
+        )
+
+        # Focal loss parameters for gender task
+        use_focal_loss_gender = trial.suggest_categorical(
+            "use_focal_loss_gender",
+            SEARCH_SPACE["use_focal_loss_gender"],
+        )
+        focal_alpha_gender_min, focal_alpha_gender_max = _get_float_range(
+            "focal_alpha_gender"
+        )
+        focal_alpha_gender = trial.suggest_float(
+            "focal_alpha_gender",
+            focal_alpha_gender_min,
+            focal_alpha_gender_max,
+            log=False,
+        )
+        focal_gamma_gender_min, focal_gamma_gender_max = _get_float_range(
+            "focal_gamma_gender"
+        )
+        focal_gamma_gender = trial.suggest_float(
+            "focal_gamma_gender",
+            focal_gamma_gender_min,
+            focal_gamma_gender_max,
             log=False,
         )
 
@@ -480,8 +521,11 @@ def create_objective(
             "batch_size": batch_size,
             "label_smoothing": label_smoothing,
             "use_focal_loss_health": use_focal_loss_health,
-            "focal_alpha": focal_alpha,
-            "focal_gamma": focal_gamma,
+            "focal_alpha_health": focal_alpha_health,
+            "focal_gamma_health": focal_gamma_health,
+            "use_focal_loss_gender": use_focal_loss_gender,
+            "focal_alpha_gender": focal_alpha_gender,
+            "focal_gamma_gender": focal_gamma_gender,
             "trial_number": trial.number,
         }
 
@@ -502,9 +546,7 @@ def create_objective(
         if "task_results" in results:
             for task_name, task_result in results["task_results"].items():
                 if task_result["type"] == "classification":
-                    trial.set_user_attr(
-                        f"task_{task_name}_f1", task_result["f1"]
-                    )
+                    trial.set_user_attr(f"task_{task_name}_f1", task_result["f1"])
                     if task_result.get("accuracy") is not None:
                         trial.set_user_attr(
                             f"task_{task_name}_accuracy", task_result["accuracy"]

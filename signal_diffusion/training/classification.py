@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -246,7 +247,10 @@ class CheckpointManager:
             Path to saved checkpoint
         """
         swa_checkpoint = self.checkpoints_dir / "swa.pt"
-        torch.save(self.extract_state_dict(swa_model), swa_checkpoint)
+        # AveragedModel stores the wrapped model in .module; extract from there
+        # so the saved keys match the base model (handles torch.compile too)
+        inner_model = swa_model.module if hasattr(swa_model, "module") else swa_model
+        torch.save(self.extract_state_dict(inner_model), swa_checkpoint)
         return swa_checkpoint
 
 
@@ -286,6 +290,8 @@ class EpochMetrics:
     val_mae: dict[str, float | None] = field(default_factory=dict)
     train_f1: dict[str, float | None] = field(default_factory=dict)
     val_f1: dict[str, float | None] = field(default_factory=dict)
+    train_confidence: dict[str, dict[str, dict[str, float]]] = field(default_factory=dict)
+    val_confidence: dict[str, dict[str, dict[str, float]]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -634,16 +640,31 @@ def _build_training_resources(
     for name in tasks:
         spec = task_lookup[name]
         if spec.task_type == "classification":
-            if name == "health" and training_cfg.use_focal_loss_health:
+            # Check if focal loss is enabled for this specific task
+            use_focal = False
+            focal_alpha = 0.25
+            focal_gamma = 2.0
+
+            if name == "health":
+                use_focal = training_cfg.use_focal_loss_health
+                focal_alpha = training_cfg.focal_alpha_health
+                focal_gamma = training_cfg.focal_gamma_health
+            elif name == "gender":
+                use_focal = training_cfg.use_focal_loss_gender
+                focal_alpha = training_cfg.focal_alpha_gender
+                focal_gamma = training_cfg.focal_gamma_gender
+
+            if use_focal:
                 criteria[name] = FocalLoss(
-                    alpha=training_cfg.focal_alpha,
-                    gamma=training_cfg.focal_gamma,
+                    alpha=focal_alpha,
+                    gamma=focal_gamma,
                     reduction="mean",
                 )
                 LOGGER.info(
-                    "Using focal loss for health task (alpha=%.3f, gamma=%.3f)",
-                    training_cfg.focal_alpha,
-                    training_cfg.focal_gamma,
+                    "Using focal loss for %s task (alpha=%.3f, gamma=%.3f)",
+                    name,
+                    focal_alpha,
+                    focal_gamma,
                 )
             else:
                 criteria[name] = nn.CrossEntropyLoss(
@@ -721,8 +742,18 @@ def _finalize_swa(
     LOGGER.info("Updating batch normalization statistics for SWA model...")
     from torch.optim.swa_utils import update_bn
 
+    def _input_only(loader):
+        """Yield only the input tensor from each batch for update_bn."""
+        for batch in loader:
+            if isinstance(batch, dict):
+                yield batch.get("signal", batch.get("image"))
+            elif isinstance(batch, (list, tuple)):
+                yield batch[0]
+            else:
+                yield batch
+
     try:
-        update_bn(train_loader, swa_model, device=device)
+        update_bn(_input_only(train_loader), swa_model, device=device)
         LOGGER.info("Batch normalization statistics updated successfully")
     except Exception as e:
         LOGGER.warning(f"Failed to update BN statistics: {e}")
@@ -871,6 +902,9 @@ def _build_epoch_metrics(
         mae_value = train_result.get("mae", {}).get(name)
         train_mae[name] = float(mae_value) if mae_value is not None else None
 
+    # Extract training confidence metrics
+    train_confidence = train_result.get("confidence", {})
+
     # Extract validation metrics
     if latest_val is not None:
         val_loss: float | None = float(latest_val["loss"])
@@ -890,6 +924,9 @@ def _build_epoch_metrics(
             val_mse[name] = float(mse_value) if mse_value is not None else None
             mae_value = latest_val.get("mae", {}).get(name)
             val_mae[name] = float(mae_value) if mae_value is not None else None
+
+        # Extract validation confidence metrics
+        val_confidence = latest_val.get("confidence", {})
     else:
         val_loss = None
         val_losses = {name: None for name in tasks}
@@ -897,6 +934,7 @@ def _build_epoch_metrics(
         val_f1 = {name: None for name in tasks}
         val_mse = {name: None for name in tasks}
         val_mae = {name: None for name in tasks}
+        val_confidence = {}
 
     # Get current learning rate
     lr = resources.optimizer.param_groups[0].get("lr", config.optimizer.learning_rate)
@@ -917,6 +955,8 @@ def _build_epoch_metrics(
         lr=lr,
         train_mae=train_mae,
         val_mae=val_mae,
+        train_confidence=train_confidence,
+        val_confidence=val_confidence,
     )
 
     return epoch_metrics, latest_val, train_accuracy, val_loss, val_accuracy
@@ -1461,6 +1501,121 @@ def _report_and_check_pruning(
         pass  # Optuna not available, skip reporting
 
 
+@dataclass
+class ConfidenceStats:
+    """Track running mean/variance for one category (TP/TN/FP/FN)."""
+    mean: float = 0.0
+    variance: float = 0.0
+    count: int = 0
+    values: list[float] = field(default_factory=list)  # Only for validation
+
+    def update(self, new_values: np.ndarray, alpha: float = 0.95, is_training: bool = True):
+        """Update statistics with new batch of confidence values."""
+        if len(new_values) == 0:
+            return
+
+        if is_training:
+            # Exponential weighted moving average
+            for val in new_values:
+                if self.count == 0:
+                    self.mean = val
+                    self.variance = 0.0
+                else:
+                    delta = val - self.mean
+                    self.mean = alpha * self.mean + (1 - alpha) * val
+                    self.variance = alpha * (self.variance + (1 - alpha) * delta ** 2)
+                self.count += 1
+        else:
+            # Validation: accumulate all values
+            self.values.extend(new_values.tolist())
+            self.count += len(new_values)
+
+    def get_stats(self, is_training: bool = True) -> tuple[float, float]:
+        """Return (mean, std) for current statistics."""
+        if self.count == 0:
+            return float('nan'), float('nan')
+
+        if is_training:
+            std = math.sqrt(max(0.0, self.variance))
+            return self.mean, std
+        else:
+            # Validation: compute from accumulated values
+            if not self.values:
+                return float('nan'), float('nan')
+            arr = np.array(self.values)
+            return float(arr.mean()), float(arr.std())
+
+    def reset(self):
+        """Reset for new epoch (validation mode only)."""
+        self.values.clear()
+        self.count = 0
+
+
+class ConfidenceTracker:
+    """Track confidence metrics for binary classification tasks."""
+
+    def __init__(self, task_specs: dict[str, TaskSpec]):
+        """Initialize tracker for binary classification tasks only."""
+        self.tasks = {
+            name: {
+                'true_pos': ConfidenceStats(),
+                'true_neg': ConfidenceStats(),
+                'false_pos': ConfidenceStats(),
+                'false_neg': ConfidenceStats(),
+            }
+            for name, spec in task_specs.items()
+            if spec.task_type == "classification" and spec.output_dim == 2
+        }
+
+    def update(self, task_name: str, logits: torch.Tensor, targets: torch.Tensor,
+               alpha: float = 0.95, is_training: bool = True):
+        """Update confidence statistics for one task/batch."""
+        if task_name not in self.tasks:
+            return
+
+        # Convert logits to probabilities
+        probs = torch.nn.functional.softmax(logits, dim=1)  # (B, 2)
+        preds = logits.argmax(dim=1)  # (B,)
+
+        # Get confidence = probability of predicted class
+        batch_size = preds.size(0)
+        confidences = probs[torch.arange(batch_size), preds]  # (B,)
+
+        # Convert to numpy for stats tracking
+        confidences_np = confidences.detach().cpu().numpy()
+        preds_np = preds.detach().cpu().numpy()
+        targets_np = targets.detach().cpu().numpy()
+
+        # Categorize predictions
+        tp_mask = (preds_np == 1) & (targets_np == 1)
+        tn_mask = (preds_np == 0) & (targets_np == 0)
+        fp_mask = (preds_np == 1) & (targets_np == 0)
+        fn_mask = (preds_np == 0) & (targets_np == 1)
+
+        # Update statistics for each category
+        stats = self.tasks[task_name]
+        stats['true_pos'].update(confidences_np[tp_mask], alpha, is_training)
+        stats['true_neg'].update(confidences_np[tn_mask], alpha, is_training)
+        stats['false_pos'].update(confidences_np[fp_mask], alpha, is_training)
+        stats['false_neg'].update(confidences_np[fn_mask], alpha, is_training)
+
+    def get_metrics(self, is_training: bool = True) -> dict[str, dict[str, dict[str, float]]]:
+        """Return nested dict: {task: {category: {mean: X, std: Y}}}"""
+        metrics = {}
+        for task_name, stats in self.tasks.items():
+            metrics[task_name] = {}
+            for category, stat_obj in stats.items():
+                mean, std = stat_obj.get_stats(is_training)
+                metrics[task_name][category] = {'mean': mean, 'std': std}
+        return metrics
+
+    def reset(self):
+        """Reset all validation accumulators."""
+        for task_stats in self.tasks.values():
+            for stat_obj in task_stats.values():
+                stat_obj.reset()
+
+
 def _run_epoch(
     model: nn.Module,
     *,
@@ -1508,6 +1663,11 @@ def _run_epoch(
     }
     grad_norm_sum = 0.0
     grad_norm_count = 0
+
+    # Initialize confidence tracker
+    confidence_tracker = ConfidenceTracker(task_specs)
+    if not train:
+        confidence_tracker.reset()  # Clear previous epoch's validation data
 
     batch_progress_bar = None
     if log_every > 0 or not train:  # Show progress for validation always
@@ -1623,6 +1783,15 @@ def _run_epoch(
                 # Store predictions and targets for F1 computation
                 stats["targets"].append(targets[name].detach().cpu().numpy())
                 stats["predictions"].append(preds.detach().cpu().numpy())
+
+                # Update confidence tracker
+                confidence_tracker.update(
+                    task_name=name,
+                    logits=logits,
+                    targets=targets[name],
+                    alpha=0.95,
+                    is_training=train
+                )
             elif spec.task_type == "regression":
                 # Regression: compute absolute and squared errors for MAE/MSE
                 error = logits.squeeze() - targets[name].squeeze()
@@ -1746,6 +1915,9 @@ def _run_epoch(
     if train and grad_norm_count > 0:
         # Average gradient norm for training stability monitoring
         metrics["grad_norm"] = grad_norm_sum / grad_norm_count
+
+    # Add confidence metrics
+    metrics["confidence"] = confidence_tracker.get_metrics(is_training=train)
 
     if batch_progress_bar is not None:
         batch_progress_bar.close()
@@ -1888,6 +2060,7 @@ def _prepare_run_dir(config: ClassificationConfig) -> Path:
     config_copy = {
         "config_path": str(config.path),
         "settings_path": str(config.settings_path),
+        "data_overrides": config.data_overrides,
         "dataset": dataset_dict,
         "model": model_dict,
         "optimizer": optimizer_dict,

@@ -1,21 +1,134 @@
 {
-  "db-only_mixed": {
-    "best_trial_num": 0,
-    "best_objective": 0.0,
+  "db-only_gender": {
+    "best_trial_num": 49,
+    "best_objective": 0.55957064378117,
     "best_params": {
-      "learning_rate": 0.0002805758207667253,
-      "weight_decay": 0.0071144760093434225,
-      "scheduler": "constant",
-      "dropout": 0.20459808211767092,
-      "depth": 2,
-      "layer_repeats": 5,
+      "learning_rate": 0.00036035590948523937,
+      "weight_decay": 0.01936682086822916,
+      "scheduler": "linear",
+      "dropout": 0.21637659017028604,
+      "depth": 3,
+      "layer_repeats": 2,
       "embedding_dim": 256,
-      "batch_size": 192,
-      "label_smoothing": 0.32007025121345817,
+      "batch_size": 160,
+      "label_smoothing": 0.0,
       "use_focal_loss_health": true,
-      "focal_alpha": 0.17272998688284025,
-      "focal_gamma": 0.9585112746335845
+      "focal_alpha_health": 0.30893255797136304,
+      "focal_gamma_health": 1.7744929484411505,
+      "use_focal_loss_gender": true,
+      "focal_alpha_gender": 0.376943843856244,
+      "focal_gamma_gender": 2.2751520576474737
     },
-    "task_metrics": {}
+    "task_metrics": {
+      "gender": {
+        "accuracy": 0.6638066638066638
+      },
+      "health": {
+        "accuracy": 0.9668239668239669
+      },
+      "age": {
+        "mse": 287.7339135094567,
+        "mae": 10.280707666022607
+      }
+    }
+  },
+  "db-polar_gender": {
+    "best_trial_num": 29,
+    "best_objective": 0.7330163887163176,
+    "best_params": {
+      "learning_rate": 0.0010191349248486591,
+      "weight_decay": 0.002692190059152204,
+      "scheduler": "cosine",
+      "dropout": 0.35327420722379044,
+      "depth": 3,
+      "layer_repeats": 2,
+      "embedding_dim": 256,
+      "batch_size": 160,
+      "label_smoothing": 0.0,
+      "use_focal_loss_health": true,
+      "focal_alpha_health": 0.13652977240005063,
+      "focal_gamma_health": 1.5394396011231672,
+      "use_focal_loss_gender": true,
+      "focal_alpha_gender": 0.3412478788590631,
+      "focal_gamma_gender": 2.368608351799583
+    },
+    "task_metrics": {
+      "gender": {
+        "accuracy": 0.7631613154816067
+      },
+      "health": {
+        "accuracy": 0.9607435330820226
+      },
+      "age": {
+        "mse": 206.51106009910401,
+        "mae": 9.580644485312972
+      }
+    }
+  },
+  "db-iq_gender": {
+    "best_trial_num": 20,
+    "best_objective": 0.6622854850874722,
+    "best_params": {
+      "learning_rate": 0.00018924407514649304,
+      "weight_decay": 0.0010343097480005959,
+      "scheduler": "cosine",
+      "dropout": 0.4704228359112706,
+      "depth": 3,
+      "layer_repeats": 2,
+      "embedding_dim": 256,
+      "batch_size": 160,
+      "label_smoothing": 0.0,
+      "use_focal_loss_health": true,
+      "focal_alpha_health": 0.4951759478218165,
+      "focal_gamma_health": 0.925604664002265,
+      "use_focal_loss_gender": true,
+      "focal_alpha_gender": 0.3128720361207142,
+      "focal_gamma_gender": 2.5116836683637516
+    },
+    "task_metrics": {
+      "gender": {
+        "accuracy": 0.6627191633343587
+      },
+      "health": {
+        "accuracy": 0.961857889880037
+      },
+      "age": {
+        "mse": 147.51845079068218,
+        "mae": 8.90323610989287
+      }
+    }
+  },
+  "timeseries_gender": {
+    "best_trial_num": 38,
+    "best_objective": 0.5588276979405952,
+    "best_params": {
+      "learning_rate": 0.0036168015690683313,
+      "weight_decay": 0.012094722497223336,
+      "scheduler": "linear",
+      "dropout": 0.27076800920563865,
+      "depth": 3,
+      "layer_repeats": 2,
+      "embedding_dim": 256,
+      "batch_size": 160,
+      "label_smoothing": 0.0,
+      "use_focal_loss_health": true,
+      "focal_alpha_health": 0.19873386700337517,
+      "focal_gamma_health": 2.3076827194917966,
+      "use_focal_loss_gender": true,
+      "focal_alpha_gender": 0.13679209027005573,
+      "focal_gamma_gender": 0.5754835809989678
+    },
+    "task_metrics": {
+      "health": {
+        "accuracy": 0.9749491353001017
+      },
+      "gender": {
+        "accuracy": 0.6311037639877924
+      },
+      "age": {
+        "mse": 305.16163384874983,
+        "mae": 12.156951143443282
+      }
+    }
   }
 }
