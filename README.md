@@ -32,12 +32,19 @@ The repository houses EEG spectrogram preprocessing, multi-task classifiers, and
    # rm -rf NATTEN  # source may be removed if installation succeeds
    ```
 
+   Notes:
+   - To run proper CUDA paths set use:
+     `uv run --env-file .env -- ./install-natten.sh`
+
 5. Launch scripts through `uv run` to ensure the environment stays consistent, e.g.
 
    ```bash
    uv run python -m signal_diffusion.training.diffusion config/diffusion/flowers.toml --output-dir runs/diffusion/flowers
    uv run python -m signal_diffusion.training.classification config/classification/test_gender_health_age.toml --output-dir runs/classification/baseline
    ```
+
+   Note:
+   - `uv run --env-file .env` if you want to make sure you're CUDA path is set correctly
 
 ## Project Layout
 

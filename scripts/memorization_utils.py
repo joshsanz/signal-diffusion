@@ -40,21 +40,40 @@ def embeddings_to_array(df: pd.DataFrame, col: str) -> np.ndarray:
     return np.stack([np.asarray(x, dtype=np.float32) for x in df[col].values], axis=0)
 
 
-def _max_cosine_similarity(query: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """For each query row, return max cosine similarity to any reference row."""
+def _cosine_similarity_matrix(query: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Return (n_query, n_ref) matrix of cosine similarities between query and reference rows."""
     if query.size == 0 or reference.size == 0:
-        return np.array([], dtype=np.float32)
+        return np.array([], dtype=np.float32).reshape(0, 0)
     q = query.astype(np.float32)
     r = reference.astype(np.float32)
     q_norm = q / (np.linalg.norm(q, axis=1, keepdims=True) + 1e-8)
     r_norm = r / (np.linalg.norm(r, axis=1, keepdims=True) + 1e-8)
-    sims = q_norm @ r_norm.T
+    return (q_norm @ r_norm.T).astype(np.float32)
+
+
+def _max_cosine_similarity(query: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """For each query row, return max cosine similarity to any reference row."""
+    sims = _cosine_similarity_matrix(query, reference)
+    if sims.size == 0:
+        return np.array([], dtype=np.float32)
     return np.max(sims, axis=1).astype(np.float32)
 
 
 def synthetic_max_sims(synth_emb: np.ndarray, real_emb: np.ndarray) -> np.ndarray:
     """Max cosine sim of each synthetic sample to any real sample."""
     return _max_cosine_similarity(synth_emb, real_emb)
+
+
+def synthetic_to_synthetic_max_sims(synth_emb: np.ndarray) -> np.ndarray:
+    """Max cosine sim of each synthetic sample to other synthetic samples (exclude self).
+
+    Returns array of shape (n_synth,). Empty if n_synth < 2.
+    """
+    if synth_emb.shape[0] < 2:
+        return np.array([], dtype=np.float32)
+    sims = _cosine_similarity_matrix(synth_emb, synth_emb)
+    np.fill_diagonal(sims, -np.inf)
+    return np.max(sims, axis=1).astype(np.float32)
 
 
 def per_subject_max_sims(
@@ -109,11 +128,9 @@ def per_subject_max_sims(
         health_ok = healths_self[:, None] != healths_other[None, :]
         valid = age_ok | gender_ok | health_ok
 
-        q = emb_array[self_indices].astype(np.float32)
-        r = emb_array[other_indices].astype(np.float32)
-        q_norm = q / (np.linalg.norm(q, axis=1, keepdims=True) + 1e-8)
-        r_norm = r / (np.linalg.norm(r, axis=1, keepdims=True) + 1e-8)
-        full_sims = (q_norm @ r_norm.T).astype(np.float32)
+        q = emb_array[self_indices]
+        r = emb_array[other_indices]
+        full_sims = _cosine_similarity_matrix(q, r)
         full_sims = np.where(valid, full_sims, -np.inf)
         per_sample_max = np.max(full_sims, axis=1)
         per_sample_max = np.where(np.any(valid, axis=1), per_sample_max, np.nan)
@@ -124,10 +141,11 @@ def per_subject_max_sims(
 
 
 class ComparisonResult(NamedTuple):
-    """Max similarity values for synthetic and real (per-subject)."""
+    """Max similarity values for synthetic, real (per-subject), and synth->synth."""
 
-    synth_max: np.ndarray
-    real_max: np.ndarray
+    synth_real_max: np.ndarray
+    real_real_max: np.ndarray
+    synth_synth_max: np.ndarray
 
 
 def compute_comparisons(
@@ -140,8 +158,31 @@ def compute_comparisons(
     synth_emb = embeddings_to_array(synth_df, col)
     real_emb = embeddings_to_array(real_df, col)
 
-    synth_max = synthetic_max_sims(synth_emb, real_emb)
-    real_max = per_subject_max_sims(real_df, real_emb, demographic_mismatch_only)
-    real_max = real_max[~np.isnan(real_max)]
+    synth_real_max = synthetic_max_sims(synth_emb, real_emb)
+    real_real_max = per_subject_max_sims(real_df, real_emb, demographic_mismatch_only)
+    real_real_max = real_real_max[~np.isnan(real_real_max)]
+    synth_synth_max = synthetic_to_synthetic_max_sims(synth_emb)
 
-    return ComparisonResult(synth_max=synth_max, real_max=real_max)
+    return ComparisonResult(
+        synth_real_max=synth_real_max,
+        real_real_max=real_real_max,
+        synth_synth_max=synth_synth_max,
+    )
+
+
+def compute_comparisons_real_only(
+    real_df: pd.DataFrame,
+    col: str,
+) -> ComparisonResult:
+    """Compute per-subject max similarities for real-only data (e.g. control dataset).
+
+    Returns ComparisonResult with empty synth_real_max and real_real_max from per_subject_max_sims.
+    """
+    real_emb = embeddings_to_array(real_df, col)
+    real_real_max = per_subject_max_sims(real_df, real_emb, demographic_mismatch_only=False)
+    real_real_max = real_real_max[~np.isnan(real_real_max)]
+    return ComparisonResult(
+        synth_real_max=np.array([], dtype=np.float32),
+        real_real_max=real_real_max,
+        synth_synth_max=np.array([], dtype=np.float32),
+    )

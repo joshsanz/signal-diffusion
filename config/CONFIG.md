@@ -432,6 +432,9 @@ Sampling configuration for validation and generation.
 |-----------|------|----------|---------|-------------|
 | `denoising_steps` | int | No | `50` | Number of denoising steps |
 | `cfg_scale` | float | No | `7.5` | Classifier-free guidance scale |
+| `memorization_mitigation_enabled` | bool | No | `false` | Enable per-sample initial noise adjustment to mitigate memorization (arxiv.org/abs/2510.08625) |
+| `memorization_target_loss` | float | No | `0.9` | Target L2 norm of conditional guidance; stop adjustment when below this |
+| `memorization_lr` | float | No | `0.01` | Learning rate for AdamW when adjusting initial noise |
 
 ---
 
