@@ -110,6 +110,9 @@ class InferenceConfig:
 
     denoising_steps: int = 50
     cfg_scale: float = 7.5
+    memorization_mitigation_enabled: bool = False
+    memorization_target_loss: float = 0.9
+    memorization_lr: float = 0.01
 
 
 @dataclass(slots=True)
@@ -419,6 +422,9 @@ def _load_inference(section: Mapping[str, Any] | None) -> InferenceConfig:
     return InferenceConfig(
         denoising_steps=int(section.get("denoising_steps", 50)),
         cfg_scale=float(section.get("cfg_scale", 7.5)),
+        memorization_mitigation_enabled=bool(section.get("memorization_mitigation_enabled", False)),
+        memorization_target_loss=float(section.get("memorization_target_loss", 0.9)),
+        memorization_lr=float(section.get("memorization_lr", 0.01)),
     )
 
 

@@ -39,7 +39,6 @@ from signal_diffusion.data.metadata_utils import (
 )
 
 
-BASELINE_TOML = Path(__file__).resolve().parent.parent / "config" / "classification" / "baseline.toml"
 DEFAULT_SIGLIP_MODEL = "google/siglip2-so400m-patch14-384"
 DEFAULT_SSCD_MODEL = Path(__file__).resolve().parent.parent / "models" / "sscd_disc_mixup.torchscript.pt"
 SSCD_MODEL_URL = "https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt"
@@ -54,6 +53,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label-parquet", type=Path, required=True, help="Path to labeled/real parquet file")
     parser.add_argument("--output", type=Path, required=True, help="Output parquet path")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to trained classifier checkpoint (.pt)")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to classification config TOML (e.g. config/classification/baseline.toml, "
+        "config/classification/baseline-db-polar.toml for db-polar checkpoints).",
+    )
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size for embedding extraction")
     parser.add_argument(
         "--siglip-model",
@@ -92,9 +98,10 @@ def parse_args() -> argparse.Namespace:
 def _load_backbone_and_transform(
     *,
     checkpoint_path: Path,
+    config_path: Path,
     device: torch.device,
 ) -> tuple[torch.nn.Module, Any, int, str]:
-    cfg = load_classification_config(BASELINE_TOML)
+    cfg = load_classification_config(config_path)
 
     tasks = tasks_from_registry(META_LABELS, cfg.dataset.tasks)
     model = build_classifier(
@@ -466,8 +473,10 @@ def main() -> None:
 
     device = torch.device("cuda")
 
+    config_path = Path(args.config).resolve()
     backbone, transform, cnn_embedding_dim, output_type = _load_backbone_and_transform(
         checkpoint_path=args.checkpoint,
+        config_path=config_path,
         device=device,
     )
     siglip_model, siglip_processor, siglip_embedding_dim = _load_siglip_model_and_processor(
