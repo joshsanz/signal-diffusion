@@ -19,6 +19,7 @@ file_mounts:
     mode: MOUNT
   ~/.netrc: ~/.netrc
   ~/.cloudflare: ~/.cloudflare
+  ~/.aws: ~/.aws
   ~/.cache/huggingface/token: ~/.cache/huggingface/token
 
 # Working directory (optional) containing the project codebase.
