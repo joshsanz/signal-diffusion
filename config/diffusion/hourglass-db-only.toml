@@ -99,5 +99,5 @@ log_dir = "runs/diffusion/tensorboard/hourglass-db-only"
 wandb_project = "signal-diffusion"
 
 [inference]
-denoising_steps = 15
+denoising_steps = 25
 cfg_scale = 2.5

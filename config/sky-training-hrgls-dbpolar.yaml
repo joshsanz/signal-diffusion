@@ -43,5 +43,5 @@ run: |
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
-  python train.py --config config/diffusion/hourglass-db-only.toml --output_dir /data/runs/hourglass/db-only-$RUN_ID
+  python train.py --config config/diffusion/hourglass-db-polar.toml --output_dir /data/runs/hourglass/db-polar-$RUN_ID
   echo "Run completed."
