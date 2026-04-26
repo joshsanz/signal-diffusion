@@ -57,6 +57,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "nvidia-ml-py>=13.590.44",
     "psutil>=7.1.0",
+    "lancedb>=0.29.2",
 ]
 
 # Optional GPU-accelerated packages (CUDA-dependent)
