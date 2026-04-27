@@ -18,6 +18,7 @@ file_mounts:
     source: s3://signal-diffusion/
     mode: MOUNT
   ~/.netrc: ~/.netrc
+  ~/.cloudflare: ~/.cloudflare
   ~/.aws: ~/.aws
   ~/.cache/huggingface/token: ~/.cache/huggingface/token
 
@@ -29,7 +30,7 @@ setup: |
   echo "Running setup."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   cp pyproject.toml.sky pyproject.toml
-  uv venv --python=3.12
+  uv venv --clear --python=3.12
   uv pip install --upgrade pip setuptools
   uv sync
   # We have pre-built wheels stored in /data/wheels for faster installation of gpu-specific packages without wheels distributed for our target environment.
@@ -39,10 +40,10 @@ setup: |
 run: |
   echo "Hello, SkyPilot!"
   export RUN_ID=20260126_035132
-  export RUN_PATH=/data/runs/hourglass/test-20260126_035126/best_eval/checkpoint-3000/
+  export RUN_PATH=/data/runs/hourglass/db-only-<date>/best_eval/checkpoint-3000/
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   source .venv/bin/activate
   ./scripts/prep-configs-for-sky.sh
   python scripts/edit_config.py -c config/diffusion/sd35-db-only.toml -s training.compile_model=false
-  python scripts/generate_synthetic_dataset.py -m $RUN_PATH -c config/diffusion/hourglass-db-only.toml -o /data/generated/hourglass-db-only-$RUN_ID/ -n 10000 -b 256 --overwrite
+  python scripts/generate_synthetic_dataset.py -m $RUN_PATH -c config/diffusion/hourglass-db-only.toml -o /data/generated/hourglass-db-only-$RUN_ID/ -n 50000 -b 256 --overwrite
   echo "Run completed."

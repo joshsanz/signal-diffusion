@@ -2,6 +2,8 @@
 
 Tasks for implementing a completed signal diffusion paper
 
+- Read https://arxiv.org/pdf/2410.07303v1 to see if useful
+
 - Rename mapping_cond to something more accurate and descriptive
 - Train diff models for each remaining
   - data type
