@@ -105,40 +105,51 @@ def _rclone_lsf_dirs(remote: str, bucket: str, path: str) -> list[str]:
 
 
 def find_best_checkpoint_path(
-    output_dir: str, r2_remote: str, r2_bucket: str
+    output_dir: str, run, r2_remote: str, r2_bucket: str
 ) -> str | None:
-    """Return the full /data/... path to the best checkpoint dir, or None."""
-    # strip leading /data/ to get the R2-relative path
+    """Return the full /data/... path to the best checkpoint dir, or None.
+
+    Strategy:
+    1. List available checkpoint steps from best_eval/ or checkpoints/ on R2.
+    2. Query wandb run history for eval/kid_mean (or eval/loss) at those steps.
+    3. Pick the step with the lowest metric value.
+    4. Fall back to best_eval/metadata.json, then highest available step.
+    """
     r2_rel = output_dir.lstrip("/")
     if r2_rel.startswith("data/"):
         r2_rel = r2_rel[len("data/"):]
 
-    # 1. best_eval/metadata.json — sorted by kid_mean, lowest wins
-    content = _rclone_cat(r2_remote, r2_bucket, f"{r2_rel}/best_eval/metadata.json")
-    if content:
-        try:
-            entries = json.loads(content)
-            if entries:
-                step = sorted(entries, key=lambda x: x["kid_mean"])[0]["step"]
-                return f"{output_dir}/best_eval/checkpoint-{step}"
-        except (json.JSONDecodeError, KeyError, ValueError):
-            pass
-
-    # 2. best_eval/checkpoint-* dirs — take highest step
-    steps = _parse_checkpoint_steps(
+    best_eval_steps = _parse_checkpoint_steps(
         _rclone_lsf_dirs(r2_remote, r2_bucket, f"{r2_rel}/best_eval")
     )
-    if steps:
-        return f"{output_dir}/best_eval/checkpoint-{max(steps)}"
-
-    # 3. checkpoints/checkpoint-* dirs — take highest step (no KID ranking available)
-    steps = _parse_checkpoint_steps(
+    checkpoints_steps = _parse_checkpoint_steps(
         _rclone_lsf_dirs(r2_remote, r2_bucket, f"{r2_rel}/checkpoints")
     )
-    if steps:
-        return f"{output_dir}/checkpoints/checkpoint-{max(steps)}"
 
-    return None
+    if best_eval_steps:
+        base, available = "best_eval", set(best_eval_steps)
+    elif checkpoints_steps:
+        base, available = "checkpoints", set(checkpoints_steps)
+    else:
+        return None
+
+    best_step = _best_step_from_wandb(run, available)
+
+    if best_step is None and base == "best_eval":
+        # Fall back to metadata.json written by the trainer
+        content = _rclone_cat(r2_remote, r2_bucket, f"{r2_rel}/best_eval/metadata.json")
+        if content:
+            try:
+                entries = json.loads(content)
+                if entries:
+                    best_step = int(sorted(entries, key=lambda x: x["kid_mean"])[0]["step"])
+            except (json.JSONDecodeError, KeyError, ValueError):
+                pass
+
+    if best_step is None:
+        best_step = max(available)
+
+    return f"{output_dir}/{base}/checkpoint-{best_step}"
 
 
 def _parse_checkpoint_steps(dirs: list[str]) -> list[int]:
@@ -148,6 +159,35 @@ def _parse_checkpoint_steps(dirs: list[str]) -> list[int]:
         if m:
             steps.append(int(m.group(1)))
     return steps
+
+
+def _best_step_from_wandb(run, available_steps: set[int]) -> int | None:
+    """Return the available step with the lowest eval/kid_mean, or eval/loss as fallback.
+
+    Metrics may not be logged at exactly the checkpoint steps, so for each checkpoint
+    step we find the nearest logged value and pick the checkpoint with the lowest one.
+    """
+    for metric in ("eval/kid_mean", "eval/loss", "val/loss"):
+        try:
+            rows = run.history(keys=[metric], pandas=False, samples=100_000)
+        except Exception:
+            continue
+        metric_at_step = [
+            (float(row[metric]), int(row["_step"]))
+            for row in rows
+            if row.get(metric) is not None
+        ]
+        if not metric_at_step:
+            continue
+        # For each checkpoint step find the nearest logged metric value, then pick lowest
+        candidates = []
+        for ckpt_step in available_steps:
+            val, _ = min(metric_at_step, key=lambda x: abs(x[1] - ckpt_step))
+            candidates.append((val, ckpt_step))
+        best_val, best_step = min(candidates)
+        print(f"{metric}={best_val:.4f}@step={best_step}", end=" ")
+        return best_step
+    return None
 
 
 # ── Config generation ─────────────────────────────────────────────────────────
@@ -317,7 +357,7 @@ def main() -> None:
         )
 
         print(f"  Processing {name!r} …", end=" ", flush=True)
-        checkpoint_dir = find_best_checkpoint_path(output_dir, args.r2_remote, args.r2_bucket)
+        checkpoint_dir = find_best_checkpoint_path(output_dir, run, args.r2_remote, args.r2_bucket)
         if checkpoint_dir is None:
             print("SKIP (no checkpoint found on R2)")
             skipped += 1
